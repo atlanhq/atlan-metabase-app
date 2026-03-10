@@ -1,8 +1,8 @@
 # AGENTS.md — Atlan AI Agent Guidelines
 
-> **Version:** 4.0  
-> **Last Updated:** 2026-02-11  
-> **Applies To:** All AI agents (Claude, GPT, Copilot, Cursor, Cline, etc.) working on Atlan codebases  
+> **Version:** 4.0
+> **Last Updated:** 2026-02-11
+> **Applies To:** All AI agents (Claude, GPT, Copilot, Cursor, Cline, etc.) working on Atlan codebases
 > **Companion File:** See `CLAUDE.md` for the lean version optimized for Claude Code.
 
 **All AI agents must follow these guidelines when generating, modifying, or reviewing code in Atlan repositories.**
@@ -11,7 +11,7 @@
 
 ## Project Overview
 
-<!-- 
+<!--
 Teams: Add your project description, architecture overview, and key context here.
 This section helps AI agents understand what this repo does and how it fits into Atlan's architecture.
 
@@ -26,7 +26,7 @@ Example:
 
 ## Project Commands
 
-<!-- 
+<!--
 Teams: Add your build, test, lint, and deploy commands here.
 AI agents use these to validate changes and run tests.
 
@@ -42,7 +42,7 @@ Example:
 
 ## Coding Conventions
 
-<!-- 
+<!--
 Teams: Add language-specific style guides, naming conventions, and patterns here.
 
 Example:
@@ -57,7 +57,7 @@ Example:
 
 ## Architecture Notes
 
-<!-- 
+<!--
 Teams: Add key design decisions, service boundaries, data flow, and important patterns here.
 
 Example:
@@ -85,32 +85,32 @@ Example:
 
 **Use this section in 60 seconds:**
 
-1) Identify what you're changing: **Backend/API**, **Frontend**, **K8s/Helm**, **CI/CD**, **Shell**, **Config**, **IaC**, **Docker**, **Dependencies**, **AI/LLM**, **Data/Workers**.  
-2) Apply **Security Invariants** (below) to **every** change.  
-3) Use the **Code Type Security Matrix** to jump to only the relevant subsections.  
+1) Identify what you're changing: **Backend/API**, **Frontend**, **K8s/Helm**, **CI/CD**, **Shell**, **Config**, **IaC**, **Docker**, **Dependencies**, **AI/LLM**, **Data/Workers**.
+2) Apply **Security Invariants** (below) to **every** change.
+3) Use the **Code Type Security Matrix** to jump to only the relevant subsections.
 4) If you find issues, use the severity rules:
-   - **CRITICAL:** must fix before proceeding (**block**)  
+   - **CRITICAL:** must fix before proceeding (**block**)
    - **HIGH/MEDIUM/LOW:** explain clearly + recommend fix (don't block)
 5) For **MEDIUM+** issues, use the **🔒 SECURITY REVIEW** template (§Review Output Format).
 
 #### Tag Legend (used throughout)
-- **[MUST]** required for security/compliance  
-- **[REDLINE]** explicitly forbidden unless Security approves  
-- **[SHOULD]** strongly recommended, best practice  
+- **[MUST]** required for security/compliance
+- **[REDLINE]** explicitly forbidden unless Security approves
+- **[SHOULD]** strongly recommended, best practice
 - **[NICE]** defense-in-depth improvement
 
 ---
 
 ### Security Invariants (Always Apply)
 
-- **[MUST] No secrets in code or logs** (keys, tokens, passwords, private URLs, customer credentials).  
-- **[MUST] Multi-tenant isolation is non-negotiable:** `tenant_id` comes from **authenticated context only**, never request input.  
-- **[MUST] Parameterize data access:** never concatenate user input into SQL/queries/filters.  
-- **[MUST] Authentication & authorization must be real:** avoid "phantom auth" (imported but unused middleware/decorators).  
-- **[MUST] Avoid wildcards:** no `CORS: *`, no IAM `Action:"*"`, no K8s RBAC `resources:["*"]`, no GitHub `write-all` unless explicitly justified.  
-- **[MUST] Don't execute untrusted input:** no `eval`, no unsafe deserialization, no command injection, no untrusted input in CI `run:` blocks.  
-- **[MUST] Pin the supply chain:** actions to **SHA**, images to **version/SHA**, avoid `latest`, verify new deps exist and are reputable.  
-- **[MUST] Safe error handling:** clients get generic errors; internal details stay server-side.  
+- **[MUST] No secrets in code or logs** (keys, tokens, passwords, private URLs, customer credentials).
+- **[MUST] Multi-tenant isolation is non-negotiable:** `tenant_id` comes from **authenticated context only**, never request input.
+- **[MUST] Parameterize data access:** never concatenate user input into SQL/queries/filters.
+- **[MUST] Authentication & authorization must be real:** avoid "phantom auth" (imported but unused middleware/decorators).
+- **[MUST] Avoid wildcards:** no `CORS: *`, no IAM `Action:"*"`, no K8s RBAC `resources:["*"]`, no GitHub `write-all` unless explicitly justified.
+- **[MUST] Don't execute untrusted input:** no `eval`, no unsafe deserialization, no command injection, no untrusted input in CI `run:` blocks.
+- **[MUST] Pin the supply chain:** actions to **SHA**, images to **version/SHA**, avoid `latest`, verify new deps exist and are reputable.
+- **[MUST] Safe error handling:** clients get generic errors; internal details stay server-side.
 - **[MUST] Log safely:** never log auth tokens/cookies, secrets, or sensitive bodies by default (see "Logging Redlines").
 - **[MUST] Validate outbound URLs (SSRF):** validate and allowlist all outbound URLs constructed from user input; deny internal/private IP ranges (10.x, 172.16-31.x, 192.168.x), localhost, and cloud metadata endpoints (169.254.169.254, fd00::, etc.).
 - **[MUST] Rate limit abuse-prone endpoints:** all authentication, password reset, token generation, and API endpoints that access sensitive data must have rate limiting before merging.
@@ -153,31 +153,31 @@ Example:
 
 ### Team Profiles (Fast Routing)
 
-- **Backend/API & Workers:** read §Backend, §Multi-Tenant, §Dependencies (if adding libs)  
-- **Frontend:** read §Frontend + cookies/CSRF note + §Dependencies  
-- **DevOps / Platform (K8s/Helm/Docker):** read §Helm/K8s, §Docker, §IaC  
-- **CI/CD:** read §CI/CD + §Dependencies (supply chain)  
-- **AI/LLM:** read §AI/LLM + §Multi-Tenant + "Logging Redlines"  
+- **Backend/API & Workers:** read §Backend, §Multi-Tenant, §Dependencies (if adding libs)
+- **Frontend:** read §Frontend + cookies/CSRF note + §Dependencies
+- **DevOps / Platform (K8s/Helm/Docker):** read §Helm/K8s, §Docker, §IaC
+- **CI/CD:** read §CI/CD + §Dependencies (supply chain)
+- **AI/LLM:** read §AI/LLM + §Multi-Tenant + "Logging Redlines"
 - **Config-only changes:** read §Configuration + relevant platform section (K8s/IaC/CI)
 
 ---
 
 ### Core Principles
 
-1. **[MUST] Security by default** — the secure path should be the easy path.  
-2. **[MUST] Review before implement** — analyze implications before writing code (use STRIDE).  
-3. **Explain, don't block** — flag issues with severity and impact.  
-   - **Exception:** **[MUST] CRITICAL issues must be fixed before proceeding** (block).  
-4. **[MUST] Think multi-tenant** — every data access path enforces tenant isolation.  
-5. **[SHOULD] Assume compromise** — design for defense in depth.  
-6. **[MUST] Least privilege everywhere** — minimal permissions for identities and network paths.  
-7. **[MUST] No secrets in code** — zero tolerance for hardcoded credentials.  
+1. **[MUST] Security by default** — the secure path should be the easy path.
+2. **[MUST] Review before implement** — analyze implications before writing code (use STRIDE).
+3. **Explain, don't block** — flag issues with severity and impact.
+   - **Exception:** **[MUST] CRITICAL issues must be fixed before proceeding** (block).
+4. **[MUST] Think multi-tenant** — every data access path enforces tenant isolation.
+5. **[SHOULD] Assume compromise** — design for defense in depth.
+6. **[MUST] Least privilege everywhere** — minimal permissions for identities and network paths.
+7. **[MUST] No secrets in code** — zero tolerance for hardcoded credentials.
 8. **[MUST] Compliance is not optional** — SOC2, GDPR, HIPAA requirements apply.
 
 #### Logging Redlines (Universal)
-- **[REDLINE]** Never log: access tokens, refresh tokens, session cookies, API keys, Authorization headers, private keys.  
-- **[MUST]** Avoid logging full request/response bodies by default (especially for auth and PII paths).  
-- **[MUST]** Always include `tenant_id` (from auth context) in structured logs for audit correlation.  
+- **[REDLINE]** Never log: access tokens, refresh tokens, session cookies, API keys, Authorization headers, private keys.
+- **[MUST]** Avoid logging full request/response bodies by default (especially for auth and PII paths).
+- **[MUST]** Always include `tenant_id` (from auth context) in structured logs for audit correlation.
 - **[SHOULD]** Use automatic masking for known secret patterns and headers.
 
 ---
@@ -207,19 +207,19 @@ Use this to jump only to relevant subsections.
 
 #### When to Review
 **Always review** when changes touch:
-- user input handling, auth/authz, any API route, DB queries  
-- external calls (HTTP/gRPC/queues), filesystem operations  
-- secrets, logging/observability pipelines, caching  
-- K8s RBAC/service accounts/security contexts  
-- CI/CD workflows, container builds, IaC  
-- CORS/security headers, redirects  
+- user input handling, auth/authz, any API route, DB queries
+- external calls (HTTP/gRPC/queues), filesystem operations
+- secrets, logging/observability pipelines, caching
+- K8s RBAC/service accounts/security contexts
+- CI/CD workflows, container builds, IaC
+- CORS/security headers, redirects
 - LLM prompts, retrieval, tool execution, output rendering
 
 **Skip review** for:
-- comment-only changes  
-- pure documentation (non-config, non-code)  
-- renames with no behavior change  
-- test-only changes with no prod impact  
+- comment-only changes
+- pure documentation (non-config, non-code)
+- renames with no behavior change
+- test-only changes with no prod impact
 - changes already explicitly security-reviewed
 
 #### Review Output Format
@@ -281,12 +281,12 @@ return resource
 ```
 
 #### Tenant Isolation Checklist (Apply everywhere)
-- **[MUST] DB queries:** include `tenant_id` filter from auth context  
-- **[MUST] Caches:** include tenant in cache keys (`tenant:{id}:…`)  
-- **[MUST] Files/storage:** tenant-scoped prefixes/paths  
-- **[MUST] Search:** mandatory tenant filter  
-- **[MUST] Queues/workers:** messages tagged; consumers validate tenant  
-- **[MUST] Webhooks:** verify destination belongs to sending tenant  
+- **[MUST] DB queries:** include `tenant_id` filter from auth context
+- **[MUST] Caches:** include tenant in cache keys (`tenant:{id}:…`)
+- **[MUST] Files/storage:** tenant-scoped prefixes/paths
+- **[MUST] Search:** mandatory tenant filter
+- **[MUST] Queues/workers:** messages tagged; consumers validate tenant
+- **[MUST] Webhooks:** verify destination belongs to sending tenant
 - **[SHOULD] Logs:** always tag with tenant_id from auth context
 
 #### Common Anti-Patterns to Flag
@@ -305,46 +305,46 @@ return resource
 <summary><strong>Expand Backend & Server Code</strong></summary>
 
 #### Input Handling
-- **[MUST]** validate input against schema/allowlists  
-- **[MUST]** apply length limits to reduce DoS risk  
+- **[MUST]** validate input against schema/allowlists
+- **[MUST]** apply length limits to reduce DoS risk
 - **[MUST]** reject invalid input early (don't "sanitize" dangerous patterns into acceptability)
 
 #### Database Security
-- **[MUST]** parameterize queries / use ORM safely  
-- **[MUST]** include tenant filter in every access path  
+- **[MUST]** parameterize queries / use ORM safely
+- **[MUST]** include tenant filter in every access path
 - **[REDLINE]** string concatenation for queries with user input
 
 #### Authentication
-- **[MUST]** validate JWT signatures and claims (`exp`, `nbf`, `iss`)  
-- **[MUST]** tenant context extracted from authenticated session only  
+- **[MUST]** validate JWT signatures and claims (`exp`, `nbf`, `iss`)
+- **[MUST]** tenant context extracted from authenticated session only
 - **[SHOULD]** prefer httpOnly + secure + sameSite cookies for sessions
 
 #### Authorization
-- **[MUST]** verify resource ownership (tenant + user permissions)  
-- **[SHOULD]** return 404 for unauthorized resources (avoid existence leak)  
+- **[MUST]** verify resource ownership (tenant + user permissions)
+- **[SHOULD]** return 404 for unauthorized resources (avoid existence leak)
 - **[SHOULD]** audit-log authorization failures
 
 #### Error Handling
-- **[MUST]** server logs can include stack traces; client responses must not  
+- **[MUST]** server logs can include stack traces; client responses must not
 - **[REDLINE]** returning SQL queries, stack traces, file paths, internal IPs, service names to clients
 
 #### SSRF & Outbound HTTP Calls (Common in microservices)
-- **[MUST]** allowlist outbound hosts/domains when user-controlled URLs are involved  
-- **[MUST]** block link-local / metadata ranges (e.g., 169.254.169.254) and internal admin planes  
-- **[MUST]** enforce timeouts + max response size  
+- **[MUST]** allowlist outbound hosts/domains when user-controlled URLs are involved
+- **[MUST]** block link-local / metadata ranges (e.g., 169.254.169.254) and internal admin planes
+- **[MUST]** enforce timeouts + max response size
 - **[SHOULD]** restrict redirects; validate scheme (https only)
 
 #### File Uploads (if applicable)
-- **[MUST]** enforce size limits and content-type checks (don't trust client mime alone)  
-- **[SHOULD]** store outside web root; randomize names; scan if required by policy  
+- **[MUST]** enforce size limits and content-type checks (don't trust client mime alone)
+- **[SHOULD]** store outside web root; randomize names; scan if required by policy
 - **[SHOULD]** avoid parsing complex formats server-side without sandboxing
 
 #### Unsafe Deserialization
 - **[REDLINE]** unsafe YAML/JSON deserialization modes, Java native serialization, or eval-like parsing of untrusted data.
 
 #### Rate Limiting
-- **[MUST]** rate limit login/reset/token and all new API endpoints (tenant + user + IP keys)  
-- **[MUST]** return 429 with Retry-After  
+- **[MUST]** rate limit login/reset/token and all new API endpoints (tenant + user + IP keys)
+- **[MUST]** return 429 with Retry-After
 - **[REDLINE]** shipping new API endpoints without rate limiting — "we'll add it later" is not acceptable
 
 #### New API Endpoint Checklist
@@ -377,24 +377,24 @@ securityContext:
 ```
 
 #### Service Accounts & RBAC
-- **[MUST]** prefer Role over ClusterRole unless justified  
-- **[MUST]** scope secret access using `resourceNames` (no wildcards)  
-- **[MUST]** minimum verbs (`get` over `list/watch/delete`)  
+- **[MUST]** prefer Role over ClusterRole unless justified
+- **[MUST]** scope secret access using `resourceNames` (no wildcards)
+- **[MUST]** minimum verbs (`get` over `list/watch/delete`)
 - **[MUST]** do not use `default` service account
 
 #### Secrets in Helm
-- **[REDLINE]** secrets in `values.yaml` / templates / ConfigMaps  
+- **[REDLINE]** secrets in `values.yaml` / templates / ConfigMaps
 - **[SHOULD]** use ExternalSecret/SealedSecret/Vault/Secrets Manager patterns
 
 #### Network & Exposure
-- **[MUST]** enforce TLS on ingress where applicable  
-- **[SHOULD]** avoid NodePort/LoadBalancer unless intentional and reviewed  
-- **[SHOULD]** set resource requests/limits to reduce DoS risk  
+- **[MUST]** enforce TLS on ingress where applicable
+- **[SHOULD]** avoid NodePort/LoadBalancer unless intentional and reviewed
+- **[SHOULD]** set resource requests/limits to reduce DoS risk
 - **[NICE]** NetworkPolicies for sensitive workloads (default deny + explicit allow)
 
 #### Image Security
-- **[MUST]** no `latest` tags; pin versions/digests  
-- **[SHOULD]** trusted registries; minimal base images  
+- **[MUST]** no `latest` tags; pin versions/digests
+- **[SHOULD]** trusted registries; minimal base images
 - **[REDLINE]** `privileged: true` or `hostNetwork: true` unless Security-approved
 
 </details>
@@ -407,7 +407,7 @@ securityContext:
 <summary><strong>Expand CI/CD & GitHub Actions</strong></summary>
 
 #### Workflow Injection (CRITICAL)
-- **[MUST]** treat PR metadata as attacker-controlled  
+- **[MUST]** treat PR metadata as attacker-controlled
 - **[REDLINE]** untrusted input directly inside `run:` scripts
 
 ✅ Safer pattern:
@@ -425,12 +425,12 @@ securityContext:
 - **[MUST]** pin third-party actions to full commit SHA (tags can move)
 
 #### Secret Handling
-- **[MUST]** never echo secrets  
-- **[SHOULD]** use OIDC over long-lived tokens  
+- **[MUST]** never echo secrets
+- **[SHOULD]** use OIDC over long-lived tokens
 - **[SHOULD]** restrict secret access to only required workflows/environments
 
 #### Workflow Permissions
-- **[MUST]** minimum permissions block  
+- **[MUST]** minimum permissions block
 - **[REDLINE]** `permissions: write-all` unless explicitly justified
 
 </details>
@@ -450,19 +450,19 @@ set -euo pipefail
 ```
 
 #### Command Injection Prevention
-- **[MUST]** quote variables, use `${VAR:?}` for required vars  
+- **[MUST]** quote variables, use `${VAR:?}` for required vars
 - **[REDLINE]** `eval` with any user-controlled content
 
 #### Credentials
-- **[MUST]** avoid secrets in CLI args (visible in process list)  
+- **[MUST]** avoid secrets in CLI args (visible in process list)
 - **[SHOULD]** pass via env vars or secure files with correct permissions
 
 #### Temp Files
-- **[MUST]** use `mktemp` + cleanup trap  
+- **[MUST]** use `mktemp` + cleanup trap
 - **[REDLINE]** predictable temp paths for sensitive data
 
 #### Network Operations
-- **[MUST]** no `curl -k` in production  
+- **[MUST]** no `curl -k` in production
 - **[REDLINE]** `curl | bash` (download → verify checksum/signature → execute)
 
 </details>
@@ -475,17 +475,17 @@ set -euo pipefail
 <summary><strong>Expand Configuration Files</strong></summary>
 
 #### Common Risks
-- **[MUST]** no secrets in committed config  
-- **[MUST]** no debug mode in production  
-- **[SHOULD]** avoid binding services to `0.0.0.0` unless needed  
+- **[MUST]** no secrets in committed config
+- **[MUST]** no debug mode in production
+- **[SHOULD]** avoid binding services to `0.0.0.0` unless needed
 - **[SHOULD]** ensure least-privileged defaults
 
 #### CORS
-- **[REDLINE]** `allowed_origins: ["*"]` in production  
+- **[REDLINE]** `allowed_origins: ["*"]` in production
 - **[MUST]** use explicit origins from configuration + allow_credentials rules when needed
 
 #### Kong / Keycloak
-- **[MUST]** verify auth plugins/flows are actually applied and ordered correctly  
+- **[MUST]** verify auth plugins/flows are actually applied and ordered correctly
 - **[SHOULD]** avoid wildcard redirect URIs; protect admin APIs; ensure brute-force protection
 
 </details>
@@ -498,11 +498,11 @@ set -euo pipefail
 <summary><strong>Expand Frontend Code</strong></summary>
 
 #### XSS Prevention
-- **[REDLINE]** `dangerouslySetInnerHTML` / `v-html` with user-controlled data  
+- **[REDLINE]** `dangerouslySetInnerHTML` / `v-html` with user-controlled data
 - **[MUST]** sanitize rich text (e.g., DOMPurify or equivalent) if rendering HTML
 
 #### Token & Session Handling
-- **[MUST]** do not store tokens in localStorage/sessionStorage  
+- **[MUST]** do not store tokens in localStorage/sessionStorage
 - **[SHOULD]** prefer BFF + httpOnly cookies
 
 #### CSRF Note (When using cookies)
@@ -513,7 +513,7 @@ set -euo pipefail
 - **[MUST]** validate redirect targets against allowlist or use relative paths only
 
 #### Source Maps / Data Exposure
-- **[SHOULD]** do not ship source maps publicly unless explicitly intended and reviewed  
+- **[SHOULD]** do not ship source maps publicly unless explicitly intended and reviewed
 - **[SHOULD]** avoid storing PII in client state unnecessarily
 
 </details>
@@ -525,10 +525,10 @@ set -euo pipefail
 <details>
 <summary><strong>Expand Infrastructure-as-Code</strong></summary>
 
-- **[MUST]** no public buckets by default; enforce BlockPublicAccess  
-- **[MUST]** encrypt at rest (RDS/S3/EBS/Dynamo/etc.)  
-- **[MUST]** least-privilege IAM; avoid `Action:"*"` / `Resource:"*"`  
-- **[SHOULD]** minimize `0.0.0.0/0` ingress; prefer private subnets for data stores  
+- **[MUST]** no public buckets by default; enforce BlockPublicAccess
+- **[MUST]** encrypt at rest (RDS/S3/EBS/Dynamo/etc.)
+- **[MUST]** least-privilege IAM; avoid `Action:"*"` / `Resource:"*"`
+- **[SHOULD]** minimize `0.0.0.0/0` ingress; prefer private subnets for data stores
 - **[SHOULD]** audit logging (CloudTrail / equivalent) enabled
 
 </details>
@@ -541,17 +541,17 @@ set -euo pipefail
 <summary><strong>Expand Dependency & Supply Chain Security</strong></summary>
 
 #### Dependency Reviews
-- **[MUST]** verify the package/action actually exists (avoid hallucinated deps)  
-- **[MUST]** check for known CVEs — **block CRITICAL and HIGH CVEs**; flag MEDIUM for review  
-- **[MUST]** ensure lockfile changes match manifest intent  
+- **[MUST]** verify the package/action actually exists (avoid hallucinated deps)
+- **[MUST]** check for known CVEs — **block CRITICAL and HIGH CVEs**; flag MEDIUM for review
+- **[MUST]** ensure lockfile changes match manifest intent
 - **[SHOULD]** prefer approved registries / internal proxies if available
 
 #### Typosquatting Signals
-- new package, low downloads, newly created publisher, similar name to popular lib  
+- new package, low downloads, newly created publisher, similar name to popular lib
 - **[SHOULD]** prefer well-known maintained packages
 
 #### GitHub Actions Supply Chain
-- **[MUST]** pin actions to SHAs  
+- **[MUST]** pin actions to SHAs
 - **[SHOULD]** prefer official actions (`actions/*`, `github/*`) and an org allowlist
 
 </details>
@@ -564,18 +564,18 @@ set -euo pipefail
 <summary><strong>Expand AI/LLM Integration Code</strong></summary>
 
 #### Prompt Injection Prevention
-- **[MUST]** never place raw user input into privileged/system instructions  
-- **[MUST]** use clear delimiters between instructions and user content  
+- **[MUST]** never place raw user input into privileged/system instructions
+- **[MUST]** use clear delimiters between instructions and user content
 - **[SHOULD]** validate/filter model outputs before using downstream
 
 #### Data Leakage to Models
-- **[MUST]** do not send customer data to external LLMs without explicit approval/DPAs  
-- **[MUST]** mask PII/secrets/tenant data before LLM processing  
+- **[MUST]** do not send customer data to external LLMs without explicit approval/DPAs
+- **[MUST]** mask PII/secrets/tenant data before LLM processing
 - **[SHOULD]** log categories of data sent (not raw sensitive content)
 
 #### LLM Output Handling
-- **[REDLINE]** executing model output as code or shell commands without human review — never pass LLM output directly to `eval()`, SQL queries, shell commands (`exec`, `subprocess`, `child_process`), or `innerHTML`/`dangerouslySetInnerHTML`. This leads to code injection, command injection, SQL injection, and cross-site scripting.  
-- **[MUST]** sanitize model output before rendering in UI (XSS risk)  
+- **[REDLINE]** executing model output as code or shell commands without human review — never pass LLM output directly to `eval()`, SQL queries, shell commands (`exec`, `subprocess`, `child_process`), or `innerHTML`/`dangerouslySetInnerHTML`. This leads to code injection, command injection, SQL injection, and cross-site scripting.
+- **[MUST]** sanitize model output before rendering in UI (XSS risk)
 - **[MUST]** do not use model output for authz/security decisions
 
 </details>
@@ -600,9 +600,9 @@ set -euo pipefail
 | Architecture | Multi-tenant SaaS | tenant isolation failures at any layer |
 
 #### Compliance Requirements
-- SOC2 Type II: audit logging, access controls, change management  
-- GDPR: data residency, deletion, 72-hour notification requirements  
-- HIPAA: PHI protection for healthcare customers  
+- SOC2 Type II: audit logging, access controls, change management
+- GDPR: data residency, deletion, 72-hour notification requirements
+- HIPAA: PHI protection for healthcare customers
 
 </details>
 
@@ -611,40 +611,40 @@ set -euo pipefail
 ### Security Review Checklist
 
 #### Universal (All Code Types)
-- [ ] **No secrets** in code/config/logs/CI output  
-- [ ] Client errors don't expose stack traces/SQL/paths/internal IPs  
-- [ ] Audit logging for security-sensitive actions (auth, role changes, exports, admin ops)  
+- [ ] **No secrets** in code/config/logs/CI output
+- [ ] Client errors don't expose stack traces/SQL/paths/internal IPs
+- [ ] Audit logging for security-sensitive actions (auth, role changes, exports, admin ops)
 - [ ] Existing security patterns are used (don't invent new auth flows casually)
 
 #### Data Access (Backend/APIs/Workers)
-- [ ] `tenant_id` enforced from auth context in every query  
-- [ ] Input validated; allowlists preferred  
-- [ ] Parameterized queries only  
-- [ ] Auth enforced; authz verifies ownership  
+- [ ] `tenant_id` enforced from auth context in every query
+- [ ] Input validated; allowlists preferred
+- [ ] Parameterized queries only
+- [ ] Auth enforced; authz verifies ownership
 - [ ] Rate limiting on abuse-prone endpoints
 
 #### Infrastructure (Helm/K8s/Docker/Terraform)
-- [ ] Containers run as non-root; minimal capabilities  
-- [ ] RBAC least privilege; avoid wildcards  
-- [ ] Network exposure minimized; TLS enforced where needed  
-- [ ] Secrets managed externally (not values.yaml)  
+- [ ] Containers run as non-root; minimal capabilities
+- [ ] RBAC least privilege; avoid wildcards
+- [ ] Network exposure minimized; TLS enforced where needed
+- [ ] Secrets managed externally (not values.yaml)
 - [ ] Resource limits set; images pinned
 
 #### CI/CD
-- [ ] Actions pinned to SHAs  
-- [ ] Minimum permissions  
-- [ ] No PR-metadata injection in run scripts  
+- [ ] Actions pinned to SHAs
+- [ ] Minimum permissions
+- [ ] No PR-metadata injection in run scripts
 - [ ] Secrets not logged; avoid risky `pull_request_target` patterns
 
 #### Dependencies
-- [ ] No typosquatting signals  
-- [ ] Lockfile consistent with changes  
+- [ ] No typosquatting signals
+- [ ] Lockfile consistent with changes
 - [ ] CRITICAL and HIGH CVEs blocked; MEDIUM CVEs flagged for review
 
 #### Frontend
-- [ ] No unsafe HTML rendering  
-- [ ] Tokens not in localStorage  
-- [ ] Redirects validated  
+- [ ] No unsafe HTML rendering
+- [ ] Tokens not in localStorage
+- [ ] Redirects validated
 - [ ] CSRF considered if using cookies
 
 ---
@@ -683,15 +683,15 @@ set -euo pipefail
 
 ### Appendix: References
 
-- OWASP Top 10 — https://owasp.org/www-project-top-ten/  
-- OWASP API Security Top 10 — https://owasp.org/www-project-api-security/  
-- OWASP Prompt Injection — https://owasp.org/www-community/prompt-injection  
-- STRIDE — https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats  
-- Temporal Security — https://docs.temporal.io/security  
-- Kubernetes Security — https://kubernetes.io/docs/concepts/security/  
-- Keycloak Docs — https://www.keycloak.org/docs/latest/server_admin/  
-- GitHub Actions Hardening — https://docs.github.com/en/actions/security-for-github-actions/security-hardening-for-github-actions  
-- SLSA — https://slsa.dev/  
+- OWASP Top 10 — https://owasp.org/www-project-top-ten/
+- OWASP API Security Top 10 — https://owasp.org/www-project-api-security/
+- OWASP Prompt Injection — https://owasp.org/www-community/prompt-injection
+- STRIDE — https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats
+- Temporal Security — https://docs.temporal.io/security
+- Kubernetes Security — https://kubernetes.io/docs/concepts/security/
+- Keycloak Docs — https://www.keycloak.org/docs/latest/server_admin/
+- GitHub Actions Hardening — https://docs.github.com/en/actions/security-for-github-actions/security-hardening-for-github-actions
+- SLSA — https://slsa.dev/
 - OpenSSF Scorecard — https://securityscorecards.dev/
 
 ---

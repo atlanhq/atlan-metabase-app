@@ -1,0 +1,145 @@
+{
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "label": "Name",
+          "hidden": true,
+          "placeholder": "Name"
+        }
+      },
+      "connector": {
+        "type": "string",
+        "default": "metabase",
+        "required": false,
+        "ui": {
+          "label": "Connector",
+          "hidden": true,
+          "placeholder": "Connector"
+        }
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "key": "_host",
+          "label": "connectorType",
+          "placeholder": "connectorType",
+          "hidden": true
+        }
+      },
+      "host": {
+        "type": "string",
+        "required": true,
+        "default": "",
+        "ui": {
+          "label": "Host Name",
+          "grid": 6,
+          "hidden": false,
+          "placeholder": "https://<account-id>.metabaseapp.com",
+          "help": "Metabase host URL. Make sure you add the http protocol as well.",
+          "rules": [
+            {
+              "required": true,
+              "message": "Please enter a valid host"
+            }
+          ]
+        }
+      },
+      "port": {
+        "type": "number",
+        "default": 443,
+        "required": true,
+        "ui": {
+          "label": "Port",
+          "grid": 2,
+          "hidden": false,
+          "placeholder": "443",
+          "help": "Metabase port. Add 443 if you are using the cloud hosted version.",
+          "rules": [
+            {
+              "required": true,
+              "message": "Please enter a valid port"
+            }
+          ]
+        }
+      },
+      "auth-type": {
+        "type": "string",
+        "enum": ["basic"],
+        "default": "basic",
+        "required": true,
+        "enumNames": ["Basic Authentication"],
+        "ui": {
+          "widget": "radio",
+          "label": "Authentication",
+          "placeholder": "Credential Type",
+          "rules": [
+            {
+              "required": true,
+              "message": "Please enter a valid authentication type"
+            }
+          ]
+        }
+      },
+      "basic": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "label": "Username",
+              "placeholder": "Username",
+              "feedback": true,
+              "help": "Metabase username",
+              "grid": 4,
+              "rules": [
+                {
+                  "required": true,
+                  "message": "Please enter a valid username"
+                }
+              ]
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password",
+              "label": "Password",
+              "feedback": true,
+              "placeholder": "Password",
+              "help": "Metabase password",
+              "grid": 4,
+              "rules": [
+                {
+                  "required": true,
+                  "message": "Please enter a valid password"
+                }
+              ]
+            }
+          }
+        },
+        "ui": {
+          "widget": "nested",
+          "label": "Basic Authentication",
+          "nestedValue": false,
+          "hidden": true
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "basic"
+          }
+        },
+        "required": ["basic"]
+      }
+    ]
+  }
+}

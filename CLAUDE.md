@@ -1,9 +1,9 @@
 # CLAUDE.md — Atlan AI Agent Guidelines (Claude Code Edition)
 
-> **Version:** 4.1  
-> **Last Updated:** 2026-02-11  
-> **Applies To:** Claude Code sessions on Atlan codebases  
-> **Full Policy:** See `AGENTS.md` for the comprehensive version with all domain-specific details.  
+> **Version:** 4.1
+> **Last Updated:** 2026-02-11
+> **Applies To:** Claude Code sessions on Atlan codebases
+> **Full Policy:** See `AGENTS.md` for the comprehensive version with all domain-specific details.
 > **⚠️ Always read `AGENTS.md` in addition to this file before making changes.** This file is a lean summary; `AGENTS.md` contains the full security policy with all domain-specific rules.
 
 **All AI agents must follow these guidelines when generating, modifying, or reviewing code in Atlan repositories.**
@@ -12,7 +12,7 @@
 
 ## Project Overview
 
-<!-- 
+<!--
 Teams: Add your project description, architecture overview, and key context here.
 This section helps AI agents understand what this repo does and how it fits into Atlan's architecture.
 
@@ -27,7 +27,7 @@ Example:
 
 ## Project Commands
 
-<!-- 
+<!--
 Teams: Add your build, test, lint, and deploy commands here.
 AI agents use these to validate changes and run tests.
 
@@ -43,7 +43,7 @@ Example:
 
 ## Coding Conventions
 
-<!-- 
+<!--
 Teams: Add language-specific style guides, naming conventions, and patterns here.
 
 Example:
@@ -58,7 +58,7 @@ Example:
 
 ## Architecture Notes
 
-<!-- 
+<!--
 Teams: Add key design decisions, service boundaries, data flow, and important patterns here.
 
 Example:
@@ -72,7 +72,7 @@ Example:
 
 ## Security
 
-> **All AI agents must follow these guidelines for every code change.**  
+> **All AI agents must follow these guidelines for every code change.**
 > **For detailed domain-specific rules** (expanded Backend, Helm, CI/CD, Shell, Config, Frontend, IaC, Dependencies, AI/LLM), see `AGENTS.md § Security`.
 
 ### Owners & Contact
