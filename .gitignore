@@ -71,6 +71,11 @@ env/
 *.egg-info/
 dist/
 build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage*
+htmlcov/
 
 # ─── Node.js ────────────────────────────────────────────────────────────────
 node_modules/
@@ -95,3 +100,17 @@ logs/
 *.tgz
 *.rar
 *.7z
+
+# ─── Connector App ──────────────────────────────────────────────────────────
+# Dapr components (downloaded via poe download-components)
+components/
+# Local workflow output artifacts
+local/
+# Temporal / SQLite database files
+*.db
+
+# dev / scratch scripts
+test_auth.py
+
+# migration skill guides (not part of the app)
+skills/
