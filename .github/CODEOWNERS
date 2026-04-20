@@ -1,1 +1,9 @@
-* @atlanhq/apps-team
+# Owners inferred from top git contributors (active in last 90 days).
+# Please edit — adjust scope, add path-specific rules, or remove ex-members.
+#
+# References:
+#   - About code owners: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#   - Rollout context: atlanhq/integration-studio-aisdlc APP-1866 (connector repo health audit)
+# NOTE: merged with existing owner(s) in the placeholder file (@atlanhq).
+
+* @atlanhq @Divyanshu-Patel @gopalatlansingh2022
