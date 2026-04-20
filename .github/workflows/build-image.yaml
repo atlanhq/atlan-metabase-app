@@ -63,7 +63,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GitHub Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: $GITHUB_ACTOR
@@ -107,13 +107,13 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: atlanhq
           password: ${{ secrets.DOCKER_HUB_PAT_RW }}
 
       - name: Login to GitHub Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: $GITHUB_ACTOR
