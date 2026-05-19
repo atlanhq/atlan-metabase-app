@@ -163,20 +163,24 @@ class TransformOutput(Output):
 # ---------------------------------------------------------------------------
 
 
-class FetchInput(Input):
+class FetchInput(Input, allow_unbounded_fields=True):
     """Input shared by all simple extract @tasks.
 
     Carries the credential ref (or inline credentials) so the task can rebuild
     its own client without app_state — every @task runs as its own Temporal
     activity in a separate worker thread, so a shared client cache via
     ``app_state`` would only be reachable inside one activity context anyway.
+
+    ``allow_unbounded_fields`` is required by the SDK's payload-safety
+    validator: ``inline_credentials`` is ``dict[str, Any]`` and
+    ``Annotated[dict[str, Any], MaxItems(N)]`` is still rejected because
+    ``Any`` cannot be bounded, only counted. atlan-sigma-app uses the same
+    escape hatch on its task input for the same reason.
     """
 
     output_path: str = ""
     credential_ref: CredentialRef | None = None
-    inline_credentials: Annotated[dict[str, Any], MaxItems(50)] = Field(
-        default_factory=dict
-    )
+    inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
 class FetchOutput(Output):
@@ -187,12 +191,14 @@ class FetchOutput(Output):
     output_file: FileReference | None = None
 
 
-class FilterInput(Input):
+class FilterInput(Input, allow_unbounded_fields=True):
     """Input for the filter @task.
 
     Receives ``FileReference``s for each of the four raw entity files and the
     include / exclude collection filters. The SDK auto-downloads any
     ``FileReference`` referenced here before the task runs.
+    ``allow_unbounded_fields`` is required for ``inline_credentials`` — see
+    ``FetchInput`` for the full rationale.
     """
 
     output_path: str = ""
@@ -203,9 +209,7 @@ class FilterInput(Input):
     questions_file: FileReference | None = None
     databases_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: Annotated[dict[str, Any], MaxItems(50)] = Field(
-        default_factory=dict
-    )
+    inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
 class FilterOutput(Output):
@@ -218,23 +222,27 @@ class FilterOutput(Output):
     total_records: int = 0
 
 
-class FetchDetailInput(Input):
-    """Input for tasks that fetch per-entity detail starting from a filtered file."""
+class FetchDetailInput(Input, allow_unbounded_fields=True):
+    """Input for tasks that fetch per-entity detail starting from a filtered file.
+
+    ``allow_unbounded_fields`` is required for ``inline_credentials`` — see
+    ``FetchInput`` for the full rationale.
+    """
 
     output_path: str = ""
     source_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: Annotated[dict[str, Any], MaxItems(50)] = Field(
-        default_factory=dict
-    )
+    inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
-class ProcessInput(Input):
+class ProcessInput(Input, allow_unbounded_fields=True):
     """Input for the ``process_metabaseprocess`` @task.
 
     ``metabase_host`` is resolved inside the task itself via
     ``_build_client(input).host`` so the credential path (CredentialRef vs
     inline) stays consistent with every other task — no separate threading.
+    ``allow_unbounded_fields`` is required for ``inline_credentials`` — see
+    ``FetchInput`` for the full rationale.
     """
 
     output_path: str = ""
@@ -244,9 +252,7 @@ class ProcessInput(Input):
     dashboard_details_file: FileReference | None = None
     questions_filtered_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: Annotated[dict[str, Any], MaxItems(50)] = Field(
-        default_factory=dict
-    )
+    inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProcessOutput(Output):
