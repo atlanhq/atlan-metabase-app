@@ -103,9 +103,7 @@ def _build_default_creds(cls) -> dict:
         "password": os.environ.get("E2E_METABASE_PASSWORD", ""),
         "host": os.environ.get("E2E_METABASE_HOST", ""),
         "port": int(port_env) if port_env.isdigit() else port_env,
-        "extra": {
-            
-        },
+        "extra": {},
     }
     creds.update(cls.default_credentials)
     return creds

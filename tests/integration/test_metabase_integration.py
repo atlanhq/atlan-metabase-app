@@ -47,10 +47,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List
 
-from application_sdk.testing.integration import (
-    BaseIntegrationTest,
-    Scenario,
-)
+from application_sdk.testing.integration import BaseIntegrationTest, Scenario
 
 
 def _basic_creds(**overrides: Any) -> Dict[str, Any]:
