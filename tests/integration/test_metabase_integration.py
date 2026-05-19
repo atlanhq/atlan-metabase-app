@@ -1,30 +1,19 @@
 """Integration tests for the Metabase connector.
 
-Templated from ``atlan-mssql-app/tests/integration/test_mssql_integration.py``
-and reduced to a compile-ready stub.
+Exercises the three v3 handler endpoints (``auth`` / ``preflight`` /
+``metadata``) against a live Metabase tenant. Each scenario is dispatched
+by :class:`BaseIntegrationTest` to the running app server (default
+``http://localhost:8000``) and the response is asserted with the SDK's
+``equals`` / ``is_dict`` / ``is_list`` / ``is_string`` predicates.
 
-TODO(validation-suite): replace the empty ``scenarios`` list with real
-auth / preflight / workflow scenarios for Metabase. The MSSQL gold
-reference has ~950 lines of T-SQL-specific golden-file plumbing
-(Azure AD + NTLM scenarios, ``extra.database`` flattening, SQL fixture
-paths) that does not port directly to REST/BI. Suggested approach:
+Workflow scenarios (``api="workflow"``) are intentionally omitted for now
+— they require a ``credential_guid`` pre-seeded in the Dapr secret store
+(see PR #15's "Phase 6 known follow-up" note); the SDK's ``/start``
+handler strips inline credentials before workflow dispatch.
 
-1. Run ``/write-integration-tests`` from the application-sdk repo with
-   this target — it generates a clean ``BaseIntegrationTest`` subclass
-   tailored to a single-auth-type connector.
-2. Add per-scenario Pandera schemas under
-   ``tests/integration/schema/<scenario>/`` describing the expected raw
-   + transformed JSONL shape. The four placeholder dirs already in this
-   repo (``empty_exclude``, ``empty_filters``, ``empty_include``,
-   ``mixed_filters``) reference MSSQL entity names and need updating to
-   Metabase entity names (Collection / Dashboard / Question / column).
-3. Wire up REST-API mocks (or a long-lived test Metabase instance) — the
-   MSSQL version relies on a live SQL Server fixture which has no
-   analogue here.
-
-Prerequisites once the scenarios are written
---------------------------------------------
-1. Env vars (in ``.env`` at the repo root and/or ``tests/.env``)::
+Prerequisites
+-------------
+1. ``tests/.env`` (gitignored) populated with::
 
        ATLAN_APPLICATION_NAME=metabase
        E2E_METABASE_HOST=https://acme.metabaseapp.com
@@ -34,12 +23,11 @@ Prerequisites once the scenarios are written
 
 2. Services + app server running::
 
-       uv run poe start-deps            # Dapr + Temporal
-       uv run python main.py            # App server on :8000
+       uv run --env-file tests/.env -- atlan app run -p .
 
-3. Run the tests::
+3. Run::
 
-       uv run pytest tests/integration/ -v
+       uv run --env-file tests/.env -- pytest tests/integration/ -v
 """
 
 from __future__ import annotations
@@ -48,6 +36,13 @@ import os
 from typing import Any, Dict, List
 
 from application_sdk.testing.integration import BaseIntegrationTest, Scenario
+from application_sdk.testing.integration.assertions import (
+    equals,
+    is_dict,
+    is_list,
+    is_not_empty,
+    is_string,
+)
 
 
 def _basic_creds(**overrides: Any) -> Dict[str, Any]:
@@ -69,12 +64,11 @@ def _basic_creds(**overrides: Any) -> Dict[str, Any]:
     return creds
 
 
-class TestMetabaseIntegration(BaseIntegrationTest):
-    """Metabase integration suite — auth / preflight / workflow.
+_VALID = _basic_creds()
 
-    TODO(validation-suite): populate ``scenarios`` once auth + preflight
-    + workflow shapes are confirmed against the v3 connector.
-    """
+
+class TestMetabaseIntegration(BaseIntegrationTest):
+    """Metabase integration suite — auth / preflight / metadata."""
 
     app_url = "http://localhost:8000"
     app_name = "metabase"
@@ -86,6 +80,101 @@ class TestMetabaseIntegration(BaseIntegrationTest):
 
     default_credentials: Dict[str, Any] = _basic_creds()
 
-    # Empty until per-scenario tests are written. BaseIntegrationTest tolerates
-    # an empty list — pytest collects no tests and the suite is a no-op.
-    scenarios: List[Scenario] = []
+    scenarios: List[Scenario] = [
+        # -- auth --------------------------------------------------------------
+        Scenario(
+            name="auth_valid_credentials",
+            api="auth",
+            assert_that={
+                "success": equals(True),
+                "data.status": equals("success"),
+                "data.message": equals("Authentication successful"),
+            },
+            description="Valid Metabase credentials yield a session token and AuthStatus.SUCCESS.",
+        ),
+        Scenario(
+            name="auth_response_shape",
+            api="auth",
+            assert_that={
+                "success": equals(True),
+                "data": is_dict(),
+                "data.status": is_string(),
+                "data.message": is_string(),
+            },
+            description="Auth response has the v3 envelope shape (success / data{status,message}).",
+        ),
+        Scenario(
+            name="auth_wrong_password",
+            api="auth",
+            credentials=_basic_creds(password="definitely-not-the-real-password"),
+            assert_that={
+                "success": equals(False),
+                "data.status": equals("failed"),
+            },
+            description="Correct user, wrong password fails the /api/session round-trip.",
+        ),
+        Scenario(
+            name="auth_wrong_username",
+            api="auth",
+            credentials=_basic_creds(username="not-a-real-user@example.invalid"),
+            assert_that={
+                "success": equals(False),
+                "data.status": equals("failed"),
+            },
+            description="Unknown user fails auth.",
+        ),
+        # -- metadata ----------------------------------------------------------
+        Scenario(
+            name="metadata_returns_collection_tree",
+            api="metadata",
+            assert_that={
+                "success": equals(True),
+                "data": is_list(),
+            },
+            description="fetch_metadata returns ApiMetadataOutput.objects as a flat list (v3 shape).",
+        ),
+        Scenario(
+            name="metadata_objects_have_apitree_shape",
+            api="metadata",
+            assert_that={
+                "success": equals(True),
+                # The runner's _get_nested_value splits on '.' only — list
+                # indexing uses ``data.0.value`` (numeric segment), not the
+                # bracketed ``data[0].value`` form.
+                "data.0.value": is_string(),
+                "data.0.title": is_string(),
+                "data.0.node_type": equals("collection"),
+            },
+            description="Each apitree node has value/title/node_type (v3 ApiMetadataObject).",
+        ),
+        # -- preflight ---------------------------------------------------------
+        Scenario(
+            name="preflight_check_all_pass",
+            api="preflight",
+            assert_that={
+                "success": equals(True),
+                "data": is_dict(),
+                "data.collectionCountCheck.success": equals(True),
+                "data.dashboardCountCheck.success": equals(True),
+                "data.questionCountCheck.success": equals(True),
+                "data.nativeQueryPermissionCheck.success": equals(True),
+            },
+            description=(
+                "All four sageTemplate checks pass against the test tenant. "
+                "Service layer auto-converts PreflightOutput.checks to v2 "
+                "camelCase keys (collectionCountCheck etc.) so existing "
+                "frontends keep working."
+            ),
+        ),
+        Scenario(
+            name="preflight_returns_check_messages",
+            api="preflight",
+            assert_that={
+                "success": equals(True),
+                "data.collectionCountCheck.message": is_not_empty(),
+                "data.dashboardCountCheck.message": is_not_empty(),
+                "data.questionCountCheck.message": is_not_empty(),
+            },
+            description="Each check has a non-empty human-readable message.",
+        ),
+    ]
