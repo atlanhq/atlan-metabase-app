@@ -177,4 +177,149 @@ class TestMetabaseIntegration(BaseIntegrationTest):
             },
             description="Each check has a non-empty human-readable message.",
         ),
+        # -- preflight filter behaviour ----------------------------------------
+        # All four sage checks accept include-collections / exclude-collections
+        # as JSON-encoded dicts keyed by collection id (apitree widget shape).
+        # Empty filter = include everything.
+        Scenario(
+            name="preflight_with_include_filter_root_only",
+            api="preflight",
+            metadata={
+                "include-collections": '{"root": {}}',
+                "exclude-collections": "{}",
+            },
+            assert_that={
+                "success": equals(True),
+                # Only the root collection survives; dashboards/questions
+                # whose collection_id is not "root" get filtered out.
+                "data.collectionCountCheck.success": equals(True),
+                "data.collectionCountCheck.message": equals("Total collections: 1"),
+            },
+            description=(
+                "include-collections filter narrows the count to the matching "
+                "id only. Verifies the handler honours apitree widget payloads."
+            ),
+        ),
+        Scenario(
+            name="preflight_with_exclude_all_filter",
+            api="preflight",
+            metadata={
+                "include-collections": "{}",
+                # Every non-personal collection id visible on the test
+                # tenant. Refresh this list by curling /workflows/v1/metadata
+                # if the tenant gains or loses collections.
+                "exclude-collections": (
+                    '{"root": {}, "3": {}, "4": {}, "5": {}, '
+                    '"34": {}, "67": {}, "133": {}}'
+                ),
+            },
+            assert_that={
+                "success": equals(True),
+                # Every visible collection on the test tenant is in the
+                # exclude filter, so the collection count drops to zero.
+                # Dashboards / questions with ``collection_id = null`` (not
+                # in any tracked collection) survive the filter; we only
+                # assert those checks ran successfully — not exact zeros.
+                "data.collectionCountCheck.success": equals(True),
+                "data.collectionCountCheck.message": equals("Total collections: 0"),
+                "data.dashboardCountCheck.success": equals(True),
+                "data.questionCountCheck.success": equals(True),
+                "data.nativeQueryPermissionCheck.success": equals(True),
+            },
+            description=(
+                "exclude-collections covering every known collection drives "
+                "the collection count to zero. dashboardCountCheck and "
+                "questionCountCheck still pass — Metabase allows dashboards "
+                "and questions to live outside any tracked collection "
+                "(``collection_id = null``) and those survive the filter. "
+                "nativeQueryPermissionCheck is unaffected (it inspects "
+                "databases, not collections)."
+            ),
+        ),
+        Scenario(
+            name="preflight_include_and_exclude_overlap",
+            api="preflight",
+            metadata={
+                # Include root but also exclude it — exclude wins.
+                "include-collections": '{"root": {}}',
+                "exclude-collections": '{"root": {}}',
+            },
+            assert_that={
+                "success": equals(True),
+                "data.collectionCountCheck.success": equals(True),
+                "data.collectionCountCheck.message": equals("Total collections: 0"),
+            },
+            description=(
+                "When the same id appears in both filters, exclude wins. "
+                "Documents the v3 precedence (matches v2 marketplace logic)."
+            ),
+        ),
+        # -- preflight error handling ------------------------------------------
+        Scenario(
+            name="preflight_short_circuits_on_bad_host",
+            api="preflight",
+            credentials=_basic_creds(host="https://nonexistent.example.invalid"),
+            assert_that={
+                # The HTTP envelope's outer ``success`` reflects whether the
+                # preflight request was processed, NOT whether the checks
+                # passed. Outer is True; the inner check signals failure.
+                "success": equals(True),
+                "data.collectionCountCheck.success": equals(False),
+                "data.collectionCountCheck.message": is_not_empty(),
+            },
+            description=(
+                "Unreachable host fails the collection check; the handler "
+                "short-circuits so dashboardCountCheck / questionCountCheck / "
+                "nativeQueryPermissionCheck are absent from the response. "
+                "The outer envelope ``success`` stays True (the request was "
+                "served); only the inner check signals failure."
+            ),
+        ),
+        # -- metadata edge cases -----------------------------------------------
+        Scenario(
+            name="metadata_filters_out_personal_collections",
+            api="metadata",
+            assert_that={
+                "success": equals(True),
+                # Every node returned must have a node_type of 'collection' —
+                # personal collections (those whose owner is not None) are
+                # filtered out by the handler before the dropdown is built.
+                "data.0.node_type": equals("collection"),
+                "data.1.node_type": equals("collection"),
+            },
+            description=(
+                "Handler skips personal collections (personal_owner_id != "
+                "null) so the dropdown only shows shared collections."
+            ),
+        ),
+        # -- auth edge cases ---------------------------------------------------
+        Scenario(
+            name="auth_with_empty_credentials",
+            api="auth",
+            credentials={},
+            assert_that={
+                "success": equals(False),
+                "data.status": equals("failed"),
+            },
+            description=(
+                "Empty credentials short-circuit auth — handler catches the "
+                "missing-host / missing-username path before any HTTP round-trip."
+            ),
+        ),
+        Scenario(
+            name="auth_with_unreachable_host",
+            api="auth",
+            credentials=_basic_creds(host="https://nonexistent.example.invalid"),
+            assert_that={
+                "success": equals(False),
+                "data.status": equals("failed"),
+                # Error message surfaces the upstream failure for debugging.
+                "data.message": is_not_empty(),
+            },
+            description=(
+                "Wrong host fails auth at the /api/session network layer. "
+                "Verifies the handler surfaces a debuggable error message "
+                "rather than a generic 'failed'."
+            ),
+        ),
     ]
