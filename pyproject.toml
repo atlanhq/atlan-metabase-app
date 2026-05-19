@@ -28,6 +28,16 @@ test = [
     "pytest-cov>=6.2.1",
 ]
 
+[tool.poe.tasks]
+# Regenerate contract artifacts from contract/app.pkl into app/generated/.
+generate = "bash -c 'cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/generated && cp generated/*.json generated/_input.py ../app/generated/ && rm -rf generated'"
+
+# Dapr + Temporal local-dev tasks required by `atlan app run`.
+start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --dapr-http-port 3500 --dapr-grpc-port 50001 --resources-path components"
+start-temporal = "temporal server start-dev --db-filename /tmp/temporal.db"
+start-deps.shell = "poe start-dapr & poe start-temporal &"
+stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"
+
 [tool.hatch.build.targets.sdist]
 include = ["./**/*.py"]
 

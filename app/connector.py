@@ -21,7 +21,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import daft
 from application_sdk.app import App, entrypoint, task
@@ -34,8 +34,6 @@ from app.client import MetabaseApiClient, build_client
 from app.contracts import (
     TRANSFORM_ASSET_TYPES,
     TYPENAME_TO_PROCESS_DIR,
-    ClientLifecycleInput,
-    ClientLifecycleOutput,
     ExtractionInput,
     ExtractionOutput,
     FetchDetailInput,
@@ -85,6 +83,62 @@ _TRANSFORMED_DIR = "transformed"
 # ---------------------------------------------------------------------------
 
 
+def build_credential_ref(
+    input: ExtractionInput | TransformInput,
+) -> tuple[CredentialRef | None, dict[str, Any]]:
+    """Resolve credentials from the three supported paths into (ref, inline).
+
+    Exactly one of the returned values is populated:
+
+    - ``credential_ref`` — from ``input.metabase_credential`` (PKL contract)
+      or constructed from ``input.credential_guid`` (legacy GUID).
+    - ``inline_credentials`` — from ``input.credentials`` (list[{key,value}]
+      from the HTTP service layer, or a flat dict for local dev).
+
+    Tasks read ``credential_ref`` first; if absent they fall back to inline.
+    """
+    if input.metabase_credential is not None:
+        return input.metabase_credential, {}
+    if input.credential_guid:
+        ref = CredentialRef(
+            name=input.credential_guid,
+            credential_type="basic",
+            credential_guid=input.credential_guid,
+        )
+        return ref, {}
+    # Inline fallback (local-dev or service-passed raw creds).
+    inline: dict[str, Any] = {}
+    creds = input.credentials
+    if isinstance(creds, list):
+        for item in creds:
+            if isinstance(item, dict) and "key" in item:
+                inline[item["key"]] = item.get("value", "")
+    elif isinstance(creds, dict):
+        inline = creds
+    return None, inline
+
+
+def _parse_credential_dict(raw: dict[str, Any]) -> MetabaseCredential:
+    """Coerce a raw credential dict into a typed :class:`MetabaseCredential`.
+
+    Accepts both the flat HTTP shape (``{host, port, username, password}``)
+    and the v2 nested shape (``{host, port, extra: {username, password}}``).
+    """
+    if not raw:
+        return MetabaseCredential()
+    flat = dict(raw)
+    extra = raw.get("extra")
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            flat.setdefault(k, v)
+    return MetabaseCredential(
+        host=str(flat.get("host", "") or ""),
+        port=int(flat.get("port", 443) or 443),
+        username=str(flat.get("username", "") or ""),
+        password=str(flat.get("password", "") or ""),
+    )
+
+
 def _default_output_path(workflow_id: str) -> str:
     """Build a sensible local output path when AE doesn't supply one."""
     base = Path(tempfile.gettempdir()) / "atlan-metabase-app"
@@ -121,82 +175,44 @@ class MetabaseApp(App):
     """
 
     # ------------------------------------------------------------------
-    # Client lifecycle
+    # Client + credential resolution
     # ------------------------------------------------------------------
+    # NOTE: We intentionally do NOT cache the client in ``app_state``. Each
+    # @task is dispatched as its own Temporal activity, so ``app_state`` only
+    # spans a single activity execution — there is no cross-activity reuse to
+    # be had. Building per-task is simple, deterministic, and avoids the
+    # ``AppContextError`` raised when ``get_app_state`` is invoked outside the
+    # activity context (e.g. from a helper called via ``await`` on the workflow
+    # thread). This mirrors atlan-sigma-app's pattern.
 
-    async def _get_client(
-        self,
-        input: Any,
-        credentials: MetabaseCredential | None = None,
-    ) -> MetabaseApiClient:
-        """Return a cached worker-local Metabase client, building it once.
+    async def _build_client(self, input: Any) -> MetabaseApiClient:
+        """Build a Metabase client from the credential ref or inline creds.
 
-        - Reads the typed credential from the input contract.
-        - Stores the authenticated client on ``app_state`` keyed by ``client``
-          so every later @task in the same worker reuses it.
+        Each @task is expected to call this once at the top of its body.
+        Resolves credentials via the SDK's typed pathway:
+
+        - ``input.credential_ref`` (``CredentialRef``) — pulled from secret
+          store via ``self.context.resolve_credential_raw``.
+        - ``input.inline_credentials`` — local-dev fallback when no secret
+          store is wired up.
+
+        Raises:
+            ValueError: When both fields are absent or empty.
         """
-        cached = self.get_app_state("client")
-        if cached is not None:
-            return cast(MetabaseApiClient, cached)
+        raw_creds: dict[str, Any] = {}
+        cred_ref = getattr(input, "credential_ref", None)
+        if cred_ref is not None:
+            raw_creds = await self.context.resolve_credential_raw(cred_ref)
+        else:
+            inline = getattr(input, "inline_credentials", {}) or {}
+            if not inline:
+                raise ValueError(
+                    "_build_client: no credential_ref or inline_credentials"
+                )
+            raw_creds = inline
 
-        credential = credentials
-        if credential is None:
-            credential = self._resolve_credential(input)
-        client = await build_client(credential)
-        self.set_app_state("client", client)
-        return client
-
-    @staticmethod
-    def _resolve_credential(input: Any) -> MetabaseCredential:
-        """Resolve a typed :class:`MetabaseCredential` from the input contract.
-
-        Order of preference:
-        1. ``input.credentials`` already typed (set by AE / contract validator).
-        2. ``CredentialRef.resolve(input)`` for ``credential_guid``-based paths.
-        Returns the typed credential. The actual secret-store lookup happens
-        inside ``CredentialRef.resolve`` via the SDK context. Callers must be
-        running inside a @task (so ``self.context.get_secret`` is available)
-        when ``credential_guid`` is set.
-        """
-        creds = getattr(input, "credentials", None)
-        if (
-            isinstance(creds, MetabaseCredential)
-            and creds.host
-            and creds.username
-            and creds.password
-        ):
-            return creds
-        # CredentialRef.resolve(input) is the v3 routing helper; we only call
-        # it for input types that satisfy the CredentialResolvable protocol.
-        try:
-            _ = CredentialRef.resolve(input)  # noqa: F841 — populates routing
-        except (ValueError, AttributeError):
-            pass
-        # The credential should have been populated by the contract validator;
-        # if it is still empty here, surface a clear error from the first
-        # client call.
-        if isinstance(creds, MetabaseCredential):
-            return creds
-        return MetabaseCredential()
-
-    @task
-    async def dispose_client(
-        self, input: ClientLifecycleInput
-    ) -> ClientLifecycleOutput:
-        """Close the cached client at the end of an @entrypoint run.
-
-        ``input`` is required by the SDK's @task contract validator but is
-        otherwise unused — disposal acts on the worker-local ``app_state``.
-        """
-        _ = input  # contract-required placeholder
-        cached = self.get_app_state("client")
-        if cached is not None:
-            try:
-                await cached.close()
-            except Exception as e:  # noqa: BLE001 — best-effort cleanup
-                logger.warning("dispose_client: error while closing: %s", e)
-            self.set_app_state("client", None)
-        return ClientLifecycleOutput(ready=False)
+        credential = _parse_credential_dict(raw_creds)
+        return await build_client(credential)
 
     # ------------------------------------------------------------------
     # EXTRACTION @tasks
@@ -205,7 +221,7 @@ class MetabaseApp(App):
     @task(timeout_seconds=600)
     async def extract_collections(self, input: FetchInput) -> FetchOutput:
         """Fetch all collections → ``raw/collections/result-0.json``."""
-        client = cast(MetabaseApiClient, self.get_app_state("client"))
+        client = await self._build_client(input)
         records = await fetch_collections_summaries(client)
         out = _raw_file(input.output_path, "collections")
         write_jsonl(out, records)
@@ -217,7 +233,7 @@ class MetabaseApp(App):
     @task(timeout_seconds=600)
     async def extract_dashboards(self, input: FetchInput) -> FetchOutput:
         """Fetch dashboard summaries → ``raw/dashboards/result-0.json``."""
-        client = cast(MetabaseApiClient, self.get_app_state("client"))
+        client = await self._build_client(input)
         records = await fetch_dashboards_summaries(client)
         out = _raw_file(input.output_path, "dashboards")
         write_jsonl(out, records)
@@ -229,7 +245,7 @@ class MetabaseApp(App):
     @task(timeout_seconds=600)
     async def extract_questions(self, input: FetchInput) -> FetchOutput:
         """Fetch question (card) summaries → ``raw/questions/result-0.json``."""
-        client = cast(MetabaseApiClient, self.get_app_state("client"))
+        client = await self._build_client(input)
         records = await fetch_questions_summaries(client)
         out = _raw_file(input.output_path, "questions")
         write_jsonl(out, records)
@@ -241,7 +257,7 @@ class MetabaseApp(App):
     @task(timeout_seconds=600)
     async def extract_databases(self, input: FetchInput) -> FetchOutput:
         """Fetch database summaries → ``raw/databases/result-0.json``."""
-        client = cast(MetabaseApiClient, self.get_app_state("client"))
+        client = await self._build_client(input)
         records = await fetch_databases_summaries(client)
         out = _raw_file(input.output_path, "databases")
         write_jsonl(out, records)
@@ -323,7 +339,7 @@ class MetabaseApp(App):
         self, input: FetchDetailInput
     ) -> FetchOutput:
         """Fetch per-dashboard detail (incl. ``ordered_cards``)."""
-        client = cast(MetabaseApiClient, self.get_app_state("client"))
+        client = await self._build_client(input)
         filtered_dashboards = read_jsonl(
             input.source_file.local_path if input.source_file else ""
         )
@@ -346,7 +362,7 @@ class MetabaseApp(App):
         self, input: FetchDetailInput
     ) -> FetchOutput:
         """Fetch per-database schema/table metadata."""
-        client = cast(MetabaseApiClient, self.get_app_state("client"))
+        client = await self._build_client(input)
         databases = read_jsonl(
             input.source_file.local_path if input.source_file else ""
         )
@@ -369,7 +385,7 @@ class MetabaseApp(App):
         self, input: FetchDetailInput
     ) -> FetchOutput:
         """Fetch the native SQL string for each filtered question."""
-        client = cast(MetabaseApiClient, self.get_app_state("client"))
+        client = await self._build_client(input)
         questions = read_jsonl(
             input.source_file.local_path if input.source_file else ""
         )
@@ -561,86 +577,97 @@ class MetabaseApp(App):
         output_path = input.output_path or _default_output_path(input.workflow_id)
         logger.info("MetabaseApp.extract_metadata: output_path=%s", output_path)
 
-        # The credential resolution is done inside the first @task that asks for
-        # the client (via _get_client); we just thread the input through here.
+        # Resolve credential routing ONCE (CredentialRef vs inline) and thread
+        # it through every @task input — each task is its own activity and
+        # rebuilds its own client via self._build_client(input).
+        cred_ref, inline_creds = build_credential_ref(input)
 
-        # Build credential lazily inside the @task scope, where get_secret works.
-        lifecycle_input = ClientLifecycleInput(
-            credentials=input.credentials,
-            connection=input.connection,
+        fetch_input = FetchInput(
+            output_path=output_path,
+            credential_ref=cred_ref,
+            inline_credentials=inline_creds,
         )
-        try:
-            await self._ensure_client(lifecycle_input)
 
-            fetch_input = FetchInput(output_path=output_path)
+        collections = await self.extract_collections(fetch_input)
+        dashboards = await self.extract_dashboards(fetch_input)
+        questions = await self.extract_questions(fetch_input)
+        databases = await self.extract_databases(fetch_input)
 
-            collections = await self.extract_collections(fetch_input)
-            dashboards = await self.extract_dashboards(fetch_input)
-            questions = await self.extract_questions(fetch_input)
-            databases = await self.extract_databases(fetch_input)
+        filter_input = FilterInput(
+            output_path=output_path,
+            include_collections=input.include_collections,
+            exclude_collections=input.exclude_collections,
+            collections_file=collections.output_file,
+            dashboards_file=dashboards.output_file,
+            questions_file=questions.output_file,
+            databases_file=databases.output_file,
+            credential_ref=cred_ref,
+            inline_credentials=inline_creds,
+        )
+        filtered = await self.filter_data(filter_input)
 
-            filter_input = FilterInput(
+        dashboard_details = await self.extract_individual_dashboards(
+            FetchDetailInput(
                 output_path=output_path,
-                include_collections=input.include_collections,
-                exclude_collections=input.exclude_collections,
-                collections_file=collections.output_file,
-                dashboards_file=dashboards.output_file,
-                questions_file=questions.output_file,
-                databases_file=databases.output_file,
+                source_file=filtered.dashboards_filtered_file,
+                credential_ref=cred_ref,
+                inline_credentials=inline_creds,
             )
-            filtered = await self.filter_data(filter_input)
-
-            dashboard_details = await self.extract_individual_dashboards(
-                FetchDetailInput(
-                    output_path=output_path,
-                    source_file=filtered.dashboards_filtered_file,
-                )
-            )
-            await self.extract_individual_databases(
-                FetchDetailInput(
-                    output_path=output_path,
-                    source_file=filtered.databases_filtered_file,
-                )
-            )
-            question_queries = await self.fetch_question_queries_activity(
-                FetchDetailInput(
-                    output_path=output_path,
-                    source_file=filtered.questions_filtered_file,
-                )
-            )
-
-            processed = await self.process_metabaseprocess(
-                ProcessInput(
-                    output_path=output_path,
-                    metabase_host=input.credentials.host,
-                    collections_filtered_file=filtered.collections_filtered_file,
-                    databases_filtered_file=filtered.databases_filtered_file,
-                    question_queries_file=question_queries.output_file,
-                    dashboard_details_file=dashboard_details.output_file,
-                    questions_filtered_file=filtered.questions_filtered_file,
-                )
-            )
-
-            # Upload the processed/ tree so downstream AE nodes can pick it up.
-            processed_dir = os.path.join(output_path, _PROCESSED_DIR)
-            transformed_data_prefix = ""
-            if os.path.isdir(processed_dir):
-                upload = await self.upload(
-                    UploadInput(
-                        local_path=processed_dir,
-                        tier=StorageTier.RETAINED,
-                    )
-                )
-                transformed_data_prefix = upload.ref.storage_path or ""
-
-            return ExtractionOutput(
-                transformed_data_prefix=transformed_data_prefix,
-                connection_qualified_name=input.connection.attributes.qualified_name,
+        )
+        await self.extract_individual_databases(
+            FetchDetailInput(
                 output_path=output_path,
-                total_records=processed.total_records,
+                source_file=filtered.databases_filtered_file,
+                credential_ref=cred_ref,
+                inline_credentials=inline_creds,
             )
-        finally:
-            await self.dispose_client(lifecycle_input)
+        )
+        question_queries = await self.fetch_question_queries_activity(
+            FetchDetailInput(
+                output_path=output_path,
+                source_file=filtered.questions_filtered_file,
+                credential_ref=cred_ref,
+                inline_credentials=inline_creds,
+            )
+        )
+
+        # Pull metabase_host from inline creds (sourceURL field on assets).
+        metabase_host = ""
+        if isinstance(inline_creds, dict):
+            metabase_host = str(inline_creds.get("host", "") or "")
+
+        processed = await self.process_metabaseprocess(
+            ProcessInput(
+                output_path=output_path,
+                metabase_host=metabase_host,
+                collections_filtered_file=filtered.collections_filtered_file,
+                databases_filtered_file=filtered.databases_filtered_file,
+                question_queries_file=question_queries.output_file,
+                dashboard_details_file=dashboard_details.output_file,
+                questions_filtered_file=filtered.questions_filtered_file,
+                credential_ref=cred_ref,
+                inline_credentials=inline_creds,
+            )
+        )
+
+        # Upload the processed/ tree so downstream AE nodes can pick it up.
+        processed_dir = os.path.join(output_path, _PROCESSED_DIR)
+        transformed_data_prefix = ""
+        if os.path.isdir(processed_dir):
+            upload = await self.upload(
+                UploadInput(
+                    local_path=processed_dir,
+                    tier=StorageTier.RETAINED,
+                )
+            )
+            transformed_data_prefix = upload.ref.storage_path or ""
+
+        return ExtractionOutput(
+            transformed_data_prefix=transformed_data_prefix,
+            connection_qualified_name=input.connection.attributes.qualified_name,
+            output_path=output_path,
+            total_records=processed.total_records,
+        )
 
     @entrypoint
     async def transform_metadata(self, input: TransformInput) -> TransformOutput:
@@ -685,19 +712,3 @@ class MetabaseApp(App):
             output_path=output_path,
             total_records=total,
         )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    @task
-    async def _ensure_client(
-        self, input: ClientLifecycleInput
-    ) -> ClientLifecycleOutput:
-        """Build the cached Metabase client inside @task scope.
-
-        Wrapping the client build in a @task lets us call ``get_app_state`` /
-        ``set_app_state`` (which require task context).
-        """
-        await self._get_client(input, credentials=input.credentials)
-        return ClientLifecycleOutput(ready=True)

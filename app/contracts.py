@@ -15,8 +15,11 @@ from typing import Annotated, Any
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
+from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
 from pydantic import BaseModel, ConfigDict, Field
+
+__all__ = ["CredentialRef"]  # keep import live (annotations-only otherwise)
 
 # ---------------------------------------------------------------------------
 # Typed credential
@@ -72,15 +75,26 @@ CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(10000)]
 # ---------------------------------------------------------------------------
 
 
-class ExtractionInput(Input):
-    """Top-level input for ``MetabaseApp.extract_metadata``."""
+class ExtractionInput(Input, allow_unbounded_fields=True):
+    """Top-level input for ``MetabaseApp.extract_metadata``.
+
+    Credentials can arrive via three paths (mirrors sigma/looker pattern):
+      1. ``metabase_credential`` (CredentialRef) — v3 PKL contract.
+      2. ``credential_guid`` (str) — legacy GUID, resolved from secret store.
+      3. ``credentials`` (list[{key,value}] or dict) — inline local-dev path.
+
+    Allow-unbounded is required because the AE-side payload contains nested
+    dicts (connection.attributes.*, metadata.include-collections.*) the
+    payload-safety validator can't bound.
+    """
 
     workflow_id: str = ""
     credential_guid: str = ""
     extraction_method: str = "direct"
     agent_json: str = ""
 
-    credentials: MetabaseCredential = Field(default_factory=MetabaseCredential)
+    metabase_credential: CredentialRef | None = None
+    credentials: list[dict[str, Any]] | dict[str, Any] = Field(default_factory=list)
     connection: ConnectionRef = Field(default_factory=ConnectionRef)
 
     include_collections: CollectionFilter = Field(default_factory=dict)
@@ -107,10 +121,16 @@ class ExtractionOutput(Output):
 # ---------------------------------------------------------------------------
 
 
-class TransformInput(Input):
+class TransformInput(Input, allow_unbounded_fields=True):
     """Top-level input for ``MetabaseApp.transform_metadata``."""
 
     workflow_id: str = ""
+    credential_guid: str = ""
+    extraction_method: str = "direct"
+    agent_json: str = ""
+
+    metabase_credential: CredentialRef | None = None
+    credentials: list[dict[str, Any]] | dict[str, Any] = Field(default_factory=list)
     connection: ConnectionRef = Field(default_factory=ConnectionRef)
     output_path: str = ""
     output_prefix: str = ""
@@ -132,33 +152,18 @@ class TransformOutput(Output):
 # ---------------------------------------------------------------------------
 
 
-class ClientLifecycleInput(Input):
-    """Input for ``_ensure_client`` / ``dispose_client`` @tasks.
-
-    Carries the typed credential and connection so the client build path is
-    fully typed end-to-end. ``dispose_client`` accepts the same shape — it
-    ignores everything except the credential type marker.
-    """
-
-    credentials: MetabaseCredential = Field(default_factory=MetabaseCredential)
-    connection: ConnectionRef = Field(default_factory=ConnectionRef)
-
-
-class ClientLifecycleOutput(Output):
-    """Output marker for ``_ensure_client`` / ``dispose_client``."""
-
-    ready: bool = False
-
-
-class FetchInput(Input):
+class FetchInput(Input, allow_unbounded_fields=True):
     """Input shared by all simple extract @tasks.
 
-    The task uses ``output_path`` to materialise its JSONL output locally and
-    returns the resulting :class:`FileReference` so the next task can pick it up
-    without re-fetching from the source.
+    Carries the credential ref (or inline credentials) so the task can rebuild
+    its own client without app_state — every @task runs as its own Temporal
+    activity in a separate worker thread, so a shared client cache via
+    ``app_state`` would only be reachable inside one activity context anyway.
     """
 
     output_path: str = ""
+    credential_ref: CredentialRef | None = None
+    inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
 class FetchOutput(Output):
@@ -169,7 +174,7 @@ class FetchOutput(Output):
     output_file: FileReference | None = None
 
 
-class FilterInput(Input):
+class FilterInput(Input, allow_unbounded_fields=True):
     """Input for the filter @task.
 
     Receives ``FileReference``s for each of the four raw entity files and the
@@ -184,6 +189,8 @@ class FilterInput(Input):
     dashboards_file: FileReference | None = None
     questions_file: FileReference | None = None
     databases_file: FileReference | None = None
+    credential_ref: CredentialRef | None = None
+    inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
 class FilterOutput(Output):
@@ -196,14 +203,16 @@ class FilterOutput(Output):
     total_records: int = 0
 
 
-class FetchDetailInput(Input):
+class FetchDetailInput(Input, allow_unbounded_fields=True):
     """Input for tasks that fetch per-entity detail starting from a filtered file."""
 
     output_path: str = ""
     source_file: FileReference | None = None
+    credential_ref: CredentialRef | None = None
+    inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
-class ProcessInput(Input):
+class ProcessInput(Input, allow_unbounded_fields=True):
     """Input for the ``process_metabaseprocess`` @task."""
 
     output_path: str = ""
@@ -213,6 +222,8 @@ class ProcessInput(Input):
     question_queries_file: FileReference | None = None
     dashboard_details_file: FileReference | None = None
     questions_filtered_file: FileReference | None = None
+    credential_ref: CredentialRef | None = None
+    inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProcessOutput(Output):
