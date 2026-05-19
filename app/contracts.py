@@ -13,22 +13,17 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.types import (
-    ConnectionRef,
-    FileReference,
-    MaxItems,
-)
+from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.types import BasicCredential
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Typed credential
 # ---------------------------------------------------------------------------
 
 
-class MetabaseCredential(BasicCredential):
+class MetabaseCredential(BasicCredential, frozen=True):
     """Username + password credential plus Metabase host/port.
 
     The Metabase ``host`` is stored with its protocol prefix (e.g.
@@ -36,6 +31,8 @@ class MetabaseCredential(BasicCredential):
     ``restCredentialTemplate`` curl writes the URL as ``{{host}}:{{port}}/...``
     without prepending a scheme.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     host: str = ""
     port: int = 443

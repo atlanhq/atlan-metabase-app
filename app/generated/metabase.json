@@ -1,0 +1,150 @@
+{
+  "id": "metabase",
+  "name": "Metabase",
+  "logo": "https://assets.atlan.com/assets/metabase.svg",
+  "config": {
+    "properties": {
+      "extraction-method": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Extraction method",
+          "hidden": true,
+          "help": "",
+          "placeholder": "",
+          "grid": 8
+        },
+        "default": "direct"
+      },
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Credential Guid",
+          "grid": 8,
+          "credentialType": "atlan-connectors-metabase",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "include-collections": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Include collections",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "connectorConfigName": "atlan-connectors-metabase",
+          "credential": "credential-guid",
+          "description": "Metabase collections to include in the crawl. Empty selection = include all non-personal collections."
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": {}
+      },
+      "exclude-collections": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Exclude collections",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "connectorConfigName": "atlan-connectors-metabase",
+          "credential": "credential-guid",
+          "description": "Metabase collections to skip during the crawl."
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": {}
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sageV2",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "config": [
+            {
+              "id": 1,
+              "name": "collectionCountCheck",
+              "title": "Collection count",
+              "loaderText": "Counting collections"
+            },
+            {
+              "id": 2,
+              "name": "dashboardCountCheck",
+              "title": "Dashboard count",
+              "loaderText": "Counting dashboards"
+            },
+            {
+              "id": 3,
+              "name": "questionCountCheck",
+              "title": "Question count",
+              "loaderText": "Counting questions"
+            },
+            {
+              "id": 4,
+              "name": "nativeQueryPermissionCheck",
+              "title": "Native query permissions",
+              "loaderText": "Verifying native query permissions"
+            }
+          ]
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "Credential Details",
+        "id": "credential",
+        "properties": [
+          "extraction-method",
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "Connection Details",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Metadata",
+        "description": "Metadata",
+        "id": "metadata",
+        "properties": [
+          "include-collections",
+          "exclude-collections",
+          "preflight-check"
+        ]
+      }
+    ]
+  }
+}

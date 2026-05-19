@@ -24,6 +24,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import daft
+from application_sdk.app import App, entrypoint, task
+from application_sdk.contracts.storage import UploadInput
+from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.credentials.ref import CredentialRef
+from application_sdk.observability.logger_adaptor import get_logger
+
 from app.client import MetabaseApiClient, build_client
 from app.contracts import (
     TRANSFORM_ASSET_TYPES,
@@ -64,12 +70,6 @@ from app.extracts.questions import fetch_question_queries, fetch_questions_summa
 from app.handler import MetabaseHandler  # noqa: F401 — registers handler
 from app.transformers import MetabaseTransformer
 from app.utils import read_jsonl, write_jsonl
-
-from application_sdk.app import App, entrypoint, task
-from application_sdk.contracts.storage import UploadInput
-from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.credentials.ref import CredentialRef
-from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
@@ -517,7 +517,7 @@ class MetabaseApp(App):
         transformer = MetabaseTransformer()
         dataframe = daft.from_pylist(records)
 
-        transform_kwargs = {
+        transform_kwargs: dict[str, Any] = {
             "workflow_id": input.workflow_id,
             "workflow_run_id": input.workflow_id,
             "connection_name": input.connection_name,
@@ -548,9 +548,7 @@ class MetabaseApp(App):
                 }
                 fh.write(json.dumps(entity, ensure_ascii=False) + "\n")
 
-        logger.info(
-            "transform_data complete: typename=%s, records=%d", typename, rows
-        )
+        logger.info("transform_data complete: typename=%s, records=%d", typename, rows)
         return TransformTaskOutput(typename=typename, record_count=rows)
 
     # ==================================================================

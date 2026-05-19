@@ -67,11 +67,12 @@ def write_jsonl(local_path: str, records: list[dict[str, Any]]) -> None:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def read_jsonl(local_path: str) -> list[dict[str, Any]]:
+def read_jsonl(local_path: str | None) -> list[dict[str, Any]]:
     """Read newline-delimited JSON records from *local_path*.
 
-    Missing files return ``[]`` so callers can keep their flow simple
-    (matches the v2 ``_read_ndjson_dir`` behaviour).
+    Missing or ``None`` paths return ``[]`` so callers can pass a
+    ``FileReference.local_path`` (which is itself ``str | None``) without an
+    extra guard.
     """
     if not local_path or not os.path.isfile(local_path):
         return []
