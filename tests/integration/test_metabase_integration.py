@@ -322,4 +322,74 @@ class TestMetabaseIntegration(BaseIntegrationTest):
                 "rather than a generic 'failed'."
             ),
         ),
+        # -- workflow scenarios ------------------------------------------------
+        # Credentials are resolved via ``metabase_credential.name`` →
+        # MockSecretStore (seeded by main.py from E2E_METABASE_* env vars
+        # under the key ``metabase-default``). NOT inline — the SDK's
+        # /workflows/v1/start handler strips ``credentials`` from the body
+        # before workflow dispatch, so inline creds can't reach the tasks.
+        # ``scenario.args`` is a full override that bypasses the runner's
+        # default credential-merging logic; we set exactly the fields the
+        # workflow @entrypoint reads.
+        Scenario(
+            name="workflow_extract_metadata_start",
+            api="workflow",
+            endpoint="/start?entrypoint=extract-metadata",
+            args={
+                "metabase_credential": {
+                    "name": "metabase-default",
+                    "credential_type": "basic",
+                },
+                "metadata": {
+                    "include-collections": {},
+                    "exclude-collections": {},
+                },
+                "connection": {
+                    "connection": "default/metabase/test_integration",
+                },
+            },
+            assert_that={
+                "success": equals(True),
+                "data.workflow_id": is_not_empty(),
+                "data.run_id": is_not_empty(),
+            },
+            description=(
+                "extract_metadata @entrypoint accepts a CredentialRef "
+                "(metabase_credential.name) and dispatches to Temporal. The "
+                "9 extract @tasks each resolve credentials via "
+                "self.context.resolve_credential_raw(cred_ref) against the "
+                "MockSecretStore-backed secret store. Validates the v3 "
+                "credential pipeline end-to-end."
+            ),
+            workflow_timeout=60,
+            polling_interval=5,
+        ),
+        Scenario(
+            name="workflow_transform_metadata_start",
+            api="workflow",
+            endpoint="/start?entrypoint=transform-metadata",
+            args={
+                "metabase_credential": {
+                    "name": "metabase-default",
+                    "credential_type": "basic",
+                },
+                "metadata": {},
+                "connection": {
+                    "connection": "default/metabase/test_integration",
+                },
+            },
+            assert_that={
+                "success": equals(True),
+                "data.workflow_id": is_not_empty(),
+                "data.run_id": is_not_empty(),
+            },
+            description=(
+                "transform_metadata @entrypoint accepts the same CredentialRef "
+                "shape and dispatches the transform pipeline. Together with "
+                "the extract scenario, validates that both v2 workflows are "
+                "reachable as v3 @entrypoint methods on the same App class."
+            ),
+            workflow_timeout=60,
+            polling_interval=5,
+        ),
     ]
