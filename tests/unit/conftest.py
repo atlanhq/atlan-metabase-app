@@ -16,7 +16,7 @@ def _disable_dapr_health_check():
     no-op when the package is absent.
     """
     try:
-        import dapr.clients.health  # noqa: F401
+        import dapr.clients.health  # type: ignore[import-not-found]  # noqa: F401
     except ImportError:
         yield
         return

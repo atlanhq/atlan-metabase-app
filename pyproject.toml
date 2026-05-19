@@ -88,10 +88,6 @@ typeCheckingMode = "standard"
 exclude = [
     ".github/**",
     "app/generated/**",
-    # TODO(upgrade-v3): tests still assert against v2 PreflightCheckResult fields
-    # (success/successMessage/failureMessage). Remove this exclude once tests are
-    # ported to the v3 PreflightCheck shape (name/passed/message).
-    "tests/**",
 ]
 reportMissingTypeStubs = false
 
