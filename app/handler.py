@@ -189,7 +189,16 @@ class MetabaseHandler(Handler):
 
         owns_client = self.client is None
         try:
+            # Filters may arrive under ``metadata`` (curl / docs path) or
+            # ``connection_config`` (v3 preflight runner path — see
+            # ``application_sdk.testing.integration.client._call_preflight``).
+            # Try both so the same handler serves the UI form, the integration
+            # runner, and direct API consumers.
             include_filter, exclude_filter = self._read_filters(input.metadata)
+            if not include_filter and not exclude_filter:
+                include_filter, exclude_filter = self._read_filters(
+                    getattr(input, "connection_config", None)
+                )
 
             checks: list[PreflightCheck] = []
 
