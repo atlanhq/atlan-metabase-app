@@ -88,6 +88,12 @@ typeCheckingMode = "standard"
 exclude = [
     ".github/**",
     "app/generated/**",
+    # Parity test scaffold imports its sibling modules via the
+    # ``from .parity_entities import …`` / ``from parity_entities import …``
+    # fallback pattern that pyright can't statically resolve.
+    # The scaffold is also pending Metabase scenarios (see PR #16) — drop this
+    # exclude when the suite is fleshed out and the import shape is finalized.
+    "tests/parity/**",
 ]
 reportMissingTypeStubs = false
 
