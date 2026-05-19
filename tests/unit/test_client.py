@@ -1,3 +1,6 @@
+# TODO(upgrade-v3): MetabaseApiClient.load() now accepts a typed `credential`
+# kwarg (MetabaseCredential) in addition to the legacy `credentials` dict.
+# Update test fixtures to construct the typed credential where appropriate.
 """Unit tests for app.client.MetabaseApiClient."""
 
 from unittest.mock import AsyncMock, MagicMock, patch

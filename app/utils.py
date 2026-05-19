@@ -1,26 +1,20 @@
 """Shared utility helpers for the Metabase connector."""
 
+from __future__ import annotations
+
 import html
 import json
+import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
-
-from application_sdk.io.json import JsonFileWriter
+from typing import Any
 
 
-def strip_html_tags(text: Optional[str]) -> Optional[str]:
+def strip_html_tags(text: str | None) -> str | None:
     """Unescape HTML entities then strip all HTML tags.
 
     Used to clean ``description`` fields on collections, dashboards, and
     questions, which Metabase may store with embedded HTML markup.
-
-    Args:
-        text: Raw string that may contain HTML entities (e.g. ``&amp;``) and
-            tags (e.g. ``<p>``).  ``None`` is returned unchanged.
-
-    Returns:
-        Cleaned plain-text string, or ``None`` if ``text`` was falsy.
     """
     if not text:
         return text
@@ -28,20 +22,8 @@ def strip_html_tags(text: Optional[str]) -> Optional[str]:
     return html.unescape(text)
 
 
-def to_epoch_ms(dt_str: Optional[str]) -> Optional[int]:
-    """Convert an ISO 8601 datetime string to epoch milliseconds.
-
-    Attempts several common format patterns in order, including timezone-aware
-    and naive variants.  Metabase timestamps are typically returned as strings
-    such as ``"2024-01-15T10:30:00.000Z"`` or ``"2024-01-15T10:30:00"``.
-
-    Args:
-        dt_str: ISO 8601 datetime string, or ``None``.
-
-    Returns:
-        Integer epoch milliseconds, or ``None`` if ``dt_str`` is falsy or
-        cannot be parsed.
-    """
+def to_epoch_ms(dt_str: str | None) -> int | None:
+    """Convert an ISO 8601 datetime string to epoch milliseconds."""
     if not dt_str:
         return None
     formats = [
@@ -53,7 +35,6 @@ def to_epoch_ms(dt_str: Optional[str]) -> Optional[int]:
     for fmt in formats:
         try:
             dt = datetime.strptime(dt_str, fmt)
-            # If naive, assume UTC
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return int(dt.timestamp() * 1000)
@@ -62,23 +43,9 @@ def to_epoch_ms(dt_str: Optional[str]) -> Optional[int]:
     return None
 
 
-def serialize_complex_columns(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Serialize dict and list values in a record to JSON strings.
-
-    Used before writing records to NDJSON to ensure that nested structures
-    (e.g. ``dataset_query``, ``details``, ``result_metadata``) are stored as
-    plain strings rather than raw Python objects, which simplifies downstream
-    JSON reading without requiring recursive serialisation of nested dicts.
-
-    Args:
-        record: Flat or nested dict representing a single API record.
-
-    Returns:
-        New dict where every value that is a ``dict`` or ``list`` has been
-        replaced by its JSON string representation.  All other value types
-        (str, int, float, bool, None) are passed through unchanged.
-    """
-    result: Dict[str, Any] = {}
+def serialize_complex_columns(record: dict[str, Any]) -> dict[str, Any]:
+    """Serialize dict and list values in a record to JSON strings."""
+    result: dict[str, Any] = {}
     for key, value in record.items():
         if isinstance(value, (dict, list)):
             result[key] = json.dumps(value)
@@ -87,19 +54,35 @@ def serialize_complex_columns(record: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def setup_json_writer(output_path: str, suffix: str) -> JsonFileWriter:
-    """Create a ``JsonFileWriter`` for the given output path and typename suffix.
+def write_jsonl(local_path: str, records: list[dict[str, Any]]) -> None:
+    """Write *records* as newline-delimited JSON to *local_path*.
 
-    Wraps :class:`~application_sdk.io.json.JsonFileWriter` so that extract and
-    process activities can obtain a writer without importing the SDK class
-    directly.
-
-    Args:
-        output_path: Base output directory for the current workflow run.
-        suffix: Typename / subdirectory suffix (e.g. ``"collections"``,
-            ``"dashboards"``).
-
-    Returns:
-        Configured :class:`~application_sdk.io.json.JsonFileWriter` instance.
+    Creates the parent directory if needed. Replaces the v2 ``JsonFileWriter``
+    helper — v3 connectors write to local disk and return a ``FileReference``
+    so the SDK handles upload/download between tasks.
     """
-    return JsonFileWriter(path=output_path, typename=suffix)
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    with open(local_path, "w", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def read_jsonl(local_path: str) -> list[dict[str, Any]]:
+    """Read newline-delimited JSON records from *local_path*.
+
+    Missing files return ``[]`` so callers can keep their flow simple
+    (matches the v2 ``_read_ndjson_dir`` behaviour).
+    """
+    if not local_path or not os.path.isfile(local_path):
+        return []
+    records: list[dict[str, Any]] = []
+    with open(local_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return records

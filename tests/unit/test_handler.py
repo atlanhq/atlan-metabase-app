@@ -1,3 +1,7 @@
+# TODO(upgrade-v3): MetabaseHandler v3 signatures use typed contracts (AuthInput,
+# PreflightInput, MetadataInput) instead of *args/**kwargs and return AuthOutput /
+# PreflightOutput / ApiMetadataOutput rather than raw bool/dict. Update fixtures
+# and assertions in this file to match the new shapes.
 """Unit tests for app.handler.MetabaseHandler."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
