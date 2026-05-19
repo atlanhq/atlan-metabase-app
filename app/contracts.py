@@ -67,7 +67,9 @@ class CollectionSelection(BaseModel):
 
 
 # Bounded mapping of collection-id → selection (apitree widget shape).
-CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(10000)]
+# 1000 to match the toolkit-generated ``app/generated/_input.py:AppInputContract``
+# default; bump in both places if a tenant needs more headroom.
+CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +88,15 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     Allow-unbounded is required because the AE-side payload contains nested
     dicts (connection.attributes.*, metadata.include-collections.*) the
     payload-safety validator can't bound.
+
+    Canonicity vs. ``app/generated/_input.py:AppInputContract``:
+        The toolkit also generates an ``AppInputContract`` from
+        ``contract/app.pkl`` for documentation/UI purposes. This hand-rolled
+        ``ExtractionInput`` is the runtime contract consumed by the
+        ``@entrypoint`` method; the generated one is reference-only. Both must
+        be kept in sync — if you add a field here, mirror it in ``app.pkl``
+        and re-run ``atlan app contract generate``. See follow-up TODO at
+        ``app/connector.py`` to converge into a single source post-merge.
     """
 
     workflow_id: str = ""
@@ -152,7 +163,7 @@ class TransformOutput(Output):
 # ---------------------------------------------------------------------------
 
 
-class FetchInput(Input, allow_unbounded_fields=True):
+class FetchInput(Input):
     """Input shared by all simple extract @tasks.
 
     Carries the credential ref (or inline credentials) so the task can rebuild
@@ -163,7 +174,9 @@ class FetchInput(Input, allow_unbounded_fields=True):
 
     output_path: str = ""
     credential_ref: CredentialRef | None = None
-    inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    inline_credentials: Annotated[dict[str, Any], MaxItems(50)] = Field(
+        default_factory=dict
+    )
 
 
 class FetchOutput(Output):
@@ -174,7 +187,7 @@ class FetchOutput(Output):
     output_file: FileReference | None = None
 
 
-class FilterInput(Input, allow_unbounded_fields=True):
+class FilterInput(Input):
     """Input for the filter @task.
 
     Receives ``FileReference``s for each of the four raw entity files and the
@@ -190,7 +203,9 @@ class FilterInput(Input, allow_unbounded_fields=True):
     questions_file: FileReference | None = None
     databases_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    inline_credentials: Annotated[dict[str, Any], MaxItems(50)] = Field(
+        default_factory=dict
+    )
 
 
 class FilterOutput(Output):
@@ -203,27 +218,35 @@ class FilterOutput(Output):
     total_records: int = 0
 
 
-class FetchDetailInput(Input, allow_unbounded_fields=True):
+class FetchDetailInput(Input):
     """Input for tasks that fetch per-entity detail starting from a filtered file."""
 
     output_path: str = ""
     source_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    inline_credentials: Annotated[dict[str, Any], MaxItems(50)] = Field(
+        default_factory=dict
+    )
 
 
-class ProcessInput(Input, allow_unbounded_fields=True):
-    """Input for the ``process_metabaseprocess`` @task."""
+class ProcessInput(Input):
+    """Input for the ``process_metabaseprocess`` @task.
+
+    ``metabase_host`` is resolved inside the task itself via
+    ``_build_client(input).host`` so the credential path (CredentialRef vs
+    inline) stays consistent with every other task — no separate threading.
+    """
 
     output_path: str = ""
-    metabase_host: str = ""
     collections_filtered_file: FileReference | None = None
     databases_filtered_file: FileReference | None = None
     question_queries_file: FileReference | None = None
     dashboard_details_file: FileReference | None = None
     questions_filtered_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    inline_credentials: Annotated[dict[str, Any], MaxItems(50)] = Field(
+        default_factory=dict
+    )
 
 
 class ProcessOutput(Output):

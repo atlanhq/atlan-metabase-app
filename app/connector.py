@@ -432,7 +432,13 @@ class MetabaseApp(App):
             else ""
         )
 
-        metabase_host = input.metabase_host or ""
+        # Resolve metabase_host via the same credential path every other @task
+        # uses. The host is needed for sourceURL fields on enriched assets;
+        # threading it as a separate ProcessInput field would diverge from the
+        # CredentialRef pipeline and force a second credential resolution
+        # strategy.
+        client = await self._build_client(input)
+        metabase_host = client.host or ""
         if not metabase_host:
             logger.warning(
                 "process_metabaseprocess: metabase_host is empty; sourceURL "
@@ -631,15 +637,11 @@ class MetabaseApp(App):
             )
         )
 
-        # Pull metabase_host from inline creds (sourceURL field on assets).
-        metabase_host = ""
-        if isinstance(inline_creds, dict):
-            metabase_host = str(inline_creds.get("host", "") or "")
-
+        # metabase_host is resolved inside process_metabaseprocess via
+        # _build_client(input).host — works for CredentialRef AND inline paths.
         processed = await self.process_metabaseprocess(
             ProcessInput(
                 output_path=output_path,
-                metabase_host=metabase_host,
                 collections_filtered_file=filtered.collections_filtered_file,
                 databases_filtered_file=filtered.databases_filtered_file,
                 question_queries_file=question_queries.output_file,
