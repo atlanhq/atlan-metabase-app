@@ -117,3 +117,4 @@ skills/
 
 # Atlan CLI local config
 .atlan/
+coverage.json
