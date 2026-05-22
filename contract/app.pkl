@@ -1,0 +1,138 @@
+amends "@app-contract-toolkit/NativeApp.pkl"
+
+import "@app-contract-toolkit/Config.pkl"
+import "@app-contract-toolkit/Connectors.pkl"
+
+// ---- App identity ----
+
+name = "metabase"
+displayName = "Metabase"
+connector = Connectors.METABASE
+icon = "https://assets.atlan.com/assets/metabase.svg"
+logo = "https://assets.atlan.com/assets/metabase.svg"
+credentialConnectorType = "rest"
+
+// ---- Workflow wiring ----
+//
+// The App class lives in app/connector.py and exposes two @entrypoint
+// methods: extract_metadata and transform_metadata. The toolkit derives
+// the workflowType from `name` by default; override here so the manifest
+// matches the class name registered in ATLAN_APP_MODULE.
+workflowTypeOverride = "MetabaseMetadataExtractionWorkflow"
+hasPublishStep = true
+
+// ---- Credential config ----
+
+credentialCommonFields {
+  new FieldSpec {
+    name = "host"
+    displayName = "Host"
+    placeholder = "https://<account-id>.metabaseapp.com"
+    helpText = "Metabase host URL, including the protocol (e.g. https://my-instance.metabaseapp.com)."
+    width = 8
+  }
+  new FieldSpec {
+    name = "port"
+    displayName = "Port"
+    fieldType = "number"
+    defaultValue = "443"
+    required = false
+    width = 2
+  }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec {
+        name = "username"
+        displayName = "Username"
+        placeholder = "Metabase username or email"
+        width = 4
+      }
+      new FieldSpec {
+        name = "password"
+        displayName = "Password"
+        placeholder = "Metabase password"
+        sensitive = true
+        width = 4
+      }
+    }
+  }
+}
+
+// ---- Workflow config (UI form) ----
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      description = "Credential Details"
+      inputs {
+        ["extraction-method"] = new Config.TextInput {
+          title = "Extraction method"
+          defaultValue = "direct"
+          hide = true
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-metabase"
+          placeholderText = "Credential Guid"
+        }
+      }
+    }
+    ["Connection"] {
+      description = "Connection Details"
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Metadata"] {
+      description = "Metadata"
+      inputs {
+        ["include-collections"] = new Config.APITree {
+          title = "Include collections"
+          desc = "Metabase collections to include in the crawl. Empty selection = include all non-personal collections."
+          credentialType = "atlan-connectors-metabase"
+        }
+        ["exclude-collections"] = new Config.APITree {
+          title = "Exclude collections"
+          desc = "Metabase collections to skip during the crawl."
+          credentialType = "atlan-connectors-metabase"
+        }
+        ["preflight-check"] = new Config.SageV2 {
+          title = ""
+          checks {
+            new Dynamic {
+              id = 1
+              name = "collectionCountCheck"
+              title = "Collection count"
+              loaderText = "Counting collections"
+            }
+            new Dynamic {
+              id = 2
+              name = "dashboardCountCheck"
+              title = "Dashboard count"
+              loaderText = "Counting dashboards"
+            }
+            new Dynamic {
+              id = 3
+              name = "questionCountCheck"
+              title = "Question count"
+              loaderText = "Counting questions"
+            }
+            new Dynamic {
+              id = 4
+              name = "nativeQueryPermissionCheck"
+              title = "Native query permissions"
+              loaderText = "Verifying native query permissions"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,12 +1,14 @@
 """Metabase REST API client with session-token authentication."""
 
+from __future__ import annotations
+
 from typing import Any, Optional
 
 from application_sdk.clients.base import BaseClient
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.constants import MetabaseUrls
-from app.models import MetabaseCredentials
+from app.contracts import MetabaseCredential
 
 logger = get_logger(__name__)
 
@@ -24,23 +26,24 @@ class MetabaseApiClient(BaseClient):
     """
 
     async def load(self, **kwargs: Any) -> None:
-        """Initialize the client with credentials and obtain a session token.
+        """Initialize the client with a typed ``MetabaseCredential``.
 
-        Args:
-            **kwargs: Must include a ``credentials`` dict with Metabase
-                connection details (``host``, ``port``, ``username``,
-                ``password``).
-
-        Raises:
-            Exception: If authentication fails or no session token is returned.
+        Accepts either ``credential`` (preferred, typed) or ``credentials``
+        (legacy dict). The legacy dict form is kept for backward compatibility
+        with tests; new code paths should pass the typed credential.
         """
-        raw_credentials = kwargs.get("credentials", {})
-        creds = MetabaseCredentials.model_validate(raw_credentials)
+        credential = kwargs.get("credential")
+        if credential is None:
+            raw_credentials = kwargs.get("credentials", {})
+            if isinstance(raw_credentials, MetabaseCredential):
+                credential = raw_credentials
+            else:
+                credential = MetabaseCredential.model_validate(raw_credentials)
 
-        self.host: str = creds.host
-        self.port: int = creds.port
-        self.username: Optional[str] = creds.username
-        self.password: Optional[str] = creds.password
+        self.host: str = credential.host
+        self.port: int = credential.port
+        self.username: Optional[str] = credential.username
+        self.password: Optional[str] = credential.password
         self.session_token: Optional[str] = None
 
         await self._authenticate()
@@ -52,19 +55,7 @@ class MetabaseApiClient(BaseClient):
         logger.info(f"MetabaseApiClient loaded for host: {self.host}")
 
     async def _authenticate(self) -> None:
-        """Obtain a Metabase session token via ``POST /api/session``.
-
-        Translates the ``restCredentialTemplate`` curl:
-
-            curl --request POST '{{host}}:{{port}}/api/session'
-                 --header 'Content-Type: application/json'
-                 --data-raw '{"username": "{{username}}", "password": "{{password}}"}'
-
-        The successful response body is ``{"id": "<session-token>"}``.
-
-        Raises:
-            Exception: If the request fails or the response is unsuccessful.
-        """
+        """Obtain a Metabase session token via ``POST /api/session``."""
         url = MetabaseUrls.session(self.host, self.port)
         payload = {"username": self.username, "password": self.password}
 
@@ -82,16 +73,35 @@ class MetabaseApiClient(BaseClient):
         logger.info("Metabase session token obtained successfully")
 
     async def test_connection(self) -> bool:
-        """Verify that authentication succeeded and a session token is held.
-
-        Returns:
-            ``True`` if a session token is present.
-
-        Raises:
-            Exception: If no session token is available (authentication failed).
-        """
+        """Verify that authentication succeeded and a session token is held."""
         if not self.session_token:
             raise Exception(
                 "No session token available — authentication did not succeed"
             )
         return True
+
+    async def close(self) -> None:
+        """Best-effort close — Metabase has no logout endpoint; clear the token.
+
+        Called from ``MetabaseApp.dispose_client`` in the @entrypoint ``finally``
+        block to drop the cached session token at the end of a run.
+        """
+        self.session_token = None
+
+
+# ---------------------------------------------------------------------------
+# Module-level factory — single source of truth used by handler and app.
+# ---------------------------------------------------------------------------
+
+
+async def build_client(credential: MetabaseCredential) -> MetabaseApiClient:
+    """Build and authenticate a :class:`MetabaseApiClient` from a typed credential.
+
+    Defined at module level (not on the handler / app) so the handler and the
+    workflow tasks share one credential → client path. Reviewers on the MSSQL
+    v3 PR flagged a duplicated ``_build_client`` body as a top-finding;
+    this helper avoids that.
+    """
+    client = MetabaseApiClient()
+    await client.load(credential=credential)
+    return client
