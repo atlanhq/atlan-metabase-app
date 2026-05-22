@@ -36,9 +36,7 @@ def credentials(metabase_admin) -> list[HandlerCredential]:
 async def test_preflight_emits_four_named_checks(credentials):
     """All 4 sageTemplate-named checks must be present and pass on seeded data."""
     handler = MetabaseHandler()
-    result = await handler.preflight_check(
-        PreflightInput(credentials=credentials, metadata={})
-    )
+    result = await handler.preflight_check(PreflightInput(credentials=credentials))
 
     names = [c.name for c in result.checks]
     assert "collectionCountCheck" in names, names
@@ -47,7 +45,7 @@ async def test_preflight_emits_four_named_checks(credentials):
     assert "nativeQueryPermissionCheck" in names, names
 
     failed = [c for c in result.checks if not c.passed]
-    assert not failed, (
-        f"unexpected preflight failures: {[(c.name, c.message) for c in failed]}"
-    )
+    assert (
+        not failed
+    ), f"unexpected preflight failures: {[(c.name, c.message) for c in failed]}"
     assert result.status == PreflightStatus.READY

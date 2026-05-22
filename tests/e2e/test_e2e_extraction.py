@@ -17,10 +17,7 @@ from typing import Any
 import pytest
 
 from app.connector import MetabaseApp
-from app.contracts import (
-    FetchInput,
-    FilterInput,
-)
+from app.contracts import CollectionSelection, FetchInput, FilterInput
 
 pytestmark = pytest.mark.e2e
 
@@ -117,7 +114,7 @@ async def test_filter_data_excludes_collections(app, inline_creds, output_dir):
         FilterInput(
             output_path=output_dir,
             include_collections={},
-            exclude_collections={str(excluded["id"]): {}},
+            exclude_collections={str(excluded["id"]): CollectionSelection()},
             collections_file=cols.output_file,
             dashboards_file=dashs.output_file,
             questions_file=qs.output_file,
