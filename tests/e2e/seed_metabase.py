@@ -252,27 +252,52 @@ def seed_assets(client: httpx.Client, session_id: str, db_id: int) -> None:
             dash_id = int(r.json()["id"])
             _log(f"dashboard created: {d['name']} (id={dash_id})")
 
+        # Metabase v0.49+ deprecated POST /api/dashboard/{id}/cards in favor of
+        # PUT /api/dashboard/{id} with a full ``dashcards`` array. Build the
+        # desired array, merge with what's already there (idempotency), and
+        # PUT once per dashboard.
+        wanted_ids: list[int] = []
         for card_name in d.get("cards", []):
             card_id = question_name_to_id.get(card_name)
             if card_id is None:
                 _log(f"  skip card {card_name}: not in spec")
                 continue
-            # Idempotency check: skip if dashboard already has this card.
-            cur = client.get(
-                f"{MB_URL}/api/dashboard/{dash_id}", headers=headers
-            ).json()
-            if any(
-                c.get("card_id") == card_id
-                for c in cur.get("dashcards", []) or cur.get("ordered_cards", [])
-            ):
+            wanted_ids.append(card_id)
+        if not wanted_ids:
+            continue
+        cur = client.get(f"{MB_URL}/api/dashboard/{dash_id}", headers=headers).json()
+        existing_cards = cur.get("dashcards") or cur.get("ordered_cards") or []
+        existing_card_ids = {
+            c.get("card_id") for c in existing_cards if c.get("card_id")
+        }
+        new_cards = list(existing_cards)
+        for i, cid in enumerate(wanted_ids):
+            if cid in existing_card_ids:
                 continue
-            r = client.post(
-                f"{MB_URL}/api/dashboard/{dash_id}/cards",
-                headers=headers,
-                json={"cardId": card_id, "row": 0, "col": 0, "size_x": 4, "size_y": 4},
+            new_cards.append(
+                {
+                    "id": -(i + 1),  # negative id = new dashcard (v0.49+ shape)
+                    "card_id": cid,
+                    "row": (len(new_cards)) * 4,
+                    "col": 0,
+                    "size_x": 4,
+                    "size_y": 4,
+                    "parameter_mappings": [],
+                    "visualization_settings": {},
+                }
             )
-            if r.status_code not in (200, 201):
-                _log(f"  add card {card_name} failed: {r.status_code} {r.text}")
+        if len(new_cards) == len(existing_cards):
+            continue
+        r = client.put(
+            f"{MB_URL}/api/dashboard/{dash_id}",
+            headers=headers,
+            json={"dashcards": new_cards},
+        )
+        if r.status_code not in (200, 201):
+            _log(
+                f"  PUT dashboard {d['name']} dashcards failed: "
+                f"{r.status_code} {r.text}"
+            )
 
 
 def main() -> int:
