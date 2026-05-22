@@ -1,3 +1,8 @@
+# TODO(upgrade-v3): MetabaseCredentials / WorkflowArgs are v2-era models retained
+# only for back-compat. The v3 typed credential is `app.contracts.MetabaseCredential`
+# and `WorkflowArgs` is replaced by the @entrypoint Input contracts in app.contracts.
+# Update these tests to target the v3 contracts and drop the v2 model coverage when
+# `app.models` is finally removed.
 """Unit tests for app.models Pydantic models."""
 
 import pytest

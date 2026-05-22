@@ -1,0 +1,62 @@
+name: SDR Integration Tests
+
+# Triggered by the `sdr-e2e-test` PR label or manual workflow_dispatch.
+# Runs the Metabase connector inside a real SDR container against the test
+# tenant's Temporal cluster, exercising auth, preflight, metadata, and the
+# extract_metadata workflow with credentials resolved via Dapr secret store
+# (agent_json path), not the inline-credentials local-dev path.
+#
+# Metabase Cloud is publicly accessible, so unlike the Teradata SDR workflow
+# this one does NOT connect to VPN. If you switch this to an internal
+# self-hosted Metabase instance later, restore the
+# atlanhq/github-actions/globalprotect-connect-action step from the teradata
+# v3 reference.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+jobs:
+  sdr-tests:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'sdr-e2e-test')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: sdr-integration-tests-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      pull-requests: write
+      contents: read
+      statuses: write
+      packages: write
+    env:
+      # Tenant + OAuth — used by atlan-configurator and docker compose
+      CI_TENANT_DOMAIN: ${{ secrets.SDR_TEST_TENANT }}
+      CI_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      CI_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      # Metabase basic auth — read by the test suite + make-secrets.py
+      E2E_METABASE_BASIC_HOST: ${{ secrets.E2E_METABASE_BASIC_HOST }}
+      E2E_METABASE_BASIC_PORT: ${{ secrets.E2E_METABASE_BASIC_PORT }}
+      E2E_METABASE_BASIC_USERNAME: ${{ secrets.E2E_METABASE_BASIC_USERNAME }}
+      E2E_METABASE_BASIC_PASSWORD: ${{ secrets.E2E_METABASE_BASIC_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Pre-pull the base image — ghcr.io can be slow on first hit and the
+      # SDK action's retry budget is tight.
+      - name: Pre-pull base image
+        run: |
+          BASE_IMAGE=$(grep "^FROM" Dockerfile | head -1 | awk '{print $2}')
+          echo "Pre-pulling base image: $BASE_IMAGE"
+          docker pull "$BASE_IMAGE" || echo "Pre-pull failed — SDK action will retry"
+
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
+        with:
+          app-name: metabase
+          app-image-name: atlan-metabase-app
+          secrets-script: .github/sdr-e2e/make-secrets.py
