@@ -582,6 +582,37 @@ class MetabaseApp(App):
             return TransformTaskOutput(typename=typename, record_count=0)
 
         transformer = MetabaseTransformer()
+        # Strip raw Metabase fields the transformer YAML doesn't read. Daft's
+        # type inference fails when a column varies across rows — e.g.
+        # ``visualization_settings`` is a different-shaped dict per question,
+        # ``dataset_query`` has variant schemas, ``result_metadata`` mixes
+        # snake_case and kebab-case keys across Metabase versions. None of
+        # these are referenced by any transformer YAML (see
+        # ``app/transformers/*.yaml``), so dropping them is safe and avoids
+        # the Daft ``Need at least 1 series to perform concat`` and
+        # ``casting from Struct ... to String not implemented`` panics.
+        _DROP_KEYS = {
+            "cache_invalidated_at",
+            "cache_ttl",
+            "dashboards",
+            "dashcards",
+            "dataset_query",
+            "last-edit-info",
+            "legacy_query",
+            "metabase_version",
+            "ordered_cards",
+            "param_fields",
+            "param_values",
+            "parameter_mappings",
+            "parameters",
+            "query_description",
+            "result_metadata",
+            "source_card_id",
+            "table_id",
+            "view_count",
+            "visualization_settings",
+        }
+        records = [{k: v for k, v in r.items() if k not in _DROP_KEYS} for r in records]
         dataframe = daft.from_pylist(records)
 
         transform_kwargs: dict[str, Any] = {
