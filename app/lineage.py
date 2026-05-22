@@ -194,13 +194,36 @@ def _extract_column_refs(ast: exp.Expression) -> list[tuple[str | None, str]]:
     return out
 
 
+def _table_ref(qn: str) -> dict[str, str]:
+    """Atlas reference to a source table — qn is treated as schema-agnostic; the
+    publish layer resolves typeName from the qn's owning connector. We don't
+    know the upstream typeName at parse time (postgres vs snowflake vs …), so
+    we use the generic ``Table`` typeName which the platform up-resolves."""
+    return {"typeName": "Table", "uniqueAttributes": {"qualifiedName": qn}}
+
+
+def _column_ref(qn: str) -> dict[str, str]:
+    return {"typeName": "Column", "uniqueAttributes": {"qualifiedName": qn}}
+
+
+def _question_ref(question_qn: str) -> dict[str, str]:
+    return {
+        "typeName": "MetabaseQuestion",
+        "uniqueAttributes": {"qualifiedName": question_qn},
+    }
+
+
 def _process_record(
     question: dict[str, Any],
     connection_qn: str,
     input_table_qns: list[str],
     sql: str,
 ) -> dict[str, Any]:
-    """Build a Process record matching the v2 ``process.yaml`` transformer shape."""
+    """Build a Process record matching the ``process.yaml`` transformer shape.
+
+    The transformer YAML reads ``inputs`` and ``outputs`` directly — these
+    must be Atlas reference dicts, not bare qualified-name strings.
+    """
     q_id = question.get("id") or question.get("metabase_question_id")
     q_name = question.get("name", "")
     question_qn = f"{connection_qn}/questions/{q_id}"
@@ -211,6 +234,8 @@ def _process_record(
         "question_qualified_name": question_qn,
         "sql": sql,
         "input_table_qualified_names": input_table_qns,
+        "inputs": [_table_ref(qn) for qn in input_table_qns],
+        "outputs": [_question_ref(question_qn)],
         "connection_qualified_name": connection_qn,
         "connector_name": "metabase",
     }
@@ -222,7 +247,7 @@ def _column_process_record(
     input_column_qns: list[str],
     sql: str,
 ) -> dict[str, Any]:
-    """Build a ColumnProcess record matching v2 ``columnprocess.yaml`` shape."""
+    """Build a ColumnProcess record matching ``columnprocess.yaml`` shape."""
     q_id = question.get("id") or question.get("metabase_question_id")
     q_name = question.get("name", "")
     question_qn = f"{connection_qn}/questions/{q_id}"
@@ -235,6 +260,12 @@ def _column_process_record(
         "process_qualified_name": process_qn,
         "sql": sql,
         "input_column_qualified_names": input_column_qns,
+        "inputs": [_column_ref(qn) for qn in input_column_qns],
+        "outputs": [_question_ref(question_qn)],
+        "process_relationship": {
+            "typeName": "Process",
+            "uniqueAttributes": {"qualifiedName": process_qn},
+        },
         "connection_qualified_name": connection_qn,
         "connector_name": "metabase",
     }
