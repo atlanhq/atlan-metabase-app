@@ -22,22 +22,25 @@ credentialConnectorType = "rest"
 workflowType = "metabase"
 hasPublishStep = true
 
-// ---- Lineage pipeline (5-node DAG) ----
+// ---- Pipeline (5-node DAG, custom lineage builder) ----
 //
-// extract → qi + publish (parallel) → lineage-app → lineage-publish
+//   extract            (this app's `extract_metadata` @entrypoint)
+//   ├──► qi            (QueryIntelligenceNode, parses metabaseQuery SQL)
+//   ├──► publish       (PublishNode, publishes Collection/Dashboard/Question/BIProcess)
+//   └──► extract-lineage (this app's `extract_lineage` @entrypoint —
+//                         REPLACES the shared LineageNode because Metabase
+//                         is a BI connector and the lineage edges are
+//                         CROSS-connector. The shared LineageNode assumes
+//                         a single connection cache and only resolves
+//                         WITHIN-connector view lineage.)
+//        │
+//        └──► lineage-publish (LineagePublishNode, publishes Process/ColumnProcess
+//                              with connection_creation_enabled = false)
 //
-// The extract phase (this app's @tasks orchestrated by run()) produces
-// Atlas JSON for 4 entity types (MetabaseCollection, MetabaseDashboard,
-// MetabaseQuestion, BIProcess) at $.extract.outputs.transformed_data_prefix.
-//
-// The QueryIntelligence node downstream reads SQL strings out of
-// ``attributes.metabaseQuery`` on each MetabaseQuestion, scopes parsing
-// to the source database via ``attributes.metabaseSourceDatabaseName``
-// (and optionally ``metabaseSourceSchemaName``), and emits Process +
-// ColumnProcess lineage records. The LineageNode + LineagePublishNode
-// then publish those edges to Atlas.
-//
-// Pattern mirrors atlan-mysql-app/contract/app.pkl.
+// Pattern adapted from atlan-mysql-app (which uses the shared LineageNode)
+// and atlan-hightouch-app (which uses two @entrypoint methods on its App
+// for the same reason — extract metadata + extract lineage in separate
+// AE workflow executions).
 extraNodes {
   ["qi"] = new QueryIntelligenceNode {
     displayName = "Parse Metabase Question SQL Lineage"
@@ -58,10 +61,21 @@ extraNodes {
       ["current_state_via_app_enabled"] = true
     }
   }
-  ["lineage-app"] = new LineageNode {
-    connectorName = "metabase"
-    sqlUnquotedCase = "lower"
-    ignoreAllCase = false
+  // Custom lineage builder — second @entrypoint on this app.
+  // Reads QI's parsed-SQL output, constructs Process + ColumnProcess
+  // records with cross-connector qualified names, uploads to
+  // $.extract-lineage.outputs.lineage_stage_prefix.
+  ["extract-lineage"] = new DAGNode {
+    displayName = "Build Metabase Cross-Connector Lineage"
+    workflowType = "metabase:extract-lineage"
+    appName = "{app_name}"
+    taskQueue = "atlan-metabase-{deployment_name}"
+    args {
+      ["workflow_id"] = "{{workflow-id}}"
+      ["connection"] = "{{connection}}"
+      ["connection_qualified_name"] = "$.extract.outputs.connection_qualified_name"
+      ["view_lineage_input_prefix"] = "$.extract.outputs.view_lineage_output_prefix"
+    }
     dependsOn = null
     dependsOnCondition = new DependencyCondition {
       andConditions {
@@ -77,10 +91,15 @@ extraNodes {
     }
   }
   ["lineage-publish"] = new LineagePublishNode {
+    // Wire to OUR extract-lineage node, not the shared lineage-app.
+    upstream = "extract-lineage"
+    transformedDataPrefix = "$.extract-lineage.outputs.lineage_stage_prefix"
+    publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
+    currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
     waitForAssetPublish = false
     dependsOn = null
     dependsOnCondition = new DependencyCondition {
-      nodeId = "lineage-app"
+      nodeId = "extract-lineage"
       tag = "success"
     }
   }
