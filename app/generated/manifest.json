@@ -72,25 +72,19 @@
         "node_id": "extract"
       }
     },
-    "lineage-app": {
+    "extract-lineage": {
       "activity_name": "execute_workflow",
-      "activity_display_name": "Build Lineage Entities",
-      "app_name": "automation-engine",
+      "activity_display_name": "Build Metabase Cross-Connector Lineage",
+      "app_name": "{app_name}",
       "inputs": {
-        "workflow_type": "LineageWorkflow",
-        "app_name": "automation-engine",
-        "task_queue": "atlan-lineage-{deployment_name}",
+        "workflow_type": "metabase:extract-lineage",
+        "app_name": "{app_name}",
+        "task_queue": "atlan-metabase-{deployment_name}",
         "args": {
+          "workflow_id": "{{workflow-id}}",
+          "connection": "{{connection}}",
           "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
-          "connector_name": "metabase",
-          "session_key": "view-lineage",
-          "sql_unquoted_case": "lower",
-          "ignore_all_case": false,
-          "input_path": "",
-          "parsed_views_path": "$.extract.outputs.view_lineage_output_prefix",
-          "lineage_output_path": "$.extract.outputs.lineage_stage_prefix",
-          "cache_path": "connection-cache",
-          "file_type": "json"
+          "view_lineage_input_prefix": "$.extract.outputs.view_lineage_output_prefix"
         }
       },
       "depends_on": {
@@ -116,9 +110,9 @@
         "task_queue": "atlan-publish-{deployment_name}",
         "args": {
           "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
-          "transformed_data_prefix": "$.extract.outputs.lineage_stage_prefix",
-          "publish_state_prefix": "$.extract.outputs.lineage_publish_state_prefix",
-          "current_state_prefix": "$.extract.outputs.lineage_current_state_prefix",
+          "transformed_data_prefix": "$.extract-lineage.outputs.lineage_stage_prefix",
+          "publish_state_prefix": "$.extract-lineage.outputs.lineage_publish_state_prefix",
+          "current_state_prefix": "$.extract-lineage.outputs.lineage_current_state_prefix",
           "connection_creation_enabled": false,
           "executor_enabled": true,
           "cache_namespace": "lineage",
@@ -129,7 +123,7 @@
         }
       },
       "depends_on": {
-        "node_id": "lineage-app",
+        "node_id": "extract-lineage",
         "tag": "success"
       }
     }

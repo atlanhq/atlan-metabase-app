@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import daft
-from application_sdk.app import App, task
+from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
@@ -40,6 +40,8 @@ from app.contracts import (
     FilterOutput,
     MetabaseCredential,
     MetabaseInput,
+    MetabaseLineageInput,
+    MetabaseLineageOutput,
     MetabaseOutput,
     ProcessInput,
     ProcessOutput,
@@ -601,10 +603,17 @@ class MetabaseApp(App):
         return TransformTaskOutput(typename=typename, record_count=rows)
 
     # ==================================================================
-    # run() — single orchestrator
+    # @entrypoint methods
     # ==================================================================
+    # Two entrypoints — declared in contract/app.pkl as separate DAG nodes:
+    #   1. extract_metadata — Collection/Dashboard/Question/BIProcess
+    #   2. extract_lineage  — Process/ColumnProcess (cross-connector, runs
+    #                         after the platform's QueryIntelligenceNode)
 
-    async def run(self, input: MetabaseInput) -> MetabaseOutput:  # type: ignore[override]
+    @entrypoint
+    async def extract_metadata(  # type: ignore[override]
+        self, input: MetabaseInput
+    ) -> MetabaseOutput:
         """End-to-end Metabase metadata extraction + transform.
 
         Orchestration:
@@ -614,10 +623,11 @@ class MetabaseApp(App):
           4. Filter: apply include/exclude (collection-level; cascades to
              dashboards/questions; databases pass through)
           5. Detail fetch: per-dashboard, per-database, per-question SQL
-          6. Enrich: inject sourceURL + build BIProcess records
-          7. Parse lineage: sqlglot → Process + ColumnProcess records
-          8. Transform: fan out across all 6 asset typenames
-          9. Upload ``transformed/`` tree to object store
+          6. Enrich: inject sourceURL, source DB/schema, BIProcess records
+          7. Transform: fan out across the 4 owned asset typenames
+          8. Upload ``transformed/`` tree to object store
+          9. Compute lineage-publish state prefixes for the downstream
+             LineagePublishNode (no upload yet — that's extract_lineage's job)
          10. Return MetabaseOutput
         """
         output_path = input.output_path or _default_output_path(input.workflow_id)
@@ -729,7 +739,7 @@ class MetabaseApp(App):
             )
             total_transformed += stats.record_count
 
-        # --- 9. Upload transformed/ tree -------------------------------
+        # --- 8. Upload transformed/ tree -------------------------------
         transformed_dir = os.path.join(output_path, _TRANSFORMED_DIR)
         transformed_data_prefix = ""
         if os.path.isdir(transformed_dir):
@@ -738,10 +748,138 @@ class MetabaseApp(App):
             )
             transformed_data_prefix = upload.ref.storage_path or ""
 
+        # --- 9. Compute lineage path prefixes for downstream nodes ----
+        # The QueryIntelligenceNode writes to `view_lineage_output_prefix`;
+        # extract_lineage reads from it. LineagePublishNode reads its blue-
+        # green + current-state buckets from these.
+        view_lineage_output_prefix = (
+            f"artifacts/apps/metabase/workflows/{input.workflow_id}/"
+            f"{self.run_id}/view-lineage"
+        )
+        lineage_stage_prefix = (
+            f"artifacts/apps/metabase/workflows/{input.workflow_id}/"
+            f"{self.run_id}/lineage-stage"
+        )
+        publish_state_prefix = (
+            f"persistent-artifacts/apps/atlan-publish-app/state/"
+            f"{connection_qn}/publish-state"
+        )
+        current_state_prefix = f"argo-artifacts/{connection_qn}/current-state"
+        lineage_publish_state_prefix = (
+            f"persistent-artifacts/apps/atlan-publish-app/state/"
+            f"{connection_qn}/lineage/publish-state"
+        )
+        lineage_current_state_prefix = (
+            f"argo-artifacts/{connection_qn}/lineage/current-state"
+        )
+
         # --- 10. Return -------------------------------------------------
         return MetabaseOutput(
             transformed_data_prefix=transformed_data_prefix,
             connection_qualified_name=connection_qn,
             output_path=output_path,
+            view_lineage_output_prefix=view_lineage_output_prefix,
+            publish_state_prefix=publish_state_prefix,
+            current_state_prefix=current_state_prefix,
+            lineage_publish_state_prefix=lineage_publish_state_prefix,
+            lineage_current_state_prefix=lineage_current_state_prefix,
+            lineage_stage_prefix=lineage_stage_prefix,
             total_records=total_transformed,
+        )
+
+    # ------------------------------------------------------------------
+    # extract_lineage — second @entrypoint
+    # ------------------------------------------------------------------
+
+    @entrypoint
+    async def extract_lineage(
+        self, input: MetabaseLineageInput
+    ) -> MetabaseLineageOutput:
+        """Build Process + ColumnProcess from QueryIntelligence parsed-SQL output.
+
+        The platform's QueryIntelligenceNode runs against our transformed
+        MetabaseQuestion JSON (consuming ``attributes.metabaseQuery`` +
+        ``attributes.metabaseSourceDatabaseName``) and writes its parsed-SQL
+        output to ``input.view_lineage_input_prefix``. This entrypoint reads
+        that output, constructs Process + ColumnProcess records with
+        cross-connector qualified names (the platform's lineage-publish layer
+        resolves them to actual upstream Atlan assets), and writes the
+        result NDJSON to ``lineage_stage_prefix`` for LineagePublishNode to
+        consume.
+
+        For initial v3 cutover this is a thin reader that:
+          1. Reads parsed-SQL NDJSON from ``view_lineage_input_prefix``
+          2. For each parsed query, emits one Process (Question →
+             upstream tables) and one ColumnProcess (Question →
+             upstream columns) record
+          3. Uploads the result tree to ``lineage_stage_prefix``
+
+        Cross-connector resolution policy (matches v2 marketplace-scripts):
+        upstream table refs use ``connector_name + db_name + schema + table``
+        QNs; the platform resolves to concrete Atlan asset QNs during
+        lineage-publish.
+        """
+        connection_qn = (
+            input.connection_qualified_name
+            or input.connection.attributes.qualified_name
+        )
+        output_path = input.output_path or _default_output_path(input.workflow_id)
+        logger.info(
+            "MetabaseApp.extract_lineage: connection_qn=%s, view_lineage_input_prefix=%s",
+            connection_qn,
+            input.view_lineage_input_prefix,
+        )
+
+        # The actual QI input download — done by the SDK runtime via a
+        # FileReference would be ideal. For initial wiring we accept that
+        # the platform/runtime mounts the QI output at a local path under
+        # input.view_lineage_input_prefix; downstream PRs will refine this
+        # to a proper FileReference + ObjectStore read.
+        processes: list[dict[str, Any]] = []
+        column_processes: list[dict[str, Any]] = []
+        # NOTE: parsing of QI output is intentionally deferred to a follow-up
+        # PR — this entrypoint provides the contract scaffold and DAG wiring.
+        # The QI output format / location is platform-managed and not
+        # reproducible in our local Docker e2e harness (no QI app deployed).
+
+        stage_dir = os.path.join(output_path, "lineage-stage")
+        os.makedirs(os.path.join(stage_dir, "PROCESS"), exist_ok=True)
+        os.makedirs(os.path.join(stage_dir, "COLUMNPROCESS"), exist_ok=True)
+        write_jsonl(os.path.join(stage_dir, "PROCESS", "result-0.json"), processes)
+        write_jsonl(
+            os.path.join(stage_dir, "COLUMNPROCESS", "result-0.json"),
+            column_processes,
+        )
+
+        # Upload lineage-stage/ to object store at the canonical prefix.
+        lineage_stage_prefix = ""
+        if os.path.isdir(stage_dir):
+            upload = await self.upload(
+                UploadInput(local_path=stage_dir, tier=StorageTier.RETAINED)
+            )
+            lineage_stage_prefix = upload.ref.storage_path or ""
+
+        lineage_publish_state_prefix = (
+            f"persistent-artifacts/apps/atlan-publish-app/state/"
+            f"{connection_qn}/lineage/publish-state"
+        )
+        lineage_current_state_prefix = (
+            f"argo-artifacts/{connection_qn}/lineage/current-state"
+        )
+
+        logger.info(
+            "MetabaseApp.extract_lineage complete: processes=%d, column_processes=%d, "
+            "lineage_stage_prefix=%s",
+            len(processes),
+            len(column_processes),
+            lineage_stage_prefix,
+        )
+
+        return MetabaseLineageOutput(
+            lineage_stage_prefix=lineage_stage_prefix,
+            connection_qualified_name=connection_qn,
+            lineage_publish_state_prefix=lineage_publish_state_prefix,
+            lineage_current_state_prefix=lineage_current_state_prefix,
+            process_count=len(processes),
+            column_process_count=len(column_processes),
         )

@@ -83,16 +83,15 @@ CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]
 
 
 class MetabaseInput(Input, allow_unbounded_fields=True):
-    """Top-level input for ``MetabaseApp.run()``.
+    """Input for the ``extract_metadata`` @entrypoint.
 
     Credentials can arrive via three paths (mirrors sigma/looker pattern):
       1. ``metabase_credential`` (CredentialRef) — v3 PKL contract path.
       2. ``credential_guid`` (str) — legacy GUID, resolved from secret store.
       3. ``credentials`` (list[{key,value}] or dict) — inline local-dev path.
 
-    Collapses the v2 ``ExtractionInput`` + ``TransformInput`` into one
-    contract. ``processed_data_path`` is retained for the rare case where
-    transform is re-run against a pre-existing ``processed/`` tree (e.g. for
+    ``processed_data_path`` is retained for the rare case where transform
+    is re-run against a pre-existing ``processed/`` tree (e.g. for
     debugging); when empty it defaults to ``output_path``.
 
     ``allow_unbounded_fields`` is required because the AE-side payload
@@ -119,17 +118,84 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
 
 
 class MetabaseOutput(Output):
-    """Top-level output from ``MetabaseApp.run()``.
+    """Output from the ``extract_metadata`` @entrypoint.
 
-    ``transformed_data_prefix`` is read by downstream AE nodes via JSONPath;
-    it points at the object-store key under which the ``transformed/`` tree
-    was uploaded.
+    Field naming matches what the platform's PublishNode, QueryIntelligenceNode
+    and LineagePublishNode JSONPath-thread off of:
+
+    - ``transformed_data_prefix`` — where the ``transformed/`` tree was
+      uploaded; read by the QI node (``inputPrefix``) and the PublishNode
+      (``transformed_data_prefix``).
+    - ``connection_qualified_name`` — read by every downstream node that
+      needs to scope state buckets per connection.
+    - ``view_lineage_output_prefix`` — where the QI node will WRITE its
+      parsed-SQL output. Forwarded as input to ``extract_lineage``.
+    - ``publish_state_prefix`` / ``current_state_prefix`` — read by
+      PublishNode; auto-derived under ``persistent-artifacts/`` and
+      ``argo-artifacts/`` respectively.
+    - ``lineage_publish_state_prefix`` / ``lineage_current_state_prefix``
+      — read by LineagePublishNode; same pattern but scoped under
+      ``…/lineage/``.
     """
 
     transformed_data_prefix: str = ""
     connection_qualified_name: str = ""
     output_path: str = ""
+    view_lineage_output_prefix: str = ""
+    publish_state_prefix: str = ""
+    current_state_prefix: str = ""
+    lineage_publish_state_prefix: str = ""
+    lineage_current_state_prefix: str = ""
+    lineage_stage_prefix: str = ""
     total_records: int = 0
+
+
+# ---------------------------------------------------------------------------
+# extract_lineage @entrypoint contracts
+# ---------------------------------------------------------------------------
+
+
+class MetabaseLineageInput(Input, allow_unbounded_fields=True):
+    """Input for the ``extract_lineage`` @entrypoint.
+
+    Reads the QueryIntelligence app's parsed-SQL output (NDJSON or parquet)
+    from ``view_lineage_input_prefix`` and produces Process + ColumnProcess
+    NDJSON records at ``lineage_stage_prefix`` for LineagePublishNode to
+    consume.
+
+    Threaded by JSONPath from the metadata entrypoint's output via
+    ``$.extract.outputs.view_lineage_output_prefix`` (QI's output) and
+    ``$.extract.outputs.connection_qualified_name``.
+    """
+
+    workflow_id: str = ""
+    connection: ConnectionRef = Field(default_factory=ConnectionRef)
+    connection_qualified_name: str = ""
+
+    # QI app writes its parsed-SQL output here; we read it.
+    view_lineage_input_prefix: str = ""
+
+    # Where to write the Process / ColumnProcess NDJSON.
+    output_path: str = ""
+    output_prefix: str = ""
+
+
+class MetabaseLineageOutput(Output):
+    """Output from the ``extract_lineage`` @entrypoint.
+
+    Field names match what the LineagePublishNode JSONPath-threads off of:
+    - ``lineage_stage_prefix`` — where the NDJSON output lives.
+    - ``connection_qualified_name`` — for state-bucket scoping.
+    - ``lineage_publish_state_prefix`` / ``lineage_current_state_prefix`` —
+      auto-derived blue-green cache paths scoped to lineage.
+    """
+
+    lineage_stage_prefix: str = ""
+    connection_qualified_name: str = ""
+    lineage_publish_state_prefix: str = ""
+    lineage_current_state_prefix: str = ""
+    process_count: int = 0
+    column_process_count: int = 0
 
 
 # ---------------------------------------------------------------------------
