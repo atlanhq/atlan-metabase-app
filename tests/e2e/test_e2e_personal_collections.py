@@ -38,9 +38,7 @@ async def test_fetch_metadata_excludes_personal_collections(credentials, mb_get)
     personal_ids = {str(c["id"]) for c in personal}
 
     handler = MetabaseHandler()
-    result = await handler.fetch_metadata(
-        MetadataInput(credentials=credentials, metadata={})
-    )
+    result = await handler.fetch_metadata(MetadataInput(credentials=credentials))
     returned_ids = {obj.value for obj in result.objects}
 
     overlap = personal_ids & returned_ids

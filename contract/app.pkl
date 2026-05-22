@@ -15,8 +15,11 @@ credentialConnectorType = "rest"
 // ---- Workflow wiring ----
 //
 // The App class lives in app/connector.py and exposes a single `run()`
-// override (openapi pattern). The toolkit derives the workflow type from
-// `name` — no override needed.
+// override (openapi pattern). The workflow type matches the app name —
+// the SDK registers a single Temporal workflow keyed off this string,
+// which the platform's Argo DAG dispatches once for the whole pipeline
+// (matches marketplace-packages/atlan/metabase/templates/default.yaml).
+workflowType = "metabase"
 hasPublishStep = true
 
 // ---- Credential config ----

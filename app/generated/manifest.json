@@ -6,7 +6,7 @@
       "activity_display_name": "Extract Metabase Metadata",
       "app_name": "{app_name}",
       "inputs": {
-        "workflow_type": "MetabaseMetadataExtractionWorkflow",
+        "workflow_type": "metabase",
         "app_name": "{app_name}",
         "app_id": "",
         "argo_workflow_slug": "",
