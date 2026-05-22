@@ -194,7 +194,7 @@ def _extract_column_refs(ast: exp.Expression) -> list[tuple[str | None, str]]:
     return out
 
 
-def _table_ref(qn: str) -> dict[str, str]:
+def _table_ref(qn: str) -> dict[str, Any]:
     """Atlas reference to a source table — qn is treated as schema-agnostic; the
     publish layer resolves typeName from the qn's owning connector. We don't
     know the upstream typeName at parse time (postgres vs snowflake vs …), so
@@ -202,11 +202,11 @@ def _table_ref(qn: str) -> dict[str, str]:
     return {"typeName": "Table", "uniqueAttributes": {"qualifiedName": qn}}
 
 
-def _column_ref(qn: str) -> dict[str, str]:
+def _column_ref(qn: str) -> dict[str, Any]:
     return {"typeName": "Column", "uniqueAttributes": {"qualifiedName": qn}}
 
 
-def _question_ref(question_qn: str) -> dict[str, str]:
+def _question_ref(question_qn: str) -> dict[str, Any]:
     return {
         "typeName": "MetabaseQuestion",
         "uniqueAttributes": {"qualifiedName": question_qn},
