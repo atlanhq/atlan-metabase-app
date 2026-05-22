@@ -269,11 +269,21 @@ def process_assets(
             metabase_host + "/dashboard/" + str(dashboard["id"])
         )
         dashboard["collection"] = collections_map[collection_id]
-        dashboard["cards_count"] = len(dashboard.get("ordered_cards", []))
 
-        # Build cards_dashboard_map from ordered_cards, then remove the field
-        # (mirrors `dashboard.pop("ordered_cards", [])` in main.py).
-        for card_data in dashboard.pop("ordered_cards", []):
+        # Metabase v0.49 renamed ``ordered_cards`` → ``dashcards``. Accept
+        # either so the connector works across server versions; v2 only
+        # ever saw the legacy field name.
+        cards_list = dashboard.pop("dashcards", None)
+        if cards_list is None:
+            cards_list = dashboard.pop("ordered_cards", [])
+        else:
+            # Pop the legacy field too if both exist, to keep the
+            # enriched dashboard dict clean.
+            dashboard.pop("ordered_cards", None)
+
+        dashboard["cards_count"] = len(cards_list)
+
+        for card_data in cards_list:
             if not card_data.get("card_id"):
                 continue
             card = card_data.get("card")
