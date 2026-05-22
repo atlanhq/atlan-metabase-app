@@ -22,6 +22,70 @@ credentialConnectorType = "rest"
 workflowType = "metabase"
 hasPublishStep = true
 
+// ---- Lineage pipeline (5-node DAG) ----
+//
+// extract → qi + publish (parallel) → lineage-app → lineage-publish
+//
+// The extract phase (this app's @tasks orchestrated by run()) produces
+// Atlas JSON for 4 entity types (MetabaseCollection, MetabaseDashboard,
+// MetabaseQuestion, BIProcess) at $.extract.outputs.transformed_data_prefix.
+//
+// The QueryIntelligence node downstream reads SQL strings out of
+// ``attributes.metabaseQuery`` on each MetabaseQuestion, scopes parsing
+// to the source database via ``attributes.metabaseSourceDatabaseName``
+// (and optionally ``metabaseSourceSchemaName``), and emits Process +
+// ColumnProcess lineage records. The LineageNode + LineagePublishNode
+// then publish those edges to Atlas.
+//
+// Pattern mirrors atlan-mysql-app/contract/app.pkl.
+extraNodes {
+  ["qi"] = new QueryIntelligenceNode {
+    displayName = "Parse Metabase Question SQL Lineage"
+    vendorName = "metabase"
+    sqlKey = "attributes.metabaseQuery"
+    catalogKey = "attributes.metabaseSourceDatabaseName"
+    schemaKey = "attributes.metabaseSourceSchemaName"
+    timestampKey = ""
+    mineOutputType = "json"
+    parsingMode = "competitive"
+    inputPrefix = "$.extract.outputs.transformed_data_prefix"
+    outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
+  }
+  ["publish"] = new PublishNode {
+    args {
+      ["connection_cache_enabled"] = true
+      ["connection_cache_via_app_enabled"] = true
+      ["current_state_via_app_enabled"] = true
+    }
+  }
+  ["lineage-app"] = new LineageNode {
+    connectorName = "metabase"
+    sqlUnquotedCase = "lower"
+    ignoreAllCase = false
+    dependsOn = null
+    dependsOnCondition = new DependencyCondition {
+      andConditions {
+        new DependencyCondition {
+          nodeId = "qi"
+          tag = "success"
+        }
+        new DependencyCondition {
+          nodeId = "publish"
+          tag = "success"
+        }
+      }
+    }
+  }
+  ["lineage-publish"] = new LineagePublishNode {
+    waitForAssetPublish = false
+    dependsOn = null
+    dependsOnCondition = new DependencyCondition {
+      nodeId = "lineage-app"
+      tag = "success"
+    }
+  }
+}
+
 // ---- Credential config ----
 
 credentialCommonFields {

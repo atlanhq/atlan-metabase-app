@@ -225,36 +225,6 @@ class ProcessOutput(Output):
     total_records: int = 0
 
 
-class ParseLineageInput(Input, allow_unbounded_fields=True):
-    """Input for the new ``parse_lineage`` @task.
-
-    Consumes the enriched ``questions`` file (which carries native SQL and
-    database engine) plus the ``database_metadata`` file (cached schema /
-    table / column tree) and emits two new JSONL files in ``processed/``:
-    ``processes/`` (table-level lineage) and ``column_processes/`` (column
-    lineage). These feed the ``Process`` and ``ColumnProcess`` Atlas
-    entities in the ``transform_data`` fan-out.
-
-    Replaces the v2 Gudusoft step with an in-app ``sqlglot`` parser; see
-    ``app/lineage.py``.
-    """
-
-    output_path: str = ""
-    connection_qualified_name: str = ""
-    questions_processed_file: FileReference | None = None
-    database_metadata_file: FileReference | None = None
-
-
-class ParseLineageOutput(Output):
-    """Output for the parse_lineage @task — two lineage JSONL files."""
-
-    processes_file: FileReference | None = None
-    column_processes_file: FileReference | None = None
-    process_count: int = 0
-    column_process_count: int = 0
-    parse_failures: int = 0
-
-
 class TransformTaskInput(Input):
     """Input for ``transform_data`` — runs once per asset typename."""
 
@@ -275,14 +245,18 @@ class TransformTaskOutput(Output):
 
 
 # Mapping from transformer typename to subdirectory under ``processed/``.
-# Kept here so call sites import it from one place.
+#
+# Process + ColumnProcess (SQL-parsed lineage) are produced by the
+# QueryIntelligence app downstream — see ``contract/app.pkl`` ``extraNodes``.
+# This connector emits only the 4 entity types it owns; QI consumes
+# ``attributes.metabaseQuery`` / ``attributes.metabaseSourceDatabaseName`` /
+# ``attributes.metabaseSourceSchemaName`` from the transformed
+# MetabaseQuestion output to build lineage.
 TYPENAME_TO_PROCESS_DIR: dict[str, str] = {
     "METABASECOLLECTION": "collections",
     "METABASEDASHBOARD": "dashboards",
     "METABASEQUESTION": "questions",
     "BIPROCESS": "questions_dashboards",
-    "PROCESS": "processes",
-    "COLUMNPROCESS": "column_processes",
 }
 
 TRANSFORM_ASSET_TYPES: list[str] = list(TYPENAME_TO_PROCESS_DIR.keys())

@@ -41,8 +41,6 @@ from app.contracts import (
     MetabaseCredential,
     MetabaseInput,
     MetabaseOutput,
-    ParseLineageInput,
-    ParseLineageOutput,
     ProcessInput,
     ProcessOutput,
     TransformTaskInput,
@@ -65,7 +63,6 @@ from app.extracts.process import (
 )
 from app.extracts.questions import fetch_question_queries, fetch_questions_summaries
 from app.handler import MetabaseHandler  # noqa: F401 — registers handler
-from app.lineage import emit_lineage_records
 from app.transformers import MetabaseTransformer
 from app.utils import read_jsonl, write_jsonl
 
@@ -176,7 +173,7 @@ class MetabaseApp(App):
     """
 
     name = "metabase"
-    passthrough_modules = {"app.transformers", "app.lineage"}
+    passthrough_modules = {"app.transformers"}
 
     # ------------------------------------------------------------------
     # Client + credential resolution
@@ -497,62 +494,16 @@ class MetabaseApp(App):
             total_records=total,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
-    async def parse_lineage(self, input: ParseLineageInput) -> ParseLineageOutput:
-        """Parse native-SQL questions into table + column lineage records.
-
-        Replaces the v2 Gudusoft step with in-app ``sqlglot``. For each
-        question that carries a non-empty native SQL string, parse the
-        statement against the question's database engine dialect, match
-        referenced tables (and explicit columns) to entries in the cached
-        ``database_metadata`` tree, and emit ``Process`` (table-level) +
-        ``ColumnProcess`` (column-level) records.
-
-        See :mod:`app.lineage` for the parser implementation, dialect
-        mapping, and matching rules.
-        """
-        questions = read_jsonl(
-            input.questions_processed_file.local_path
-            if input.questions_processed_file
-            else ""
-        )
-        database_metadata = read_jsonl(
-            input.database_metadata_file.local_path
-            if input.database_metadata_file
-            else ""
-        )
-
-        processes, column_processes, failures = emit_lineage_records(
-            questions=questions,
-            database_metadata=database_metadata,
-            connection_qualified_name=input.connection_qualified_name,
-        )
-
-        p_out = _processed_file(input.output_path, "processes")
-        cp_out = _processed_file(input.output_path, "column_processes")
-        write_jsonl(p_out, processes)
-        write_jsonl(cp_out, column_processes)
-
-        logger.info(
-            "parse_lineage: processes=%d, column_processes=%d, parse_failures=%d",
-            len(processes),
-            len(column_processes),
-            failures,
-        )
-
-        return ParseLineageOutput(
-            processes_file=_ref(p_out),
-            column_processes_file=_ref(cp_out),
-            process_count=len(processes),
-            column_process_count=len(column_processes),
-            parse_failures=failures,
-        )
-
     # ------------------------------------------------------------------
     # TRANSFORM @task — called once per asset typename from run()
     # ------------------------------------------------------------------
+    # SQL lineage (Process / ColumnProcess) is NOT produced here. It is
+    # produced by the QueryIntelligence app downstream, which consumes
+    # ``attributes.metabaseQuery`` (the SQL string), and
+    # ``attributes.metabaseSourceDatabaseName`` /
+    # ``attributes.metabaseSourceSchemaName`` (the catalog/schema scope)
+    # from the transformed MetabaseQuestion output. See the ``extraNodes``
+    # block in ``contract/app.pkl``.
 
     @task(timeout_seconds=1800)
     async def transform_data(self, input: TransformTaskInput) -> TransformTaskOutput:
@@ -711,7 +662,13 @@ class MetabaseApp(App):
                 inline_credentials=inline_creds,
             )
         )
-        database_metadata = await self.extract_individual_databases(
+        # extract_individual_databases is run for parity with the v2
+        # marketplace-scripts pipeline (and to keep ``raw/database_metadata/``
+        # available in the artifact bundle for diagnostics). Its result file
+        # is not consumed downstream — the QueryIntelligence app resolves
+        # source tables against Atlan-known assets directly, not against
+        # raw Metabase database metadata.
+        await self.extract_individual_databases(
             FetchDetailInput(
                 output_path=output_path,
                 source_file=filtered.databases_filtered_file,
@@ -729,7 +686,10 @@ class MetabaseApp(App):
         )
 
         # --- 6. Enrich --------------------------------------------------
-        processed = await self.process_metabaseprocess(
+        # Output (processed/*) is read by transform_data via its
+        # processed_data_path argument; the FetchOutput returned here is
+        # informational.
+        await self.process_metabaseprocess(
             ProcessInput(
                 output_path=output_path,
                 collections_filtered_file=filtered.collections_filtered_file,
@@ -742,18 +702,16 @@ class MetabaseApp(App):
             )
         )
 
-        # --- 7. Parse lineage (sqlglot) ---------------------------------
-        connection_qn = input.connection.attributes.qualified_name
-        await self.parse_lineage(
-            ParseLineageInput(
-                output_path=output_path,
-                connection_qualified_name=connection_qn,
-                questions_processed_file=processed.questions_processed_file,
-                database_metadata_file=database_metadata.output_file,
-            )
-        )
+        # SQL lineage (Process / ColumnProcess) is produced downstream by
+        # the QueryIntelligenceNode in the DAG — see contract/app.pkl
+        # ``extraNodes``. The QI node consumes ``attributes.metabaseQuery``
+        # (the SQL string), ``attributes.metabaseSourceDatabaseName``, and
+        # ``attributes.metabaseSourceSchemaName`` from this app's
+        # transformed MetabaseQuestion output to resolve table refs against
+        # source assets already crawled by their owning connector.
 
-        # --- 8. Transform (fan-out) ------------------------------------
+        # --- 7. Transform (fan-out) ------------------------------------
+        connection_qn = input.connection.attributes.qualified_name
         connection_name = input.connection.attributes.name
         processed_data_path = input.processed_data_path or output_path
         total_transformed = 0

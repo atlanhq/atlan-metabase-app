@@ -342,7 +342,16 @@ def process_assets(
             query_object = {
                 **query,
                 **{
-                    "default_database_name": safe_get(database, "details", "db"),
+                    # Metabase v0.49+ uses ``details.dbname`` for engines
+                    # like postgres / snowflake / bigquery / mysql; the
+                    # legacy H2 Sample Database still uses ``details.db``.
+                    # Fall back to the user-supplied ``database.name`` when
+                    # neither is present.
+                    "default_database_name": (
+                        safe_get(database, "details", "dbname")
+                        or safe_get(database, "details", "db")
+                        or database.get("name", "")
+                    ),
                     "default_schema_name": safe_get(database, "details", "schema"),
                     "engine": atlan_compatible_engine,
                 },
@@ -350,6 +359,21 @@ def process_assets(
 
         question["collection"] = collections_map[collection_id]
         question["query"] = query_object
+        # Flatten the SQL + catalog/schema fields onto the question so the
+        # transformer YAML can expose them as ``attributes.metabaseQuery`` /
+        # ``attributes.metabaseSourceDatabaseName`` /
+        # ``attributes.metabaseSourceSchemaName``. The QueryIntelligence node
+        # downstream reads those attribute keys to scope SQL parsing.
+        question["metabase_query"] = (
+            query_object.get("query", "") if query_object else ""
+        )
+        question["query_type"] = dataset_query.get("type") or ""
+        question["metabase_database_name"] = (
+            query_object.get("default_database_name") or "" if query_object else ""
+        )
+        question["metabase_schema_name"] = (
+            query_object.get("default_schema_name") or "" if query_object else ""
+        )
         question["dashboards"] = []
 
         # Attach the dashboards this question appears on
