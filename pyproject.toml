@@ -94,6 +94,9 @@ reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "e2e: end-to-end tests requiring a live Metabase server (see tests/e2e/README.md)",
+]
 
 [tool.coverage.run]
 omit = [
