@@ -89,6 +89,11 @@ typeCheckingMode = "standard"
 exclude = [
     ".github/**",
     "app/generated/**",
+    # Parity suite uses sys.path manipulation in conftest to enable
+    # sibling imports (api_recorder, parity_entities, summarize). Pyright
+    # can't follow that, so static-check is skipped here. Imports are
+    # validated at test-collection time by pytest.
+    "tests/parity/**",
 ]
 reportMissingTypeStubs = false
 
