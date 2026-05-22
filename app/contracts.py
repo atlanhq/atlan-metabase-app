@@ -1,12 +1,18 @@
 """Typed Input/Output contracts for the Metabase v3 connector.
 
-Defines the credential model plus the @entrypoint and per-@task contracts.
+Defines the credential model, the single-``run()`` entrypoint contract, and
+the per-``@task`` contracts.
 
-Every field has a typed shape — no unbounded escape hatches anywhere.
-``connection`` uses :class:`ConnectionRef` from the SDK; filter payloads
-are kept as typed ``dict[str, dict[str, list[str]]]`` shapes coming from
-the apitree widget but routed through small contracts that the migration
-checker accepts.
+Architecture mirrors ``atlan-openapi-app``: one App class with a single
+``run()`` override that orchestrates ``@task`` methods sequentially. The
+platform (marketplace-packages) dispatches Metabase as **one** Argo workflow
+instance with extract→publish as nested DAG nodes, so a single entrypoint
+matches the platform shape exactly.
+
+Every field has a typed shape. ``connection`` uses :class:`ConnectionRef`
+from the SDK; filter payloads are typed ``dict`` shapes from the apitree
+widget routed through small contracts that the SDK payload-safety validator
+accepts.
 """
 
 from __future__ import annotations
@@ -29,10 +35,10 @@ __all__ = ["CredentialRef"]  # keep import live (annotations-only otherwise)
 class MetabaseCredential(BasicCredential, frozen=True):
     """Username + password credential plus Metabase host/port.
 
-    The Metabase ``host`` is stored with its protocol prefix (e.g.
-    ``https://acme.metabaseapp.com``) because the configmap-derived
-    ``restCredentialTemplate`` curl writes the URL as ``{{host}}:{{port}}/...``
-    without prepending a scheme.
+    ``host`` is stored with its protocol prefix (e.g.
+    ``https://acme.metabaseapp.com``) — the v2 ``restCredentialTemplate``
+    writes the URL as ``{{host}}:{{port}}/...`` without prepending a scheme,
+    and the e2e Docker pipeline targets ``http://localhost:3000``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -58,45 +64,40 @@ class MetabaseCredential(BasicCredential, frozen=True):
 class CollectionSelection(BaseModel):
     """Per-collection selection sent by the apitree widget.
 
-    The widget posts an empty object per id (``{"<id>": {}}``). We model the
-    value as a frozen pydantic model with no required fields so it satisfies
-    the SDK's payload-safety validator while still accepting the wire shape.
+    The widget posts an empty object per id (``{"<id>": {}}``). Frozen
+    pydantic model with no required fields to satisfy the SDK payload-safety
+    validator while accepting the wire shape.
     """
 
     model_config = ConfigDict(frozen=True, extra="allow")
 
 
-# Bounded mapping of collection-id → selection (apitree widget shape).
-# 1000 to match the toolkit-generated ``app/generated/_input.py:AppInputContract``
-# default; bump in both places if a tenant needs more headroom.
+# Bounded mapping of collection-id → selection. 1000 matches the
+# ``AppInputContract`` default in ``app/generated/_input.py``.
 CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]
 
 
 # ---------------------------------------------------------------------------
-# @entrypoint: extract_metadata
+# App-level: single run() entrypoint
 # ---------------------------------------------------------------------------
 
 
-class ExtractionInput(Input, allow_unbounded_fields=True):
-    """Top-level input for ``MetabaseApp.extract_metadata``.
+class MetabaseInput(Input, allow_unbounded_fields=True):
+    """Top-level input for ``MetabaseApp.run()``.
 
     Credentials can arrive via three paths (mirrors sigma/looker pattern):
-      1. ``metabase_credential`` (CredentialRef) — v3 PKL contract.
+      1. ``metabase_credential`` (CredentialRef) — v3 PKL contract path.
       2. ``credential_guid`` (str) — legacy GUID, resolved from secret store.
       3. ``credentials`` (list[{key,value}] or dict) — inline local-dev path.
 
-    Allow-unbounded is required because the AE-side payload contains nested
-    dicts (connection.attributes.*, metadata.include-collections.*) the
-    payload-safety validator can't bound.
+    Collapses the v2 ``ExtractionInput`` + ``TransformInput`` into one
+    contract. ``processed_data_path`` is retained for the rare case where
+    transform is re-run against a pre-existing ``processed/`` tree (e.g. for
+    debugging); when empty it defaults to ``output_path``.
 
-    Canonicity vs. ``app/generated/_input.py:AppInputContract``:
-        The toolkit also generates an ``AppInputContract`` from
-        ``contract/app.pkl`` for documentation/UI purposes. This hand-rolled
-        ``ExtractionInput`` is the runtime contract consumed by the
-        ``@entrypoint`` method; the generated one is reference-only. Both must
-        be kept in sync — if you add a field here, mirror it in ``app.pkl``
-        and re-run ``atlan app contract generate``. See follow-up TODO at
-        ``app/connector.py`` to converge into a single source post-merge.
+    ``allow_unbounded_fields`` is required because the AE-side payload
+    contains nested dicts (connection.attributes.*, include-collections.*)
+    that the payload-safety validator can't bound.
     """
 
     workflow_id: str = ""
@@ -113,44 +114,17 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
 
     output_path: str = ""
     output_prefix: str = ""
-
-
-class ExtractionOutput(Output):
-    """Output from ``MetabaseApp.extract_metadata``.
-
-    ``transformed_data_prefix`` is read by downstream AE nodes via JSONPath.
-    """
-
-    transformed_data_prefix: str = ""
-    connection_qualified_name: str = ""
-    output_path: str = ""
-    total_records: int = 0
-
-
-# ---------------------------------------------------------------------------
-# @entrypoint: transform_metadata
-# ---------------------------------------------------------------------------
-
-
-class TransformInput(Input, allow_unbounded_fields=True):
-    """Top-level input for ``MetabaseApp.transform_metadata``."""
-
-    workflow_id: str = ""
-    credential_guid: str = ""
-    extraction_method: str = "direct"
-    agent_json: str = ""
-
-    metabase_credential: CredentialRef | None = None
-    credentials: list[dict[str, Any]] | dict[str, Any] = Field(default_factory=list)
-    connection: ConnectionRef = Field(default_factory=ConnectionRef)
-    output_path: str = ""
-    output_prefix: str = ""
     processed_data_path: str = ""
     chunk_start: int = 0
 
 
-class TransformOutput(Output):
-    """Output from ``MetabaseApp.transform_metadata``."""
+class MetabaseOutput(Output):
+    """Top-level output from ``MetabaseApp.run()``.
+
+    ``transformed_data_prefix`` is read by downstream AE nodes via JSONPath;
+    it points at the object-store key under which the ``transformed/`` tree
+    was uploaded.
+    """
 
     transformed_data_prefix: str = ""
     connection_qualified_name: str = ""
@@ -166,16 +140,10 @@ class TransformOutput(Output):
 class FetchInput(Input, allow_unbounded_fields=True):
     """Input shared by all simple extract @tasks.
 
-    Carries the credential ref (or inline credentials) so the task can rebuild
-    its own client without app_state — every @task runs as its own Temporal
-    activity in a separate worker thread, so a shared client cache via
-    ``app_state`` would only be reachable inside one activity context anyway.
-
-    ``allow_unbounded_fields`` is required by the SDK's payload-safety
-    validator: ``inline_credentials`` is ``dict[str, Any]`` and
-    ``Annotated[dict[str, Any], MaxItems(N)]`` is still rejected because
-    ``Any`` cannot be bounded, only counted. atlan-sigma-app uses the same
-    escape hatch on its task input for the same reason.
+    Carries the credential ref (or inline credentials) so the task can
+    rebuild its own client. Each ``@task`` runs as its own Temporal activity
+    in a separate worker, so a shared client cache via ``app_state`` would
+    only be reachable inside one activity context.
     """
 
     output_path: str = ""
@@ -194,11 +162,9 @@ class FetchOutput(Output):
 class FilterInput(Input, allow_unbounded_fields=True):
     """Input for the filter @task.
 
-    Receives ``FileReference``s for each of the four raw entity files and the
-    include / exclude collection filters. The SDK auto-downloads any
+    Receives ``FileReference``s for each of the four raw entity files and
+    the include/exclude collection filters. The SDK auto-downloads any
     ``FileReference`` referenced here before the task runs.
-    ``allow_unbounded_fields`` is required for ``inline_credentials`` — see
-    ``FetchInput`` for the full rationale.
     """
 
     output_path: str = ""
@@ -223,11 +189,7 @@ class FilterOutput(Output):
 
 
 class FetchDetailInput(Input, allow_unbounded_fields=True):
-    """Input for tasks that fetch per-entity detail starting from a filtered file.
-
-    ``allow_unbounded_fields`` is required for ``inline_credentials`` — see
-    ``FetchInput`` for the full rationale.
-    """
+    """Input for tasks that fetch per-entity detail from a filtered file."""
 
     output_path: str = ""
     source_file: FileReference | None = None
@@ -240,9 +202,7 @@ class ProcessInput(Input, allow_unbounded_fields=True):
 
     ``metabase_host`` is resolved inside the task itself via
     ``_build_client(input).host`` so the credential path (CredentialRef vs
-    inline) stays consistent with every other task — no separate threading.
-    ``allow_unbounded_fields`` is required for ``inline_credentials`` — see
-    ``FetchInput`` for the full rationale.
+    inline) stays consistent with every other task.
     """
 
     output_path: str = ""
@@ -265,6 +225,36 @@ class ProcessOutput(Output):
     total_records: int = 0
 
 
+class ParseLineageInput(Input, allow_unbounded_fields=True):
+    """Input for the new ``parse_lineage`` @task.
+
+    Consumes the enriched ``questions`` file (which carries native SQL and
+    database engine) plus the ``database_metadata`` file (cached schema /
+    table / column tree) and emits two new JSONL files in ``processed/``:
+    ``processes/`` (table-level lineage) and ``column_processes/`` (column
+    lineage). These feed the ``Process`` and ``ColumnProcess`` Atlas
+    entities in the ``transform_data`` fan-out.
+
+    Replaces the v2 Gudusoft step with an in-app ``sqlglot`` parser; see
+    ``app/lineage.py``.
+    """
+
+    output_path: str = ""
+    connection_qualified_name: str = ""
+    questions_processed_file: FileReference | None = None
+    database_metadata_file: FileReference | None = None
+
+
+class ParseLineageOutput(Output):
+    """Output for the parse_lineage @task — two lineage JSONL files."""
+
+    processes_file: FileReference | None = None
+    column_processes_file: FileReference | None = None
+    process_count: int = 0
+    column_process_count: int = 0
+    parse_failures: int = 0
+
+
 class TransformTaskInput(Input):
     """Input for ``transform_data`` — runs once per asset typename."""
 
@@ -285,7 +275,7 @@ class TransformTaskOutput(Output):
 
 
 # Mapping from transformer typename to subdirectory under ``processed/``.
-# Kept here (next to TransformInput) so call sites import it from one place.
+# Kept here so call sites import it from one place.
 TYPENAME_TO_PROCESS_DIR: dict[str, str] = {
     "METABASECOLLECTION": "collections",
     "METABASEDASHBOARD": "dashboards",
@@ -298,6 +288,4 @@ TYPENAME_TO_PROCESS_DIR: dict[str, str] = {
 TRANSFORM_ASSET_TYPES: list[str] = list(TYPENAME_TO_PROCESS_DIR.keys())
 
 
-# Silence unused-import warning for Any — typed dict[str, Any] is intentionally
-# avoided here. (Any imported for forward-compatibility with future fields.)
 _ = Any
