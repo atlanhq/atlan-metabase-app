@@ -9,6 +9,7 @@ readme = "README.md"
 dependencies = [
     "atlan-application-sdk[daft,iam-auth,pandas,tests,workflows]==3.12.0",
     "poethepoet>=0.38.0",
+    "sqlglot>=25.0.0,<27",
 ]
 
 [dependency-groups]

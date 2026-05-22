@@ -1,21 +1,20 @@
-"""Metabase v3 connector — single App with two @entrypoint methods.
+"""Metabase v3 connector — single ``run()`` orchestrator.
 
-Consolidates the v2 ``MetabaseMetadataExtractionWorkflow`` and
-``MetabaseTransformWorkflow`` into a single :class:`MetabaseApp`:
+Architecture mirrors ``atlan-openapi-app``: one ``App`` subclass with one
+``async def run()`` override and a flat fan-out of ``@task`` methods.
 
-- ``extract_metadata`` — runs the nine extraction @tasks in order, producing
-  the same ``raw/`` and ``processed/`` JSONL files the v2 workflow wrote.
-- ``transform_metadata`` — loops over the six asset types and calls the
-  shared ``transform_data`` @task per type, writing Atlas JSON to
-  ``transformed/``.
+The platform (platform-packages) dispatches Metabase as **one** Argo
+workflow instance with extract→publish as nested DAG nodes (not two
+separate workflow submissions), so a single entrypoint matches the platform
+shape exactly. The previous two-``@entrypoint`` shape (extract_metadata,
+transform_metadata) is replaced by inline orchestration inside ``run()``.
 
-Both @entrypoint methods share:
-- The :class:`MetabaseHandler` (imported below to register it for the SDK).
-- A cached :class:`MetabaseApiClient` stored in ``app_state`` and disposed
-  in a ``finally`` block.
-- The :class:`MetabaseTransformer` (instantiated per-call inside the
-  transform task).
+The ``MetabaseHandler`` (imported below to register it for the SDK)
+serves the platform endpoints: ``/workflows/v1/auth``,
+``/workflows/v1/check``, ``/workflows/v1/metadata``.
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -24,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import daft
-from application_sdk.app import App, entrypoint, task
+from application_sdk.app import App, task
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
@@ -34,18 +33,18 @@ from app.client import MetabaseApiClient, build_client
 from app.contracts import (
     TRANSFORM_ASSET_TYPES,
     TYPENAME_TO_PROCESS_DIR,
-    ExtractionInput,
-    ExtractionOutput,
     FetchDetailInput,
     FetchInput,
     FetchOutput,
     FilterInput,
     FilterOutput,
     MetabaseCredential,
+    MetabaseInput,
+    MetabaseOutput,
+    ParseLineageInput,
+    ParseLineageOutput,
     ProcessInput,
     ProcessOutput,
-    TransformInput,
-    TransformOutput,
     TransformTaskInput,
     TransformTaskOutput,
 )
@@ -66,13 +65,14 @@ from app.extracts.process import (
 )
 from app.extracts.questions import fetch_question_queries, fetch_questions_summaries
 from app.handler import MetabaseHandler  # noqa: F401 — registers handler
+from app.lineage import emit_lineage_records
 from app.transformers import MetabaseTransformer
 from app.utils import read_jsonl, write_jsonl
 
 logger = get_logger(__name__)
 
 
-# Module-level env reads (Temporal sandbox blocks os.environ inside run()).
+# Module-level constants — Temporal sandbox blocks os.environ inside run().
 _RAW_DIR = "raw"
 _PROCESSED_DIR = "processed"
 _TRANSFORMED_DIR = "transformed"
@@ -84,7 +84,7 @@ _TRANSFORMED_DIR = "transformed"
 
 
 def build_credential_ref(
-    input: ExtractionInput | TransformInput,
+    input: MetabaseInput,
 ) -> tuple[CredentialRef | None, dict[str, Any]]:
     """Resolve credentials from the three supported paths into (ref, inline).
 
@@ -169,10 +169,14 @@ class MetabaseApp(App):
     """Metabase connector — extracts collections, dashboards, questions and
     databases via the REST API, then transforms them into Atlas JSON.
 
-    Two @entrypoint methods are dispatched as separate Temporal workflow
-    executions (``atlan-metabase-app:extract-metadata`` and
-    ``atlan-metabase-app:transform-metadata``).
+    Single ``run()`` orchestrator. ``run()`` dispatches every step as a
+    ``@task`` (Temporal activity), so each step has its own retry policy,
+    heartbeat, and timeout. Credentials are resolved once and threaded
+    through every task input.
     """
+
+    name = "metabase"
+    passthrough_modules = {"app.transformers", "app.lineage"}
 
     # ------------------------------------------------------------------
     # Client + credential resolution
@@ -182,19 +186,16 @@ class MetabaseApp(App):
     # spans a single activity execution — there is no cross-activity reuse to
     # be had. Building per-task is simple, deterministic, and avoids the
     # ``AppContextError`` raised when ``get_app_state`` is invoked outside the
-    # activity context (e.g. from a helper called via ``await`` on the workflow
-    # thread). This mirrors atlan-sigma-app's pattern.
+    # activity context.
 
     async def _build_client(self, input: Any) -> MetabaseApiClient:
         """Build a Metabase client from the credential ref or inline creds.
 
-        Each @task is expected to call this once at the top of its body.
-        Resolves credentials via the SDK's typed pathway:
+        Resolves credentials via the SDK typed pathway:
 
         - ``input.credential_ref`` (``CredentialRef``) — pulled from secret
           store via ``self.context.resolve_credential_raw``.
-        - ``input.inline_credentials`` — local-dev fallback when no secret
-          store is wired up.
+        - ``input.inline_credentials`` — local-dev fallback.
 
         Raises:
             ValueError: When both fields are absent or empty.
@@ -268,11 +269,7 @@ class MetabaseApp(App):
 
     @task(timeout_seconds=600)
     async def filter_data(self, input: FilterInput) -> FilterOutput:
-        """Apply include / exclude filters to the four raw files.
-
-        Reads from the four ``FileReference`` inputs (auto-downloaded by the
-        SDK) and writes four filtered JSONL outputs.
-        """
+        """Apply include/exclude filters to the four raw files."""
         raw_collections = read_jsonl(
             input.collections_file.local_path if input.collections_file else ""
         )
@@ -309,7 +306,7 @@ class MetabaseApp(App):
         write_jsonl(c_out, filtered_collections)
         write_jsonl(d_out, filtered_dashboards)
         write_jsonl(q_out, filtered_questions)
-        # Databases are passed through unfiltered (matches v2).
+        # Databases pass through unfiltered (matches v2).
         write_jsonl(db_out, raw_databases)
 
         total = (
@@ -334,7 +331,9 @@ class MetabaseApp(App):
             total_records=total,
         )
 
-    @task(timeout_seconds=600)
+    @task(
+        timeout_seconds=3600, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
     async def extract_individual_dashboards(
         self, input: FetchDetailInput
     ) -> FetchOutput:
@@ -357,7 +356,9 @@ class MetabaseApp(App):
             output_file=_ref(out),
         )
 
-    @task(timeout_seconds=600)
+    @task(
+        timeout_seconds=3600, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
     async def extract_individual_databases(
         self, input: FetchDetailInput
     ) -> FetchOutput:
@@ -380,7 +381,9 @@ class MetabaseApp(App):
             output_file=_ref(out),
         )
 
-    @task(timeout_seconds=600)
+    @task(
+        timeout_seconds=3600, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
     async def fetch_question_queries_activity(
         self, input: FetchDetailInput
     ) -> FetchOutput:
@@ -403,7 +406,7 @@ class MetabaseApp(App):
             output_file=_ref(out),
         )
 
-    @task(timeout_seconds=600)
+    @task(timeout_seconds=1800)
     async def process_metabaseprocess(self, input: ProcessInput) -> ProcessOutput:
         """Enrich filtered records into the four ``processed/*`` JSONL outputs."""
         filtered_collections = read_jsonl(
@@ -432,11 +435,10 @@ class MetabaseApp(App):
             else ""
         )
 
-        # Resolve metabase_host via the same credential path every other @task
-        # uses. The host is needed for sourceURL fields on enriched assets;
-        # threading it as a separate ProcessInput field would diverge from the
-        # CredentialRef pipeline and force a second credential resolution
-        # strategy.
+        # Resolve metabase_host via the same credential path every other
+        # @task uses. The host is needed for sourceURL fields on enriched
+        # assets; threading it as a separate field would diverge from the
+        # CredentialRef pipeline.
         client = await self._build_client(input)
         metabase_host = client.host or ""
         if not metabase_host:
@@ -495,27 +497,70 @@ class MetabaseApp(App):
             total_records=total,
         )
 
+    @task(
+        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
+    )
+    async def parse_lineage(self, input: ParseLineageInput) -> ParseLineageOutput:
+        """Parse native-SQL questions into table + column lineage records.
+
+        Replaces the v2 Gudusoft step with in-app ``sqlglot``. For each
+        question that carries a non-empty native SQL string, parse the
+        statement against the question's database engine dialect, match
+        referenced tables (and explicit columns) to entries in the cached
+        ``database_metadata`` tree, and emit ``Process`` (table-level) +
+        ``ColumnProcess`` (column-level) records.
+
+        See :mod:`app.lineage` for the parser implementation, dialect
+        mapping, and matching rules.
+        """
+        questions = read_jsonl(
+            input.questions_processed_file.local_path
+            if input.questions_processed_file
+            else ""
+        )
+        database_metadata = read_jsonl(
+            input.database_metadata_file.local_path
+            if input.database_metadata_file
+            else ""
+        )
+
+        processes, column_processes, failures = emit_lineage_records(
+            questions=questions,
+            database_metadata=database_metadata,
+            connection_qualified_name=input.connection_qualified_name,
+        )
+
+        p_out = _processed_file(input.output_path, "processes")
+        cp_out = _processed_file(input.output_path, "column_processes")
+        write_jsonl(p_out, processes)
+        write_jsonl(cp_out, column_processes)
+
+        logger.info(
+            "parse_lineage: processes=%d, column_processes=%d, parse_failures=%d",
+            len(processes),
+            len(column_processes),
+            failures,
+        )
+
+        return ParseLineageOutput(
+            processes_file=_ref(p_out),
+            column_processes_file=_ref(cp_out),
+            process_count=len(processes),
+            column_process_count=len(column_processes),
+            parse_failures=failures,
+        )
+
     # ------------------------------------------------------------------
-    # TRANSFORM @task — shared between transform_metadata @entrypoint and
-    # any future per-type fan-out.
+    # TRANSFORM @task — called once per asset typename from run()
     # ------------------------------------------------------------------
 
     @task(timeout_seconds=1800)
     async def transform_data(self, input: TransformTaskInput) -> TransformTaskOutput:
         """Transform processed JSONL data into Atlas JSON for one asset typename.
 
-        Reads ``<processed_data_path>/processed/<subdir>/result-0.json`` (JSONL
-        from :meth:`process_metabaseprocess`) and writes the Atlas entities to
+        Reads ``<processed_data_path>/processed/<subdir>/result-0.json`` and
+        writes Atlas entities to
         ``<output_path>/transformed/<typename>/result-<chunk>.json``.
-
-        The transformer (``QueryBasedTransformer``) is Daft-based — we wrap the
-        JSONL records in a Daft DataFrame in-memory rather than going through
-        the SDK's ``JsonFileReader`` (which depends on Dapr/object-store and is
-        not needed for local on-disk reads).
-
-        TODO(upgrade-v3): swap ``QueryBasedTransformer`` + Daft + YAML templates
-        for the v3 asset-mapper pattern (pyatlan Asset → ``to_nested_bytes()``).
-        Tracked in PR summary.
         """
         typename = (input.typename or "").upper()
         if not typename:
@@ -574,18 +619,29 @@ class MetabaseApp(App):
         return TransformTaskOutput(typename=typename, record_count=rows)
 
     # ==================================================================
-    # @entrypoint methods
+    # run() — single orchestrator
     # ==================================================================
 
-    @entrypoint
-    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput:
-        """End-to-end metadata extraction (v2 ``MetabaseMetadataExtractionWorkflow``)."""
-        output_path = input.output_path or _default_output_path(input.workflow_id)
-        logger.info("MetabaseApp.extract_metadata: output_path=%s", output_path)
+    async def run(self, input: MetabaseInput) -> MetabaseOutput:  # type: ignore[override]
+        """End-to-end Metabase metadata extraction + transform.
 
-        # Resolve credential routing ONCE (CredentialRef vs inline) and thread
-        # it through every @task input — each task is its own activity and
-        # rebuilds its own client via self._build_client(input).
+        Orchestration:
+          1. Validate + resolve output path
+          2. Resolve credential routing (CredentialRef vs inline)
+          3. Extract: collections, dashboards, questions, databases
+          4. Filter: apply include/exclude (collection-level; cascades to
+             dashboards/questions; databases pass through)
+          5. Detail fetch: per-dashboard, per-database, per-question SQL
+          6. Enrich: inject sourceURL + build BIProcess records
+          7. Parse lineage: sqlglot → Process + ColumnProcess records
+          8. Transform: fan out across all 6 asset typenames
+          9. Upload ``transformed/`` tree to object store
+         10. Return MetabaseOutput
+        """
+        output_path = input.output_path or _default_output_path(input.workflow_id)
+        logger.info("MetabaseApp.run: output_path=%s", output_path)
+
+        # Resolve credentials ONCE and thread through every @task input.
         cred_ref, inline_creds = build_credential_ref(input)
 
         fetch_input = FetchInput(
@@ -594,24 +650,28 @@ class MetabaseApp(App):
             inline_credentials=inline_creds,
         )
 
+        # --- 3. Extract -------------------------------------------------
         collections = await self.extract_collections(fetch_input)
         dashboards = await self.extract_dashboards(fetch_input)
         questions = await self.extract_questions(fetch_input)
         databases = await self.extract_databases(fetch_input)
 
-        filter_input = FilterInput(
-            output_path=output_path,
-            include_collections=input.include_collections,
-            exclude_collections=input.exclude_collections,
-            collections_file=collections.output_file,
-            dashboards_file=dashboards.output_file,
-            questions_file=questions.output_file,
-            databases_file=databases.output_file,
-            credential_ref=cred_ref,
-            inline_credentials=inline_creds,
+        # --- 4. Filter --------------------------------------------------
+        filtered = await self.filter_data(
+            FilterInput(
+                output_path=output_path,
+                include_collections=input.include_collections,
+                exclude_collections=input.exclude_collections,
+                collections_file=collections.output_file,
+                dashboards_file=dashboards.output_file,
+                questions_file=questions.output_file,
+                databases_file=databases.output_file,
+                credential_ref=cred_ref,
+                inline_credentials=inline_creds,
+            )
         )
-        filtered = await self.filter_data(filter_input)
 
+        # --- 5. Detail fetch -------------------------------------------
         dashboard_details = await self.extract_individual_dashboards(
             FetchDetailInput(
                 output_path=output_path,
@@ -620,7 +680,7 @@ class MetabaseApp(App):
                 inline_credentials=inline_creds,
             )
         )
-        await self.extract_individual_databases(
+        database_metadata = await self.extract_individual_databases(
             FetchDetailInput(
                 output_path=output_path,
                 source_file=filtered.databases_filtered_file,
@@ -637,8 +697,7 @@ class MetabaseApp(App):
             )
         )
 
-        # metabase_host is resolved inside process_metabaseprocess via
-        # _build_client(input).host — works for CredentialRef AND inline paths.
+        # --- 6. Enrich --------------------------------------------------
         processed = await self.process_metabaseprocess(
             ProcessInput(
                 output_path=output_path,
@@ -652,40 +711,21 @@ class MetabaseApp(App):
             )
         )
 
-        # Upload the processed/ tree so downstream AE nodes can pick it up.
-        processed_dir = os.path.join(output_path, _PROCESSED_DIR)
-        transformed_data_prefix = ""
-        if os.path.isdir(processed_dir):
-            upload = await self.upload(
-                UploadInput(
-                    local_path=processed_dir,
-                    tier=StorageTier.RETAINED,
-                )
-            )
-            transformed_data_prefix = upload.ref.storage_path or ""
-
-        return ExtractionOutput(
-            transformed_data_prefix=transformed_data_prefix,
-            connection_qualified_name=input.connection.attributes.qualified_name,
-            output_path=output_path,
-            total_records=processed.total_records,
-        )
-
-    @entrypoint
-    async def transform_metadata(self, input: TransformInput) -> TransformOutput:
-        """Transform processed JSONL into Atlas JSON for every asset typename."""
-        output_path = input.output_path or _default_output_path(input.workflow_id)
-        processed_data_path = input.processed_data_path or output_path
-        logger.info(
-            "MetabaseApp.transform_metadata: output_path=%s, processed_data_path=%s",
-            output_path,
-            processed_data_path,
-        )
-
+        # --- 7. Parse lineage (sqlglot) ---------------------------------
         connection_qn = input.connection.attributes.qualified_name
-        connection_name = input.connection.attributes.name
+        await self.parse_lineage(
+            ParseLineageInput(
+                output_path=output_path,
+                connection_qualified_name=connection_qn,
+                questions_processed_file=processed.questions_processed_file,
+                database_metadata_file=database_metadata.output_file,
+            )
+        )
 
-        total = 0
+        # --- 8. Transform (fan-out) ------------------------------------
+        connection_name = input.connection.attributes.name
+        processed_data_path = input.processed_data_path or output_path
+        total_transformed = 0
         for typename in TRANSFORM_ASSET_TYPES:
             stats = await self.transform_data(
                 TransformTaskInput(
@@ -698,8 +738,9 @@ class MetabaseApp(App):
                     chunk_start=input.chunk_start,
                 )
             )
-            total += stats.record_count
+            total_transformed += stats.record_count
 
+        # --- 9. Upload transformed/ tree -------------------------------
         transformed_dir = os.path.join(output_path, _TRANSFORMED_DIR)
         transformed_data_prefix = ""
         if os.path.isdir(transformed_dir):
@@ -708,9 +749,10 @@ class MetabaseApp(App):
             )
             transformed_data_prefix = upload.ref.storage_path or ""
 
-        return TransformOutput(
+        # --- 10. Return -------------------------------------------------
+        return MetabaseOutput(
             transformed_data_prefix=transformed_data_prefix,
             connection_qualified_name=connection_qn,
             output_path=output_path,
-            total_records=total,
+            total_records=total_transformed,
         )

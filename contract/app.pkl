@@ -14,11 +14,9 @@ credentialConnectorType = "rest"
 
 // ---- Workflow wiring ----
 //
-// The App class lives in app/connector.py and exposes two @entrypoint
-// methods: extract_metadata and transform_metadata. The toolkit derives
-// the workflowType from `name` by default; override here so the manifest
-// matches the class name registered in ATLAN_APP_MODULE.
-workflowTypeOverride = "MetabaseMetadataExtractionWorkflow"
+// The App class lives in app/connector.py and exposes a single `run()`
+// override (openapi pattern). The toolkit derives the workflow type from
+// `name` — no override needed.
 hasPublishStep = true
 
 // ---- Credential config ----
