@@ -18,6 +18,10 @@ columns:
       source_query: query_type
     metabaseQuery:
       source_query: metabase_query
+    metabaseSourceDatabaseName:
+      source_query: metabase_database_name
+    metabaseSourceSchemaName:
+      source_query: metabase_schema_name
     metabaseCollectionName:
       source_query: collection_name
     metabaseCollectionQualifiedName:
