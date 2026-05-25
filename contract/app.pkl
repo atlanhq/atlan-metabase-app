@@ -14,36 +14,49 @@ credentialConnectorType = "rest"
 
 // ---- Workflow wiring ----
 //
-// The App class lives in app/connector.py and exposes a single `run()`
-// override (openapi pattern). The workflow type matches the app name —
-// the SDK registers a single Temporal workflow keyed off this string,
-// which the platform's Argo DAG dispatches once for the whole pipeline
-// (matches marketplace-packages/atlan/metabase/templates/default.yaml).
+// Two @entrypoint methods on MetabaseApp (see app/connector.py):
+//   - extract_metadata  → workflow "metabase:extract-metadata"
+//   - extract_lineage   → workflow "metabase:extract-lineage"
+//
+// `workflowTypeOverride` makes the first DAG node (`extract`) dispatch
+// the metadata entrypoint explicitly. Without it the toolkit would use
+// the bare app name, which doesn't match the SDK's registered workflow
+// name for multi-entrypoint apps.
 workflowType = "metabase"
+workflowTypeOverride = "metabase:extract-metadata"
+
 hasPublishStep = true
 
-// ---- Pipeline (5-node DAG, custom lineage builder) ----
+// ---- Pipeline (5-node DAG, ARS 2.0 publish) ---------------------------
 //
 //   extract            (this app's `extract_metadata` @entrypoint)
-//   ├──► qi            (QueryIntelligenceNode, parses metabaseQuery SQL)
-//   ├──► publish       (PublishNode, publishes Collection/Dashboard/Question/BIProcess)
+//   ├──► qi            (QueryIntelligenceNode; parses metabaseQuery SQL,
+//   │                   reads inputs from transformed_data_prefix,
+//   │                   writes parsed-SQL output to view_lineage_output_prefix)
+//   ├──► publish       (PublishNode; publishes Collection/Dashboard/Question/
+//   │                   BIProcess to Atlan via the publish-app)
 //   └──► extract-lineage (this app's `extract_lineage` @entrypoint —
-//                         REPLACES the shared LineageNode because Metabase
-//                         is a BI connector and the lineage edges are
-//                         CROSS-connector. The shared LineageNode assumes
-//                         a single connection cache and only resolves
-//                         WITHIN-connector view lineage.)
+//                         replaces the shared LineageNode because Metabase
+//                         is a BI connector and the lineage is cross-connector;
+//                         emits ARS 2.0 Process/ColumnProcess records with
+//                         PARTIAL_OBJECT / PARTIAL_FIELD references that the
+//                         publish-app's ARS 2.0 resolver matches against
+//                         existing Atlan assets at publish time)
 //        │
-//        └──► lineage-publish (LineagePublishNode, publishes Process/ColumnProcess
-//                              with connection_creation_enabled = false)
+//        └──► lineage-publish (LineagePublishNode; publishes the ARS-staged
+//                              Process/ColumnProcess records — no `enable_ars`
+//                              flag needed, the node uses ARS 2.0 by default,
+//                              and `connection_creation_enabled = false`
+//                              keeps it from clobbering the asset connection
+//                              cache)
 //
-// Pattern adapted from atlan-mysql-app (which uses the shared LineageNode)
-// and atlan-hightouch-app (which uses two @entrypoint methods on its App
-// for the same reason — extract metadata + extract lineage in separate
-// AE workflow executions).
+// Long timeouts (24h) on every long-running node — the AE default is 2h
+// which is too tight for any non-trivial publish on a large tenant
+// (matches the canonical `ErrorHandlingConfig` default in the toolkit's
+// `PublishStep`).
 extraNodes {
   ["qi"] = new QueryIntelligenceNode {
-    displayName = "Parse Metabase Question SQL Lineage"
+    displayName = "Parse Metabase Question SQL"
     vendorName = "metabase"
     sqlKey = "attributes.metabaseQuery"
     catalogKey = "attributes.metabaseSourceDatabaseName"
@@ -53,23 +66,28 @@ extraNodes {
     parsingMode = "competitive"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
   }
   ["publish"] = new PublishNode {
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
     args {
       ["connection_cache_enabled"] = true
       ["connection_cache_via_app_enabled"] = true
       ["current_state_via_app_enabled"] = true
     }
   }
-  // Custom lineage builder — second @entrypoint on this app.
-  // Reads QI's parsed-SQL output, constructs Process + ColumnProcess
-  // records with cross-connector qualified names, uploads to
-  // $.extract-lineage.outputs.lineage_stage_prefix.
   ["extract-lineage"] = new DAGNode {
     displayName = "Build Metabase Cross-Connector Lineage"
     workflowType = "metabase:extract-lineage"
     appName = "{app_name}"
     taskQueue = "atlan-metabase-{deployment_name}"
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
     args {
       ["workflow_id"] = "{{workflow-id}}"
       ["connection"] = "{{connection}}"
@@ -91,12 +109,17 @@ extraNodes {
     }
   }
   ["lineage-publish"] = new LineagePublishNode {
-    // Wire to OUR extract-lineage node, not the shared lineage-app.
+    // ARS 2.0 publish — PublishNode-class read of Process/ColumnProcess
+    // emitted by extract-lineage, resolved via publish-app's modern ARS
+    // resolver (the shared `lineage-app` is intentionally skipped).
     upstream = "extract-lineage"
     transformedDataPrefix = "$.extract-lineage.outputs.lineage_stage_prefix"
     publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
     currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
     waitForAssetPublish = false
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
     dependsOn = null
     dependsOnCondition = new DependencyCondition {
       nodeId = "extract-lineage"
