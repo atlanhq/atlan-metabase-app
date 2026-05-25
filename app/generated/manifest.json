@@ -6,7 +6,7 @@
       "activity_display_name": "Extract Metabase Metadata",
       "app_name": "{app_name}",
       "inputs": {
-        "workflow_type": "metabase",
+        "workflow_type": "metabase:extract-metadata",
         "app_name": "{app_name}",
         "app_id": "",
         "argo_workflow_slug": "",
@@ -24,7 +24,7 @@
     },
     "qi": {
       "activity_name": "execute_workflow",
-      "activity_display_name": "Parse Metabase Question SQL Lineage",
+      "activity_display_name": "Parse Metabase Question SQL",
       "app_name": "automation-engine",
       "inputs": {
         "workflow_type": "QueryIntelligenceWorkflow",
@@ -45,6 +45,9 @@
       },
       "depends_on": {
         "node_id": "extract"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "publish": {
@@ -70,6 +73,9 @@
       },
       "depends_on": {
         "node_id": "extract"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "extract-lineage": {
@@ -98,6 +104,9 @@
             "tag": "success"
           }
         ]
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "lineage-publish": {
@@ -125,6 +134,9 @@
       "depends_on": {
         "node_id": "extract-lineage",
         "tag": "success"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     }
   }

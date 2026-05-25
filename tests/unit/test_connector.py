@@ -39,7 +39,6 @@ from app.contracts import (
     MetabaseLineageInput,
 )
 
-
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
@@ -333,10 +332,12 @@ class TestFilterDataTask:
             out.questions_filtered_file,
         ):
             assert ref is not None
+            assert ref.local_path is not None
             text = Path(ref.local_path).read_text()
             assert "skipped" not in text
         # Databases pass through unfiltered.
         assert out.databases_filtered_file is not None
+        assert out.databases_filtered_file.local_path is not None
         db_text = Path(out.databases_filtered_file.local_path).read_text()
         assert "db" in db_text
 
@@ -398,11 +399,11 @@ class TestExtractMetadataOrchestration:
         app.process_metabaseprocess = AsyncMock(return_value=fake_process)
         app.transform_data = AsyncMock(return_value=fake_transform)
         # Stub run_id so path formatting works without SDK context.
-        type(app).run_id = property(lambda _self: "run-xyz")
+        type(app).run_id = property(lambda _self: "run-xyz")  # type: ignore[misc]
         # Bypass self.upload() context dependency.
         app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
 
-        out = await app.extract_metadata(metabase_input)
+        out = await app.extract_metadata(metabase_input)  # type: ignore[call-arg]
 
         assert out.connection_qualified_name == "default/metabase/test"
         assert out.view_lineage_output_prefix.endswith("/view-lineage")
@@ -420,7 +421,7 @@ class TestExtractMetadataOrchestration:
     ):
         monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
         app = MetabaseApp()
-        type(app).run_id = property(lambda _self: "run-xyz")
+        type(app).run_id = property(lambda _self: "run-xyz")  # type: ignore[misc]
         for name in (
             "extract_collections",
             "extract_dashboards",
@@ -451,7 +452,7 @@ class TestExtractMetadataOrchestration:
             )
         app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
         inp = MetabaseInput(workflow_id="wf-1", connection=connection)
-        out = await app.extract_metadata(inp)
+        out = await app.extract_metadata(inp)  # type: ignore[call-arg]
         # output_path defaulted under our patched tempdir.
         assert str(tmp_path) in out.output_path
 
@@ -476,7 +477,7 @@ class TestExtractLineage:
     @pytest.mark.asyncio
     async def test_empty_qi_output_returns_zero_counts(self, connection, tmp_path):
         app = MetabaseApp()
-        type(app).run_id = property(lambda _self: "run-x")
+        type(app).run_id = property(lambda _self: "run-x")  # type: ignore[misc]
         app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
         inp = MetabaseLineageInput(
             workflow_id="wf",
@@ -485,7 +486,7 @@ class TestExtractLineage:
             view_lineage_input_prefix=str(tmp_path / "nope"),
             output_path=str(tmp_path / "out"),
         )
-        out = await app.extract_lineage(inp)
+        out = await app.extract_lineage(inp)  # type: ignore[call-arg]
         assert out.process_count == 0
         assert out.column_process_count == 0
 
@@ -526,7 +527,7 @@ class TestExtractLineage:
         (qi_dir / "out.json").write_text(json.dumps(record) + "\n")
 
         app = MetabaseApp()
-        type(app).run_id = property(lambda _self: "run-x")
+        type(app).run_id = property(lambda _self: "run-x")  # type: ignore[misc]
         app.upload = AsyncMock(
             return_value=MagicMock(ref=MagicMock(storage_path="x/y"))
         )
@@ -538,7 +539,7 @@ class TestExtractLineage:
             output_path=str(tmp_path / "out"),
         )
 
-        out = await app.extract_lineage(inp)
+        out = await app.extract_lineage(inp)  # type: ignore[call-arg]
         assert out.process_count == 1
         assert out.column_process_count == 1
 
@@ -582,8 +583,9 @@ class TestExtractLineage:
 def test_passthrough_modules_includes_transformers_and_lineage():
     """Both helper packages must be in passthrough_modules so the SDK
     instrumentation skips them."""
-    assert "app.transformers" in MetabaseApp.passthrough_modules
-    assert "app.lineage" in MetabaseApp.passthrough_modules
+    pt = MetabaseApp.passthrough_modules or set()
+    assert "app.transformers" in pt
+    assert "app.lineage" in pt
 
 
 def test_app_name_is_metabase():

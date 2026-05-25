@@ -22,7 +22,6 @@ from app.lineage.ars_builder import (
 )
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
