@@ -65,6 +65,8 @@ from app.extracts.process import (
 )
 from app.extracts.questions import fetch_question_queries, fetch_questions_summaries
 from app.handler import MetabaseHandler  # noqa: F401 — registers handler
+from app.lineage.ars_builder import build_column_process, build_process, process_hash
+from app.lineage.qi_reader import iter_qi_records, parse_qi_record
 from app.transformers import MetabaseTransformer
 from app.utils import read_jsonl, write_jsonl
 
@@ -175,7 +177,7 @@ class MetabaseApp(App):
     """
 
     name = "metabase"
-    passthrough_modules = {"app.transformers"}
+    passthrough_modules = {"app.transformers", "app.lineage"}
 
     # ------------------------------------------------------------------
     # Client + credential resolution
@@ -830,17 +832,47 @@ class MetabaseApp(App):
             input.view_lineage_input_prefix,
         )
 
-        # The actual QI input download — done by the SDK runtime via a
-        # FileReference would be ideal. For initial wiring we accept that
-        # the platform/runtime mounts the QI output at a local path under
-        # input.view_lineage_input_prefix; downstream PRs will refine this
-        # to a proper FileReference + ObjectStore read.
+        # Read QI parsed-SQL output → build ARS Process + ColumnProcess.
+        # QI NDJSON shape: {QUERY_ID, SQL, PARSED_DATA{dbobjs, relationships}, OUTPUT_FLAGS}
+        # See app/lineage/qi_reader.py for format coercion and
+        # app/lineage/ars_builder.py for the PARTIAL_OBJECT / PARTIAL_FIELD
+        # record construction.
+        connection_name = input.connection.attributes.name or "metabase"
         processes: list[dict[str, Any]] = []
         column_processes: list[dict[str, Any]] = []
-        # NOTE: parsing of QI output is intentionally deferred to a follow-up
-        # PR — this entrypoint provides the contract scaffold and DAG wiring.
-        # The QI output format / location is platform-managed and not
-        # reproducible in our local Docker e2e harness (no QI app deployed).
+
+        for record in iter_qi_records(input.view_lineage_input_prefix):
+            query_id, sql, source_tables, source_columns = parse_qi_record(record)
+            if not query_id:
+                continue
+            # QI QUERY_ID is the MetabaseQuestion qualifiedName
+            # (default/metabase/<conn>/questions/<id>) — extract the trailing id.
+            question_id = query_id.rsplit("/", 1)[-1]
+            question_name = record.get("QUESTION_NAME") or query_id
+
+            process = build_process(
+                connection_qualified_name=connection_qn,
+                connection_name=connection_name,
+                question_id=question_id,
+                question_name=question_name,
+                sql=sql,
+                source_tables=source_tables,
+            )
+            if process is None:
+                continue
+            processes.append(process)
+
+            cp = build_column_process(
+                connection_qualified_name=connection_qn,
+                connection_name=connection_name,
+                question_id=question_id,
+                question_name=question_name,
+                sql=sql,
+                source_columns=source_columns,
+                parent_process_hash=process_hash(question_id, sql),
+            )
+            if cp is not None:
+                column_processes.append(cp)
 
         stage_dir = os.path.join(output_path, "lineage-stage")
         os.makedirs(os.path.join(stage_dir, "PROCESS"), exist_ok=True)
