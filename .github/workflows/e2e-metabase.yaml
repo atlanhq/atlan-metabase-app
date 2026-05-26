@@ -24,12 +24,11 @@ name: e2e-metabase
 # `metabase:` service `image:` line below and tests/e2e/conftest.py.
 
 on:
-  # Required-check gate — runs on every PR + every push to main.
+  # Label-gated — adding the `e2e-metabase` label to a PR triggers it.
+  # Heavyweight (Metabase Docker cold-start + 1000-asset seed + crawl
+  # = 3-5 min), so opt-in rather than always-on.
   pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
-  push:
-    branches: [main]
+    types: [labeled, opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       scale:
@@ -43,13 +42,15 @@ permissions:
   pull-requests: write
 
 concurrency:
-  # Cancel-in-progress on newer commits to the same ref — required-check
-  # semantics means we always re-run against the latest SHA anyway.
+  # Cancel-in-progress on newer commits to the same ref.
   group: e2e-metabase-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   e2e:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'e2e-metabase')
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
