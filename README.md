@@ -194,8 +194,7 @@ atlan-metabase-app/
 ├── tests/
 │   ├── unit/                      # 304 tests, 86% coverage
 │   ├── integration/
-│   ├── e2e/                       # Live e2e against metabase/metabase Docker
-│   └── parity/                    # v2-vs-v3 parity harness
+│   └── e2e/                       # Live e2e against metabase/metabase Docker (~1000 assets)
 ├── main.py                        # Container entry shim → app.run_dev.main
 └── pyproject.toml
 ```
