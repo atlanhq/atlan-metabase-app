@@ -52,24 +52,11 @@ _LOCAL_DEV_CREDENTIAL_NAME = "metabase-default"
 
 
 def _seed_credential_bundle() -> dict[str, str]:
-    """Read Metabase creds from env and return the bundle for the secret store.
-
-    Honours both prefix shapes so the same ``main.py`` works for the local
-    integration test (``E2E_METABASE_*``) and the SDR run
-    (``E2E_METABASE_BASIC_*``).
-    """
-    host = os.environ.get("E2E_METABASE_HOST") or os.environ.get(
-        "E2E_METABASE_BASIC_HOST", ""
-    )
-    port = os.environ.get("E2E_METABASE_PORT") or os.environ.get(
-        "E2E_METABASE_BASIC_PORT", "443"
-    )
-    username = os.environ.get("E2E_METABASE_USERNAME") or os.environ.get(
-        "E2E_METABASE_BASIC_USERNAME", ""
-    )
-    password = os.environ.get("E2E_METABASE_PASSWORD") or os.environ.get(
-        "E2E_METABASE_BASIC_PASSWORD", ""
-    )
+    """Read Metabase creds from env and return the bundle for the secret store."""
+    host = os.environ.get("E2E_METABASE_HOST", "")
+    port = os.environ.get("E2E_METABASE_PORT", "443")
+    username = os.environ.get("E2E_METABASE_USERNAME", "")
+    password = os.environ.get("E2E_METABASE_PASSWORD", "")
     return {
         "host": host,
         "port": str(port),
