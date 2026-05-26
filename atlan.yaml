@@ -2,7 +2,7 @@
 # To regenerate: pkl eval -m . contract/app.pkl
 name: metabase
 app_id: 019e3a59-89d2-7310-acea-e8eae494483f
-display_name: Metabase
+display_name: Metabase Assets
 type: connector
 execution_mode: native
 icon_url: https://assets.atlan.com/assets/metabase.svg
@@ -11,7 +11,7 @@ build_tag: v1
 self_deployed_runtime: false
 entrypoints:
 - name: metabase
-  display_name: Metabase
+  display_name: Metabase Assets
   icon_url: https://assets.atlan.com/assets/metabase.svg
   type: connector
 deploy:
@@ -43,4 +43,5 @@ deploy:
     APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR: 'false'
 dockerfile: ./deploy/Dockerfile
 argo_package_names:
-- '@csa/metabase'
+- '@atlan/metabase'
+docs_url: https://docs.atlan.com/apps/connectors/business-intelligence/metabase
