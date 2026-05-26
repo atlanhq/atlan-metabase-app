@@ -30,11 +30,9 @@ class TestYamlFilesExist:
     def test_biprocess_yaml_exists(self):
         assert os.path.isfile(os.path.join(TRANSFORMER_DIR, "biprocess.yaml"))
 
-    def test_process_yaml_exists(self):
-        assert os.path.isfile(os.path.join(TRANSFORMER_DIR, "process.yaml"))
-
-    def test_column_process_yaml_exists(self):
-        assert os.path.isfile(os.path.join(TRANSFORMER_DIR, "columnprocess.yaml"))
+    # Process + ColumnProcess YAMLs were removed when SQL lineage was
+    # delegated to the QueryIntelligence app + ARS — see
+    # ``contract/app.pkl extraNodes`` and ``app/lineage/ars_builder.py``.
 
 
 # =============================================================================
@@ -58,8 +56,6 @@ class TestYamlTopLevelKeys:
             "metabasedashboard.yaml",
             "metabasequestion.yaml",
             "biprocess.yaml",
-            "process.yaml",
-            "columnprocess.yaml",
         ],
     )
     def test_yaml_has_table_key(self, filename):
@@ -73,8 +69,6 @@ class TestYamlTopLevelKeys:
             "metabasedashboard.yaml",
             "metabasequestion.yaml",
             "biprocess.yaml",
-            "process.yaml",
-            "columnprocess.yaml",
         ],
     )
     def test_yaml_has_columns_key(self, filename):
@@ -106,8 +100,6 @@ class TestQualifiedNameUsesConcat:
             "metabasedashboard.yaml",
             "metabasequestion.yaml",
             "biprocess.yaml",
-            "process.yaml",
-            "columnprocess.yaml",
         ],
     )
     def test_qualified_name_source_query_uses_concat(self, filename):
@@ -130,8 +122,6 @@ class TestMetabaseTransformerInit:
         "METABASEDASHBOARD",
         "METABASEQUESTION",
         "BIPROCESS",
-        "PROCESS",
-        "COLUMNPROCESS",
     }
 
     @pytest.fixture
@@ -157,11 +147,9 @@ class TestMetabaseTransformerInit:
     def test_biprocess_registered(self, transformer):
         assert "BIPROCESS" in transformer.entity_class_definitions
 
-    def test_process_registered(self, transformer):
-        assert "PROCESS" in transformer.entity_class_definitions
-
-    def test_column_process_registered(self, transformer):
-        assert "COLUMNPROCESS" in transformer.entity_class_definitions
+    # PROCESS + COLUMNPROCESS are produced downstream by the
+    # QueryIntelligence app + ARS — not registered locally. See
+    # ``app/transformers/__init__.py``.
 
     def test_no_unexpected_extra_keys(self, transformer):
         actual = set(transformer.entity_class_definitions.keys())

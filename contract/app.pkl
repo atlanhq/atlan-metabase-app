@@ -1,0 +1,245 @@
+amends "@app-contract-toolkit/NativeApp.pkl"
+
+import "@app-contract-toolkit/Config.pkl"
+import "@app-contract-toolkit/Connectors.pkl"
+
+// ---- App identity ----
+
+name = "metabase"
+displayName = "Metabase"
+connector = Connectors.METABASE
+icon = "https://assets.atlan.com/assets/metabase.svg"
+logo = "https://assets.atlan.com/assets/metabase.svg"
+credentialConnectorType = "rest"
+
+// ---- Workflow wiring ----
+//
+// Two @entrypoint methods on MetabaseApp (see app/connector.py):
+//   - extract_metadata  → workflow "metabase:extract-metadata"
+//   - extract_lineage   → workflow "metabase:extract-lineage"
+//
+// `workflowTypeOverride` makes the first DAG node (`extract`) dispatch
+// the metadata entrypoint explicitly. Without it the toolkit would use
+// the bare app name, which doesn't match the SDK's registered workflow
+// name for multi-entrypoint apps.
+workflowType = "metabase"
+workflowTypeOverride = "metabase:extract-metadata"
+
+hasPublishStep = true
+
+// ---- Pipeline (5-node DAG, ARS 2.0 publish) ---------------------------
+//
+//   extract            (this app's `extract_metadata` @entrypoint)
+//   ├──► qi            (QueryIntelligenceNode; parses metabaseQuery SQL,
+//   │                   reads inputs from transformed_data_prefix,
+//   │                   writes parsed-SQL output to view_lineage_output_prefix)
+//   ├──► publish       (PublishNode; publishes Collection/Dashboard/Question/
+//   │                   BIProcess to Atlan via the publish-app)
+//   └──► extract-lineage (this app's `extract_lineage` @entrypoint —
+//                         replaces the shared LineageNode because Metabase
+//                         is a BI connector and the lineage is cross-connector;
+//                         emits ARS 2.0 Process/ColumnProcess records with
+//                         PARTIAL_OBJECT / PARTIAL_FIELD references that the
+//                         publish-app's ARS 2.0 resolver matches against
+//                         existing Atlan assets at publish time)
+//        │
+//        └──► lineage-publish (LineagePublishNode; publishes the ARS-staged
+//                              Process/ColumnProcess records — no `enable_ars`
+//                              flag needed, the node uses ARS 2.0 by default,
+//                              and `connection_creation_enabled = false`
+//                              keeps it from clobbering the asset connection
+//                              cache)
+//
+// Long timeouts (24h) on every long-running node — the AE default is 2h
+// which is too tight for any non-trivial publish on a large tenant
+// (matches the canonical `ErrorHandlingConfig` default in the toolkit's
+// `PublishStep`).
+extraNodes {
+  ["qi"] = new QueryIntelligenceNode {
+    displayName = "Parse Metabase Question SQL"
+    vendorName = "metabase"
+    sqlKey = "attributes.metabaseQuery"
+    catalogKey = "attributes.metabaseSourceDatabaseName"
+    schemaKey = "attributes.metabaseSourceSchemaName"
+    timestampKey = ""
+    mineOutputType = "json"
+    parsingMode = "competitive"
+    inputPrefix = "$.extract.outputs.transformed_data_prefix"
+    outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
+  }
+  ["publish"] = new PublishNode {
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
+    args {
+      ["connection_cache_enabled"] = true
+      ["connection_cache_via_app_enabled"] = true
+      ["current_state_via_app_enabled"] = true
+    }
+  }
+  ["extract-lineage"] = new DAGNode {
+    displayName = "Build Metabase Cross-Connector Lineage"
+    workflowType = "metabase:extract-lineage"
+    appName = "{app_name}"
+    taskQueue = "atlan-metabase-{deployment_name}"
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
+    args {
+      ["workflow_id"] = "{{workflow-id}}"
+      ["connection"] = "{{connection}}"
+      ["connection_qualified_name"] = "$.extract.outputs.connection_qualified_name"
+      ["view_lineage_input_prefix"] = "$.extract.outputs.view_lineage_output_prefix"
+    }
+    dependsOn = null
+    dependsOnCondition = new DependencyCondition {
+      andConditions {
+        new DependencyCondition {
+          nodeId = "qi"
+          tag = "success"
+        }
+        new DependencyCondition {
+          nodeId = "publish"
+          tag = "success"
+        }
+      }
+    }
+  }
+  ["lineage-publish"] = new LineagePublishNode {
+    // ARS 2.0 publish — PublishNode-class read of Process/ColumnProcess
+    // emitted by extract-lineage, resolved via publish-app's modern ARS
+    // resolver (the shared `lineage-app` is intentionally skipped).
+    upstream = "extract-lineage"
+    transformedDataPrefix = "$.extract-lineage.outputs.lineage_stage_prefix"
+    publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
+    currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
+    waitForAssetPublish = false
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
+    dependsOn = null
+    dependsOnCondition = new DependencyCondition {
+      nodeId = "extract-lineage"
+      tag = "success"
+    }
+  }
+}
+
+// ---- Credential config ----
+
+credentialCommonFields {
+  new FieldSpec {
+    name = "host"
+    displayName = "Host"
+    placeholder = "https://<account-id>.metabaseapp.com"
+    helpText = "Metabase host URL, including the protocol (e.g. https://my-instance.metabaseapp.com)."
+    width = 8
+  }
+  new FieldSpec {
+    name = "port"
+    displayName = "Port"
+    fieldType = "number"
+    defaultValue = "443"
+    required = false
+    width = 2
+  }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec {
+        name = "username"
+        displayName = "Username"
+        placeholder = "Metabase username or email"
+        width = 4
+      }
+      new FieldSpec {
+        name = "password"
+        displayName = "Password"
+        placeholder = "Metabase password"
+        sensitive = true
+        width = 4
+      }
+    }
+  }
+}
+
+// ---- Workflow config (UI form) ----
+
+uiConfig {
+  tasks {
+    ["Credential"] {
+      description = "Credential Details"
+      inputs {
+        ["extraction-method"] = new Config.TextInput {
+          title = "Extraction method"
+          defaultValue = "direct"
+          hide = true
+        }
+        ["credential-guid"] = new Config.CredentialInput {
+          title = ""
+          credType = "atlan-connectors-metabase"
+          placeholderText = "Credential Guid"
+        }
+      }
+    }
+    ["Connection"] {
+      description = "Connection Details"
+      inputs {
+        ["connection"] = new Config.ConnectionCreator {
+          title = ""
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+    ["Metadata"] {
+      description = "Metadata"
+      inputs {
+        ["include-collections"] = new Config.APITree {
+          title = "Include collections"
+          desc = "Metabase collections to include in the crawl. Empty selection = include all non-personal collections."
+          credentialType = "atlan-connectors-metabase"
+        }
+        ["exclude-collections"] = new Config.APITree {
+          title = "Exclude collections"
+          desc = "Metabase collections to skip during the crawl."
+          credentialType = "atlan-connectors-metabase"
+        }
+        ["preflight-check"] = new Config.SageV2 {
+          title = ""
+          checks {
+            new Dynamic {
+              id = 1
+              name = "collectionCountCheck"
+              title = "Collection count"
+              loaderText = "Counting collections"
+            }
+            new Dynamic {
+              id = 2
+              name = "dashboardCountCheck"
+              title = "Dashboard count"
+              loaderText = "Counting dashboards"
+            }
+            new Dynamic {
+              id = 3
+              name = "questionCountCheck"
+              title = "Question count"
+              loaderText = "Counting questions"
+            }
+            new Dynamic {
+              id = 4
+              name = "nativeQueryPermissionCheck"
+              title = "Native query permissions"
+              loaderText = "Verifying native query permissions"
+            }
+          }
+        }
+      }
+    }
+  }
+}
