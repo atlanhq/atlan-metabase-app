@@ -9,8 +9,14 @@ name: Integration Tests
 # so existing branch-protection rules keep working without edits.
 
 on:
+  # Run on every PR + every push to main. Required-check gate, not opt-in.
+  # The 'e2e-test' label still opts into FULL mode (the 5 slow
+  # workflow-completion scenarios); otherwise we run FAST mode.
   pull_request:
-    types: [labeled]
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       mode:
@@ -22,14 +28,10 @@ on:
 
 jobs:
   tests:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'int-test' ||
-      github.event.label.name == 'e2e-test'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ (github.event.label.name == 'e2e-test' || github.event.inputs.mode == 'full') && 60 || 20 }}
     concurrency:
-      group: integration-tests-${{ github.event.label.name || github.event.inputs.mode }}-${{ github.ref }}
+      group: integration-tests-${{ github.ref }}
       cancel-in-progress: true
     permissions:
       pull-requests: write

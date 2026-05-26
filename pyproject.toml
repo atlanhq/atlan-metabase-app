@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
-    "atlan-application-sdk[daft,iam-auth,pandas,tests,workflows]==3.13.2",
+    "atlan-application-sdk[daft,iam-auth,pandas,tests,workflows]>=3.13.0,<4.0.0",
     "poethepoet>=0.38.0",
 ]
 
@@ -41,7 +41,7 @@ stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || 
 # Fetch Dapr resource manifests (secretstore, statestore, objectstore, …) from
 # the application-sdk repo's components/ directory at the pinned ref. Required
 # by `atlan app run` and by every CI workflow that starts the local stack
-# (integration-tests, parity, smoke, stress). Matches the atlan-mssql-app v3
+# (integration-tests, e2e). Matches the atlan-mssql-app v3
 # pattern. components/ is gitignored so each environment fetches a fresh copy.
 [tool.poe.tasks.download-components]
 interpreter = "python"
@@ -88,11 +88,6 @@ typeCheckingMode = "standard"
 exclude = [
     ".github/**",
     "app/generated/**",
-    # Parity suite uses sys.path manipulation in conftest to enable
-    # sibling imports (api_recorder, parity_entities, summarize). Pyright
-    # can't follow that, so static-check is skipped here. Imports are
-    # validated at test-collection time by pytest.
-    "tests/parity/**",
 ]
 reportMissingTypeStubs = false
 
