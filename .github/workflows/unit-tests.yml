@@ -23,17 +23,17 @@ jobs:
       id-token: write # Required for AWS credentials
 
     steps:
-      - uses: actions/checkout@v3.0.0
+      - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v4.9.1
+        uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.11"
 
       - name: Setup AWS Credentials
-        uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722 # v4.1.0 https://github.com/aws-actions/configure-aws-credentials/releases/tag/v4.1.0
+        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1 https://github.com/aws-actions/configure-aws-credentials/releases/tag/v6.1.1
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
@@ -43,7 +43,7 @@ jobs:
         id: get_branch
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: "0.7.3"
 
@@ -58,7 +58,7 @@ jobs:
           uv run coverage report --fail-under=60
 
       - name: Comment Coverage Report on PR
-        uses: orgoro/coverage@3f13a558c5af7376496aa4848bf0224aead366ac # v3.2 https://github.com/orgoro/coverage/releases/tag/v3.2
+        uses: orgoro/coverage@71cf993a407154ad9d8dd027c88a374b0ed002a9 # v3.3 https://github.com/orgoro/coverage/releases/tag/v3.3
         with:
           coverageFile: coverage.xml
           token: ${{ secrets.GITHUB_TOKEN }}
