@@ -12,7 +12,6 @@ four canonical check names verbatim).
 
 from __future__ import annotations
 
-
 import pytest
 from application_sdk.handler.contracts import (
     AuthInput,
@@ -105,9 +104,9 @@ async def test_preflight_emits_four_named_checks(credentials):
         "questionCountCheck",
         "nativeQueryPermissionCheck",
     }
-    assert expected.issubset(set(names)), (
-        f"missing: {expected - set(names)}, got: {names}"
-    )
+    assert expected.issubset(
+        set(names)
+    ), f"missing: {expected - set(names)}, got: {names}"
     failed = [c for c in result.checks if not c.passed]
     assert not failed, [(c.name, c.message) for c in failed]
     assert result.status == PreflightStatus.READY

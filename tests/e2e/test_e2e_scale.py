@@ -83,9 +83,9 @@ async def test_collections_meet_scale_minimum(app, inline_creds, output_dir):
     auto_names = {
         r["name"] for r in records if r.get("name", "").startswith("Auto Collection ")
     }
-    assert len(auto_names) >= 45, (
-        f"expected ≥ 45 Auto Collection ### entries, got {len(auto_names)}"
-    )
+    assert (
+        len(auto_names) >= 45
+    ), f"expected ≥ 45 Auto Collection ### entries, got {len(auto_names)}"
 
 
 @pytest.mark.asyncio
@@ -143,9 +143,9 @@ async def test_extract_time_budget(app, inline_creds, output_dir):
         "databases": dbs.record_count,
     }
     print(f"[scale] summary {counts}  ({elapsed:.1f}s)")
-    assert elapsed < 60, (
-        f"extraction took {elapsed:.1f}s; investigate per-question SQL fetch"
-    )
+    assert (
+        elapsed < 60
+    ), f"extraction took {elapsed:.1f}s; investigate per-question SQL fetch"
 
 
 @pytest.mark.asyncio
