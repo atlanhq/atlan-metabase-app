@@ -114,3 +114,7 @@ test_auth.py
 
 # migration skill guides (not part of the app)
 skills/
+
+# Atlan CLI local config
+.atlan/
+coverage.json

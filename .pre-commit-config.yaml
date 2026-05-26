@@ -1,9 +1,12 @@
+exclude: ^app/generated/
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.4
     hooks:
       - id: ruff
+        exclude: ^app/generated/
       - id: ruff-format
+        exclude: ^app/generated/
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
@@ -15,6 +18,7 @@ repos:
     rev: v1.1.379
     hooks:
       - id: pyright
+        exclude: ^app/generated/
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:
@@ -23,6 +27,7 @@ repos:
         entry: isort
         types: [python]
         args: ["--profile", "black"]
+        exclude: ^app/generated/
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.0.0
     hooks:

@@ -50,8 +50,8 @@ class MetabaseTransformer(QueryBasedTransformer):
                 "METABASEDASHBOARD",
                 "METABASEQUESTION",
                 "BIPROCESS",
-                "PROCESS",  # lineage-only — no output unless SQL lineage is implemented
-                "COLUMNPROCESS",  # lineage-only — no output unless SQL lineage is implemented
+                # PROCESS + COLUMNPROCESS are produced by the QueryIntelligence
+                # app downstream — see contract/app.pkl ``extraNodes``.
             ],
         )
 
