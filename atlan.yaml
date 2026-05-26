@@ -1,74 +1,33 @@
-# GM (Global Marketplace) source of truth for the Metabase app.
-#
-# Consumed by the shared build/publish workflow at
-# atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml
-# (called from .github/workflows/build-and-publish.yaml).
-#
-# Reference: atlan-hightouch-app/atlan.yaml + the atlan-dbt-app native
-# reference cited in its comments.
-#
-# TODO: When app-contract-toolkit > 0.9.6 ships with atlan.yaml emission
-# (`emitAtlanYaml: Boolean = true` in App.pkl source — already supported in
-# the toolkit source, not yet in any published package), delete this file
-# and let `pkl eval` generate it from `deploy { ... }` in contract/app.pkl.
-# Confirmed missing in 0.9.6 by running `pkl eval -m /tmp/x --project-dir
-# contract contract/app.pkl` — only emits app/generated/* files.
-
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
 name: metabase
-app_id: 019e3a59-89d2-7310-acea-e8eae494483f  # Global Marketplace UUID
-display_name: "Metabase"
+app_id: 019e3a59-89d2-7310-acea-e8eae494483f
+display_name: Metabase
 type: connector
-
-# No top-level execution_mode — deploy.execution_mode below is the single
-# source of truth for v3 native apps (same convention as atlan-hightouch-app
-# / atlan-dbt-app).
-icon_url: "https://atlan-public.s3.eu-west-1.amazonaws.com/logos_and_icons/metabase.svg"
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/metabase.svg
 visibility: public
-
-# Marketplace package(s) that ship the platform-side workflow template
-# this connector binds to. After this PR merges, platform-packages/atlan/metabase
-# will be updated to consume the new 5-node DAG declared in
-# app/generated/manifest.json.
-argo_package_names:
-  - "@csa/metabase"
-
 build_tag: v1
 self_deployed_runtime: false
-dockerfile: ./deploy/Dockerfile
-
-# ---- Deployment config (rendered into the Helm chart by GM) ------------
+entrypoints:
+- name: metabase
+  display_name: Metabase
+  icon_url: https://assets.atlan.com/assets/metabase.svg
+  type: connector
 deploy:
-  # v3 native mode — the app runs as its own Temporal worker registered by
-  # the SDK; the DAG nodes in manifest.json (extract → qi/publish →
-  # extract-lineage → lineage-publish) dispatch as native Temporal workflow
-  # executions, not Argo step containers.
   execution_mode: native
+  splitDeploymentEnabled: false
   replicaCount: 1
-
-  env:
-    ATLAN_APP_MODULE: "app.connector:MetabaseApp"
-    ATLAN_HEARTBEAT_TIMEOUT_SECONDS: "120"
-    ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS: "86400"
-    ATLAN_TENANT_ID: "default"
-    # Dapr event interceptor is off — the platform manages event flow at the
-    # DAG level, not via per-app pubsub.
-    APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR: "false"
-
-  containerPort: 8000
-
-  # Dapr sidecars enabled. secretstore is needed for credential resolution
-  # (CredentialRef → raw creds via self.context.resolve_credential_raw);
-  # objectstore is enabled because the app uploads transformed/ + lineage-stage/
-  # via self.upload(UploadInput(...)). statestore/eventstore/etc. stay off.
   dapr:
     objectstore: true
+    secretstore: true
     statestore: false
     eventstore: false
     subscription: false
-    secretstore: true
     configurationstore: false
     lock: false
-
+  keda:
+    enabled: false
   resources:
     requests:
       cpu: 100m
@@ -76,3 +35,12 @@ deploy:
     limits:
       cpu: 500m
       memory: 512Mi
+  env:
+    ATLAN_APP_MODULE: app.connector:MetabaseApp
+    ATLAN_HEARTBEAT_TIMEOUT_SECONDS: '120'
+    ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS: '86400'
+    ATLAN_TENANT_ID: default
+    APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR: 'false'
+dockerfile: ./deploy/Dockerfile
+argo_package_names:
+- '@csa/metabase'

@@ -1,3 +1,0 @@
-app_name: metabase
-app_image: ${APP_IMAGE}
-app_port: 8000
