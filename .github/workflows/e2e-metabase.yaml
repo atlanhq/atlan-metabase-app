@@ -24,8 +24,12 @@ name: e2e-metabase
 # `metabase:` service `image:` line below and tests/e2e/conftest.py.
 
 on:
+  # Required-check gate — runs on every PR + every push to main.
   pull_request:
-    types: [labeled, opened, synchronize, reopened]
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       scale:
@@ -39,17 +43,13 @@ permissions:
   pull-requests: write
 
 concurrency:
-  # Same-ref pushes queue rather than cancel — Metabase cold-start takes
-  # ~60-90 s; killing a healthy in-progress run on a quick follow-up
-  # commit just wastes the time we already spent.
+  # Cancel-in-progress on newer commits to the same ref — required-check
+  # semantics means we always re-run against the latest SHA anyway.
   group: e2e-metabase-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   e2e:
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'e2e-metabase')
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
