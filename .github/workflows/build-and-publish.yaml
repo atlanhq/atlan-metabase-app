@@ -1,0 +1,51 @@
+name: Build & Publish
+
+# CI/CD-managed via Global Marketplace.
+#
+# Pushes to main automatically build the container image (from
+# ./deploy/Dockerfile per atlan.yaml) and publish a release to GM. By
+# default this creates a draft release for channel=all that needs
+# approval before going live.
+#
+# workflow_dispatch lets you target a specific channel or list of tenants
+# (e.g. when rolling out a fix to one customer before GA).
+#
+# All logic lives in the shared reusable workflow at
+# atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main —
+# this file only forwards inputs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**'
+      - '!**.md'
+      - '!images/**'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to marketplace after build"
+        type: boolean
+        default: true
+      ref:
+        description: "Branch, tag, or SHA to build (default: current branch)"
+        required: false
+        type: string
+      channel:
+        description: "Target channel (ignored when tenants is set)"
+        type: string
+        default: "all"
+      tenants:
+        description: "Comma-separated tenant IDs for targeted publish"
+        type: string
+        default: ""
+
+jobs:
+  build-and-publish:
+    uses: atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main
+    with:
+      ref: ${{ inputs.ref || github.ref }}
+      publish: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.inputs.publish == 'true' }}
+      channel: ${{ inputs.channel || 'all' }}
+      tenants: ${{ inputs.tenants || '' }}
+    secrets: inherit
