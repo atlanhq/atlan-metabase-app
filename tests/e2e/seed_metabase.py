@@ -267,7 +267,14 @@ async def seed_collections(
     """Apply declared collections + (in large scale) generate 50 total."""
     headers = {"X-Metabase-Session": session_id}
     existing = (await client.get(f"{MB_URL}/api/collection", headers=headers)).json()
-    name_to_id = {c["name"]: int(c["id"]) for c in existing}
+    # Metabase exposes a virtual "root" collection with id="root" — skip it
+    # (and any non-numeric id) when building the name → numeric-id lookup.
+    name_to_id: dict[str, int] = {}
+    for c in existing:
+        try:
+            name_to_id[c["name"]] = int(c["id"])
+        except (TypeError, ValueError):
+            continue
 
     # Declared (always created)
     for c in declared:
@@ -325,7 +332,10 @@ async def seed_questions(
 
     existing = (await client.get(f"{MB_URL}/api/card", headers=headers)).json()
     for e in existing:
-        name_to_id[e["name"]] = int(e["id"])
+        try:
+            name_to_id[e["name"]] = int(e["id"])
+        except (TypeError, ValueError):
+            continue
 
     # MBQL needs source-table id; fetch metadata once.
     meta = (
@@ -418,7 +428,12 @@ async def seed_dashboards(
 ) -> None:
     headers = {"X-Metabase-Session": session_id}
     existing = (await client.get(f"{MB_URL}/api/dashboard", headers=headers)).json()
-    name_to_id = {d["name"]: int(d["id"]) for d in existing}
+    name_to_id: dict[str, int] = {}
+    for d in existing:
+        try:
+            name_to_id[d["name"]] = int(d["id"])
+        except (TypeError, ValueError):
+            continue
 
     sem = asyncio.Semaphore(PARALLELISM)
 
