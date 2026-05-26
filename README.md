@@ -167,45 +167,38 @@ docker run -p 8000:8000 \
 
 ```
 atlan-metabase-app/
+├── atlan.yaml                       # GM (Global Marketplace) source of truth — app metadata + deploy config
+├── deploy/
+│   └── Dockerfile                   # Built + published by .github/workflows/build-and-publish.yaml
+├── contract/
+│   ├── app.pkl                      # PKL contract (declares the 5-node DAG)
+│   ├── PklProject
+│   └── PklProject.deps.json
 ├── app/
-│   ├── activities/
-│   │   ├── metadata_extraction.py   # Temporal activities (extract, filter, process)
-│   │   └── transform.py             # Temporal activities (YAML transform + upload)
-│   ├── workflows/
-│   │   ├── metadata_extraction.py   # Temporal workflow orchestration (Workflow 1)
-│   │   └── transform.py             # Temporal workflow orchestration (Workflow 2)
-│   ├── extracts/                    # Per-asset extraction logic
+│   ├── connector.py                 # MetabaseApp(App) — two @entrypoint methods (extract_metadata, extract_lineage)
+│   ├── contracts.py                 # Typed Pydantic Input/Output for both entrypoints + per-@task contracts
+│   ├── client.py                    # Metabase REST client (session-token auth)
+│   ├── handler.py                   # /workflows/v1/{auth,check,metadata} handlers (4 named preflight checks)
+│   ├── constants.py                 # Metabase URL builders
+│   ├── models.py                    # Shared Pydantic models
+│   ├── utils.py                     # JSONL helpers
+│   ├── extracts/                    # Per-asset extraction + filtering + enrichment
 │   │   ├── collections.py
 │   │   ├── dashboards.py
 │   │   ├── databases.py
 │   │   ├── filter.py
-│   │   ├── process.py
+│   │   ├── process.py               # Enrichment — stamps QI input keys (metabaseQuery, metabaseSourceDatabaseName, …)
 │   │   └── questions.py
-│   ├── transformers/                # YAML-driven raw → Atlan transformations
-│   │   ├── collection.yaml
-│   │   ├── column_process.yaml
-│   │   ├── dashboard.yaml
-│   │   ├── process.yaml
-│   │   ├── question.yaml
-│   │   └── question_dashboard.yaml
-│   ├── templates/
-│   │   ├── atlan-connectors-metabase.json  # Credential UI config
-│   │   └── workflow.json                   # Workflow UI config
-│   ├── client.py                    # Metabase HTTP client
-│   ├── constants.py                 # URL builders
-│   ├── handler.py                   # Auth, preflight, metadata fetch
-│   ├── models.py                    # Pydantic models
-│   └── utils.py                     # Shared helpers
-├── frontend/
-│   ├── static/
-│   │   ├── script.js
-│   │   └── styles.css
-│   └── templates/
-│       └── index.html
+│   ├── transformers/                # YAML-driven Atlas-JSON transforms (Collection / Dashboard / Question / BIProcess)
+│   ├── lineage/                     # NEW — ARS 2.0 cross-connector lineage builder
+│   │   ├── ars_builder.py           # PARTIAL_OBJECT / PARTIAL_FIELD Process + ColumnProcess record builders
+│   │   └── qi_reader.py             # Reads QueryIntelligence parsed-SQL NDJSON
+│   └── generated/                   # PKL-generated — manifest.json, _input.py, configmap JSONs (do not hand-edit)
 ├── tests/
-│   ├── unit/
-│   └── e2e/
-├── main.py
-├── pyproject.toml
-└── Dockerfile
+│   ├── unit/                        # 304 tests, 86% coverage
+│   ├── integration/
+│   ├── e2e/                         # Live e2e against metabase/metabase Docker image
+│   └── parity/                      # v2-vs-v3 parity harness
+├── main.py                          # Local dev entry (run_dev_combined)
+└── pyproject.toml
 ```

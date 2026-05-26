@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "resolvedDependencies": {
-    "package://atlanhq.github.io/app-contract-toolkit/app-contract-toolkit@0": {
+    "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0": {
       "type": "remote",
-      "uri": "projectpackage://atlanhq.github.io/app-contract-toolkit/app-contract-toolkit@0.9.6",
+      "uri": "projectpackage://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.10.0",
       "checksums": {
-        "sha256": "30833b34faf10e8feb2459d434f7b196e042001d560417c57da483a7fe1e3487"
+        "sha256": "6401bd93fda03c4ea9af17c0adc5494dedb637fe2316e5f8529a3709692a2242"
       }
     }
   }
