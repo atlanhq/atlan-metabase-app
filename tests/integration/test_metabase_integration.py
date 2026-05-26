@@ -365,18 +365,19 @@ class TestMetabaseIntegration(BaseIntegrationTest):
             polling_interval=5,
         ),
         Scenario(
-            name="workflow_transform_metadata_start",
+            name="workflow_extract_lineage_start",
             api="workflow",
-            endpoint="/start?entrypoint=transform-metadata",
+            endpoint="/start?entrypoint=extract-lineage",
             args={
                 "metabase_credential": {
                     "name": "metabase-default",
                     "credential_type": "basic",
                 },
-                "metadata": {},
                 "connection": {
                     "connection": "default/metabase/test_integration",
                 },
+                "connection_qualified_name": "default/metabase/test_integration",
+                "view_lineage_input_prefix": "",
             },
             assert_that={
                 "success": equals(True),
@@ -384,10 +385,10 @@ class TestMetabaseIntegration(BaseIntegrationTest):
                 "data.run_id": is_not_empty(),
             },
             description=(
-                "transform_metadata @entrypoint accepts the same CredentialRef "
-                "shape and dispatches the transform pipeline. Together with "
-                "the extract scenario, validates that both v2 workflows are "
-                "reachable as v3 @entrypoint methods on the same App class."
+                "extract_lineage @entrypoint dispatches as 'metabase:extract-lineage' "
+                "and accepts the same CredentialRef shape. Together with the "
+                "extract_metadata scenario, validates that both v3 @entrypoint "
+                "methods on MetabaseApp are reachable via the SDK's /start endpoint."
             ),
             workflow_timeout=60,
             polling_interval=5,
