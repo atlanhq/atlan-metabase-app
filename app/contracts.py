@@ -17,13 +17,55 @@ accepts.
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Annotated, Any
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_logger = logging.getLogger(__name__)
+
+
+def _coerce_collection_filter(value: Any) -> Any:
+    """Recover from upstream object→string serialization for collection filters.
+
+    The frontend → AE → SDK pipeline can hand us the literal string
+    ``"[object Object]"`` for ``include_collections`` / ``exclude_collections``
+    when the form widget's value is a non-plain JS object that gets passed
+    through ``String(value)`` in the manifest substitution layer instead of
+    ``JSON.stringify(value)``. The two filters have *identical* contract
+    shape (same APITree widget, same ``default: {}``, same wiring), so this
+    is value-side, not contract-side — see the diagnostic on workflow run
+    ``019e648d-7d5f-7a0c-b632-068b8fd41fe7``.
+
+    Coerce the known-bad sentinel and JSON-encoded variants back to a dict
+    so the workflow doesn't fail validation on an upstream defect. Anything
+    else passes through and pydantic decides.
+    """
+    if value is None or isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped == "[object Object]":
+            _logger.warning(
+                "Coerced stringified collection filter to empty dict "
+                "(upstream serializer emitted %r). This is a workaround "
+                "for a frontend/AE substitution bug — see contracts.py.",
+                value,
+            )
+            return {}
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return value
+        if isinstance(parsed, dict):
+            return parsed
+    return value
+
 
 __all__ = ["CredentialRef"]  # keep import live (annotations-only otherwise)
 
@@ -110,6 +152,10 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
 
     include_collections: CollectionFilter = Field(default_factory=dict)
     exclude_collections: CollectionFilter = Field(default_factory=dict)
+
+    _coerce_collection_filters = field_validator(
+        "include_collections", "exclude_collections", mode="before"
+    )(_coerce_collection_filter)
 
     output_path: str = ""
     output_prefix: str = ""
@@ -236,6 +282,11 @@ class FilterInput(Input, allow_unbounded_fields=True):
     output_path: str = ""
     include_collections: CollectionFilter = Field(default_factory=dict)
     exclude_collections: CollectionFilter = Field(default_factory=dict)
+
+    _coerce_collection_filters = field_validator(
+        "include_collections", "exclude_collections", mode="before"
+    )(_coerce_collection_filter)
+
     collections_file: FileReference | None = None
     dashboards_file: FileReference | None = None
     questions_file: FileReference | None = None
