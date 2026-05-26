@@ -287,34 +287,42 @@ async def seed_collections(
         if out is not None:
             name_to_id[c["name"]] = int(out["id"])
 
-    # Scale-generated (large only)
+    # Scale-generated (large only). Two phases so nested collections see
+    # their parent already committed:
+    #   1. 10 root collections (sequential — small enough to be cheap)
+    #   2. 40 nested collections (parallel, each parented to a random root)
     if SCALE == "large":
-        # 10 root + 40 nested. Total declared = 4, so add 46 more.
-        target = 50
         sem = asyncio.Semaphore(PARALLELISM)
 
-        async def _create_one(idx: int) -> None:
+        # Phase 1 — root collections, sequential.
+        for idx in range(1, 11):
+            name = f"Auto Collection {idx:03d}"
+            if name in name_to_id:
+                continue
+            body: dict[str, Any] = {"name": name, "color": "#509EE3"}
+            out = await _post_json(client, f"{MB_URL}/api/collection", headers, body)
+            if out is not None:
+                name_to_id[name] = int(out["id"])
+
+        roots = [v for k, v in name_to_id.items() if k.startswith("Auto Collection 0")]
+        _log(f"  root auto collections created: {len(roots)}")
+
+        # Phase 2 — nested collections, parallel.
+        async def _create_nested(idx: int) -> None:
             async with sem:
                 name = f"Auto Collection {idx:03d}"
                 if name in name_to_id:
                     return
                 body: dict[str, Any] = {"name": name, "color": "#509EE3"}
-                # First 10 are root; rest get a random parent from the first 10.
-                if idx > 10 and name_to_id:
-                    parents = [
-                        v
-                        for k, v in name_to_id.items()
-                        if k.startswith("Auto Collection 0")
-                    ]
-                    if parents:
-                        body["parent_id"] = random.choice(parents)
+                if roots:
+                    body["parent_id"] = random.choice(roots)
                 out = await _post_json(
                     client, f"{MB_URL}/api/collection", headers, body
                 )
                 if out is not None:
                     name_to_id[name] = int(out["id"])
 
-        await asyncio.gather(*[_create_one(i) for i in range(1, target + 1)])
+        await asyncio.gather(*[_create_nested(i) for i in range(11, 51)])
 
     _log(f"  collections total: {len(name_to_id)}")
     return name_to_id
