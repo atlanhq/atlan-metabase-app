@@ -1,7 +1,14 @@
-amends "@app-contract-toolkit/NativeApp.pkl"
+// Toolkit 0.10.0 consolidated NativeApp.pkl → App.pkl. Widgets are now
+// re-exported under `Widgets.*` (no separate Config import needed). App.pkl
+// also emits `atlan.yaml` from the typed `deploy { ... }` block, so the
+// repo-root atlan.yaml is contract-generated. `app.yaml` is disabled
+// (matches hightouch's pattern — it's a toolkit shim with no consumers).
+amends "@app-contract-toolkit/App.pkl"
 
-import "@app-contract-toolkit/Config.pkl"
 import "@app-contract-toolkit/Connectors.pkl"
+import "@app-contract-toolkit/Widgets.pkl"
+
+emitAppYaml = false
 
 // ---- App identity ----
 
@@ -11,6 +18,57 @@ connector = Connectors.METABASE
 icon = "https://assets.atlan.com/assets/metabase.svg"
 logo = "https://assets.atlan.com/assets/metabase.svg"
 credentialConnectorType = "rest"
+appId = "019e3a59-89d2-7310-acea-e8eae494483f"
+visibility = "public"
+buildTag = "v1"
+selfDeployedRuntime = false
+
+// Extra atlan.yaml keys the typed App.pkl doesn't model yet
+// (dockerfile path, argo_package_names). Deep-merged on top of the
+// generated atlan.yaml.
+atlanYamlOverrides {
+  ["dockerfile"] = "./deploy/Dockerfile"
+  ["argo_package_names"] = new Listing { "@csa/metabase" }
+}
+
+// ---- Deployment config (rendered into atlan.yaml's deploy: block) -----
+deploy {
+  executionMode = "native"
+  replicaCount = 1
+
+  // Dapr sidecars enabled. secretstore is needed for credential
+  // resolution (CredentialRef → raw creds via
+  // self.context.resolve_credential_raw). objectstore is enabled because
+  // the app uploads transformed/ + lineage-stage/ via self.upload(...).
+  dapr {
+    objectstore = true
+    secretstore = true
+    statestore = false
+    eventstore = false
+    subscription = false
+    configurationstore = false
+    lock = false
+  }
+
+  resources = new ResourceConfig {
+    requests {
+      ["cpu"] = "100m"
+      ["memory"] = "256Mi"
+    }
+    limits {
+      ["cpu"] = "500m"
+      ["memory"] = "512Mi"
+    }
+  }
+
+  env {
+    ["ATLAN_APP_MODULE"] = "app.connector:MetabaseApp"
+    ["ATLAN_HEARTBEAT_TIMEOUT_SECONDS"] = "120"
+    ["ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS"] = "86400"
+    ["ATLAN_TENANT_ID"] = "default"
+    ["APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR"] = "false"
+  }
+}
 
 // ---- Workflow wiring ----
 //
@@ -18,14 +76,13 @@ credentialConnectorType = "rest"
 //   - extract_metadata  → workflow "metabase:extract-metadata"
 //   - extract_lineage   → workflow "metabase:extract-lineage"
 //
-// `workflowTypeOverride` makes the first DAG node (`extract`) dispatch
-// the metadata entrypoint explicitly. Without it the toolkit would use
-// the bare app name, which doesn't match the SDK's registered workflow
-// name for multi-entrypoint apps.
-workflowType = "metabase"
-workflowTypeOverride = "metabase:extract-metadata"
-
-hasPublishStep = true
+// In App.pkl@0.10.0, `workflowTypeOverride` was folded into `workflowType`
+// directly. Set it to the explicit per-entrypoint workflow name so the
+// first DAG node dispatches the right Temporal workflow.
+//
+// `hasPublishStep` from NativeApp is folded into `pipeline.publish`
+// (default-on in App.pkl@0.10.0).
+workflowType = "metabase:extract-metadata"
 
 // ---- Pipeline (5-node DAG, ARS 2.0 publish) ---------------------------
 //
@@ -176,41 +233,39 @@ uiConfig {
     ["Credential"] {
       description = "Credential Details"
       inputs {
-        ["extraction-method"] = new Config.TextInput {
+        ["extraction-method"] = new Widgets.TextInput {
           title = "Extraction method"
           defaultValue = "direct"
           hide = true
         }
-        ["credential-guid"] = new Config.CredentialInput {
+        ["credential-guid"] = new Widgets.CredentialInput {
           title = ""
           credType = "atlan-connectors-metabase"
-          placeholderText = "Credential Guid"
         }
       }
     }
     ["Connection"] {
       description = "Connection Details"
       inputs {
-        ["connection"] = new Config.ConnectionCreator {
+        ["connection"] = new Widgets.ConnectionCreator {
           title = ""
-          placeholderText = "Connection Name"
         }
       }
     }
     ["Metadata"] {
       description = "Metadata"
       inputs {
-        ["include-collections"] = new Config.APITree {
+        ["include-collections"] = new Widgets.APITree {
           title = "Include collections"
           desc = "Metabase collections to include in the crawl. Empty selection = include all non-personal collections."
           credentialType = "atlan-connectors-metabase"
         }
-        ["exclude-collections"] = new Config.APITree {
+        ["exclude-collections"] = new Widgets.APITree {
           title = "Exclude collections"
           desc = "Metabase collections to skip during the crawl."
           credentialType = "atlan-connectors-metabase"
         }
-        ["preflight-check"] = new Config.SageV2 {
+        ["preflight-check"] = new Widgets.SageV2 {
           title = ""
           checks {
             new Dynamic {
