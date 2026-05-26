@@ -1,0 +1,38 @@
+schema_type: dataframe
+version: 0.22.1
+columns:
+  TABLE_CAT:
+    dtype: str
+    nullable: false
+    required: true
+  TABLE_SCHEM:
+    dtype: str
+    nullable: false
+    required: true
+  TABLE_NAME:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      str_length:
+        min_value: 1
+        max_value: 128
+  TABLE_TYPE:
+    dtype: str
+    nullable: false
+    required: true
+    checks:
+      isin:
+      - BASE TABLE
+      - TABLE
+      - VIEW
+checks:
+  check_record_count_ge:
+    value: 1
+  check_record_count_le:
+    value: 10000
+index: null
+coerce: false
+strict: false
+title: Raw Table Pandera Schema
+description: Raw table output for scenario 'empty_filters'.
