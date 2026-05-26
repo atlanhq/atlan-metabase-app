@@ -21,9 +21,23 @@ _SPEC_PATH = Path(__file__).parent / "fixtures" / "seed_metabase_spec.yaml"
 
 @pytest.fixture(scope="session")
 def metabase_url() -> str:
-    return os.environ.get(
+    """Reassemble the full Metabase URL from E2E_METABASE_HOST + PORT.
+
+    Common shapes:
+      E2E_METABASE_HOST=http://localhost  E2E_METABASE_PORT=3000   → http://localhost:3000
+      E2E_METABASE_HOST=http://localhost:3000                       → http://localhost:3000  (kept as-is)
+      MB_URL=http://localhost:3000                                  → http://localhost:3000
+    """
+    base = os.environ.get(
         "E2E_METABASE_HOST", os.environ.get("MB_URL", "http://localhost:3000")
     ).rstrip("/")
+    port = os.environ.get("E2E_METABASE_PORT", "")
+    # Only append port if the base lacks one (heuristic: no ':' after the
+    # scheme://).
+    scheme_end = base.find("://") + 3
+    if port and ":" not in base[scheme_end:]:
+        base = f"{base}:{port}"
+    return base
 
 
 @pytest.fixture(scope="session")

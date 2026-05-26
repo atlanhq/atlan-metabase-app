@@ -10,6 +10,11 @@ on:
       - synchronize
     branches:
       - main
+  # Required by the shared build-and-publish workflow's unit-tests gate
+  # (see atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml).
+  # The gate dispatches this workflow on the publish SHA when no existing
+  # successful run is found.
+  workflow_dispatch:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
