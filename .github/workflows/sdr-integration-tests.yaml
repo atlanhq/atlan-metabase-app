@@ -51,7 +51,7 @@ jobs:
       # SDK action's retry budget is tight.
       - name: Pre-pull base image
         run: |
-          BASE_IMAGE=$(grep "^FROM" Dockerfile | head -1 | awk '{print $2}')
+          BASE_IMAGE=$(grep "^FROM" deploy/Dockerfile | head -1 | awk '{print $2}')
           echo "Pre-pulling base image: $BASE_IMAGE"
           docker pull "$BASE_IMAGE" || echo "Pre-pull failed — SDK action will retry"
 
