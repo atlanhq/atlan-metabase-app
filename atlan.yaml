@@ -9,11 +9,6 @@ icon_url: https://assets.atlan.com/assets/metabase.svg
 visibility: public
 build_tag: v1
 self_deployed_runtime: false
-entrypoints:
-- name: metabase
-  display_name: Metabase Assets
-  icon_url: https://assets.atlan.com/assets/metabase.svg
-  type: connector
 deploy:
   execution_mode: native
   splitDeploymentEnabled: false
