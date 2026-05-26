@@ -198,8 +198,7 @@ atlan-metabase-app/
 │   ├── unit/                        # 304 tests, 86% coverage
 │   ├── integration/
 │   ├── e2e/                         # Live e2e against metabase/metabase Docker image
-│   ├── parity/                      # v2-vs-v3 parity harness
-│   └── sdr/
+│   └── parity/                      # v2-vs-v3 parity harness
 ├── main.py                          # Local dev entry (run_dev_combined)
 └── pyproject.toml
 ```
