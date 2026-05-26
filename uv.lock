@@ -248,7 +248,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "atlan-application-sdk", extras = ["daft", "iam-auth", "pandas", "tests", "workflows"], specifier = "==3.13.2" },
+    { name = "atlan-application-sdk", extras = ["daft", "iam-auth", "pandas", "tests", "workflows"], specifier = ">=3.13.0,<4.0.0" },
     { name = "poethepoet", specifier = ">=0.38.0" },
 ]
 
