@@ -3,7 +3,7 @@
   "dag": {
     "extract": {
       "activity_name": "execute_workflow",
-      "activity_display_name": "Extract Metabase Metadata",
+      "activity_display_name": "Extract Metabase Assets Metadata",
       "app_name": "{app_name}",
       "inputs": {
         "workflow_type": "metabase:extract-metadata",
