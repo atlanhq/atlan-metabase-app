@@ -388,12 +388,28 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=filtered_questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert len(lineage) == 1
         edge = lineage[0]
+        assert edge["name"] == "Top Customers"
         assert edge["question_id"] == 10
-        assert edge["question_name"] == "Top Customers"
-        assert edge["dashboards"] == [{"id": 200, "name": "Dashboard A"}]
+        assert edge["inputs"] == [
+            {
+                "typeName": "MetabaseQuestion",
+                "uniqueAttributes": {
+                    "qualifiedName": "default/metabase/123/questions/10"
+                },
+            }
+        ]
+        assert edge["outputs"] == [
+            {
+                "typeName": "MetabaseDashboard",
+                "uniqueAttributes": {
+                    "qualifiedName": "default/metabase/123/dashboards/200"
+                },
+            }
+        ]
 
     def test_no_biprocess_when_question_has_no_dashboard(
         self,
