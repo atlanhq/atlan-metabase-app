@@ -343,6 +343,28 @@ class ProcessOutput(Output):
     total_records: int = 0
 
 
+class BuildLineageInput(Input):
+    """Input for ``build_lineage_records`` — the file-I/O half of extract_lineage.
+
+    Lives in a ``@task`` (not the entrypoint) so file reads/writes happen in
+    an activity rather than inside Temporal's workflow sandbox, which blocks
+    built-in ``open()``.
+    """
+
+    output_path: str = ""
+    view_lineage_input_prefix: str = ""
+    connection_qualified_name: str = ""
+    connection_name: str = ""
+
+
+class BuildLineageOutput(Output):
+    """Output for ``build_lineage_records``."""
+
+    stage_dir: str = ""
+    process_count: int = 0
+    column_process_count: int = 0
+
+
 class TransformTaskInput(Input):
     """Input for ``transform_data`` — runs once per asset typename."""
 
