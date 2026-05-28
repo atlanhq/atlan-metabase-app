@@ -19,16 +19,29 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
-import daft
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.observability.logger_adaptor import get_logger
 
+from app.api_types import (
+    BIProcessLineageRecord,
+    CollectionRecord,
+    DashboardRecord,
+    QuestionRecord,
+)
+from app.asset_mapper import (
+    map_bi_process,
+    map_collection,
+    map_dashboard,
+    map_question,
+    serialize_entity,
+)
 from app.client import MetabaseApiClient, build_client
 from app.contracts import (
     TRANSFORM_ASSET_TYPES,
@@ -69,7 +82,6 @@ from app.extracts.questions import fetch_question_queries, fetch_questions_summa
 from app.handler import MetabaseHandler  # noqa: F401 — registers handler
 from app.lineage.ars_builder import build_column_process, build_process, process_hash
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
-from app.transformers import MetabaseTransformer
 from app.utils import read_jsonl, write_jsonl
 
 logger = get_logger(__name__)
@@ -163,6 +175,30 @@ def _ref(local_path: str) -> FileReference:
     return FileReference(local_path=local_path, tier=StorageTier.RETAINED)
 
 
+def _map_one_record(
+    typename: str, raw: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Dispatch a raw record through the right typed mapper and serialize it.
+
+    Returns ``None`` only when ``typename`` is unrecognized — callers log
+    and skip. Per-record exceptions bubble up so a single bad record fails
+    the activity loudly rather than silently dropping data.
+    """
+    if typename == "METABASECOLLECTION":
+        return serialize_entity(map_collection(CollectionRecord.from_dict(raw), **ctx))
+    if typename == "METABASEDASHBOARD":
+        return serialize_entity(map_dashboard(DashboardRecord.from_dict(raw), **ctx))
+    if typename == "METABASEQUESTION":
+        asset, extras = map_question(QuestionRecord.from_dict(raw), **ctx)
+        return serialize_entity(asset, extras)
+    if typename == "BIPROCESS":
+        return serialize_entity(
+            map_bi_process(BIProcessLineageRecord.from_dict(raw), **ctx)
+        )
+    logger.warning("transform_data: unknown typename=%s; skipping record", typename)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -179,7 +215,7 @@ class MetabaseApp(App):
     """
 
     name = "metabase"
-    passthrough_modules = {"app.transformers", "app.lineage"}
+    passthrough_modules = {"app.lineage"}
 
     # ------------------------------------------------------------------
     # Client + credential resolution
@@ -516,9 +552,16 @@ class MetabaseApp(App):
     async def transform_data(self, input: TransformTaskInput) -> TransformTaskOutput:
         """Transform processed JSONL data into Atlas JSON for one asset typename.
 
-        Reads ``<processed_data_path>/processed/<subdir>/result-0.json`` and
-        writes Atlas entities to
+        Reads ``<processed_data_path>/processed/<subdir>/result-0.json``,
+        runs each record through a typed pyatlan_v9 asset mapper, and
+        writes the serialized entities to
         ``<output_path>/transformed/<typename>/result-<chunk>.json``.
+
+        Asset-mapper migration: this used to consume YAML + Daft via
+        ``MetabaseTransformer``. The new path is pure Python — each
+        ``app/asset_mapper.py`` function is type-checked end-to-end, so
+        attribute drift (the v2 BIProcess.name failure mode) is now a
+        compile-time error.
         """
         typename = (input.typename or "").upper()
         if not typename:
@@ -539,73 +582,31 @@ class MetabaseApp(App):
             logger.info("transform_data: no records found for %s", typename)
             return TransformTaskOutput(typename=typename, record_count=0)
 
-        transformer = MetabaseTransformer()
-        # Strip raw Metabase fields the transformer YAML doesn't read. Daft's
-        # type inference fails when a column varies across rows — e.g.
-        # ``visualization_settings`` is a different-shaped dict per question,
-        # ``dataset_query`` has variant schemas, ``result_metadata`` mixes
-        # snake_case and kebab-case keys across Metabase versions. None of
-        # these are referenced by any transformer YAML (see
-        # ``app/transformers/*.yaml``), so dropping them is safe and avoids
-        # the Daft ``Need at least 1 series to perform concat`` and
-        # ``casting from Struct ... to String not implemented`` panics.
-        _DROP_KEYS = {
-            "cache_invalidated_at",
-            "cache_ttl",
-            "dashboards",
-            "dashcards",
-            "dataset_query",
-            "last-edit-info",
-            "legacy_query",
-            "metabase_version",
-            "ordered_cards",
-            "param_fields",
-            "param_values",
-            "parameter_mappings",
-            "parameters",
-            "query_description",
-            "result_metadata",
-            "source_card_id",
-            "table_id",
-            "view_count",
-            "visualization_settings",
-        }
-        records = [{k: v for k, v in r.items() if k not in _DROP_KEYS} for r in records]
-        dataframe = daft.from_pylist(records)
-
-        transform_kwargs: dict[str, Any] = {
-            "workflow_id": input.workflow_id,
-            "workflow_run_id": input.workflow_id,
-            "connection_name": input.connection_name,
-            "connection_qualified_name": input.connection_qualified_name,
-        }
-
         out_dir = os.path.join(input.output_path, _TRANSFORMED_DIR, typename)
         os.makedirs(out_dir, exist_ok=True)
         out_file = os.path.join(out_dir, f"result-{input.chunk_start}.json")
 
-        transformed_df = transformer.transform_metadata(
-            typename=typename,
-            dataframe=dataframe,
-            **transform_kwargs,
+        ctx = dict(
+            connection_qualified_name=input.connection_qualified_name,
+            connection_name=input.connection_name,
+            connector_name="metabase",
+            workflow_id=input.workflow_id,
+            workflow_run_id=input.workflow_id,
+            last_sync_run_at_ms=int(time.time() * 1000),
+            tenant_id="default",
         )
 
-        if transformed_df is None:
-            return TransformTaskOutput(typename=typename, record_count=0)
-
-        result_dict = transformed_df.to_pydict()
-        rows = len(result_dict.get("typeName", []))
+        count = 0
         with open(out_file, "w", encoding="utf-8") as fh:
-            for i in range(rows):
-                entity = {
-                    "typeName": result_dict["typeName"][i],
-                    "status": result_dict["status"][i],
-                    "attributes": result_dict["attributes"][i],
-                }
+            for raw in records:
+                entity = _map_one_record(typename, raw, ctx)
+                if entity is None:
+                    continue
                 fh.write(json.dumps(entity, ensure_ascii=False) + "\n")
+                count += 1
 
-        logger.info("transform_data complete: typename=%s, records=%d", typename, rows)
-        return TransformTaskOutput(typename=typename, record_count=rows)
+        logger.info("transform_data complete: typename=%s, records=%d", typename, count)
+        return TransformTaskOutput(typename=typename, record_count=count)
 
     # ==================================================================
     # @entrypoint methods
