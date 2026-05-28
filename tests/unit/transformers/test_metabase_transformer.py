@@ -154,3 +154,108 @@ class TestMetabaseTransformerInit:
     def test_no_unexpected_extra_keys(self, transformer):
         actual = set(transformer.entity_class_definitions.keys())
         assert actual == self.EXPECTED_KEYS
+
+
+# =============================================================================
+# BIProcess end-to-end transform — guards the prod failure where Atlas
+# rejected entities with ``BIProcess.name: mandatory attribute value missing``
+# because the YAML/source record contract had drifted.
+# =============================================================================
+
+
+class TestBIProcessTransform:
+    """Run the full Daft SQL transform on synthetic BIProcess lineage records."""
+
+    def test_biprocess_passes_name_and_list_of_struct_refs(self):
+        import daft
+
+        from app.transformers import MetabaseTransformer
+
+        conn_qn = "default/metabase/123"
+        records = [
+            {
+                "name": "Top Customers",
+                "question_id": 10,
+                "inputs": [
+                    {
+                        "typeName": "MetabaseQuestion",
+                        "uniqueAttributes": {
+                            "qualifiedName": f"{conn_qn}/questions/10"
+                        },
+                    }
+                ],
+                "outputs": [
+                    {
+                        "typeName": "MetabaseDashboard",
+                        "uniqueAttributes": {
+                            "qualifiedName": f"{conn_qn}/dashboards/200"
+                        },
+                    }
+                ],
+            },
+            {
+                "name": "Quarterly Revenue",
+                "question_id": 11,
+                "inputs": [
+                    {
+                        "typeName": "MetabaseQuestion",
+                        "uniqueAttributes": {
+                            "qualifiedName": f"{conn_qn}/questions/11"
+                        },
+                    }
+                ],
+                "outputs": [
+                    {
+                        "typeName": "MetabaseDashboard",
+                        "uniqueAttributes": {
+                            "qualifiedName": f"{conn_qn}/dashboards/{d}"
+                        },
+                    }
+                    for d in (201, 202, 203)
+                ],
+            },
+        ]
+
+        transformer = MetabaseTransformer(
+            connector_name="metabase", tenant_id="default"
+        )
+        out = transformer.transform_metadata(
+            typename="BIPROCESS",
+            dataframe=daft.from_pylist(records),
+            workflow_id="wf-1",
+            workflow_run_id="run-1",
+            connection_qualified_name=conn_qn,
+            connection_name="local-test",
+        )
+        assert out is not None
+        result = out.to_pydict()
+
+        attrs = result["attributes"]
+        assert len(attrs) == 2
+
+        # Row 0: single-output BIProcess
+        a0 = attrs[0]
+        assert a0["name"] == "Top Customers"
+        assert a0["qualifiedName"] == f"{conn_qn}/questions_dashboards/10"
+        assert a0["inputs"] == [
+            {
+                "typeName": "MetabaseQuestion",
+                "uniqueAttributes": {"qualifiedName": f"{conn_qn}/questions/10"},
+            }
+        ]
+        assert a0["outputs"] == [
+            {
+                "typeName": "MetabaseDashboard",
+                "uniqueAttributes": {"qualifiedName": f"{conn_qn}/dashboards/200"},
+            }
+        ]
+
+        # Row 1: variable-length outputs survive Daft schema inference
+        a1 = attrs[1]
+        assert a1["name"] == "Quarterly Revenue"
+        assert len(a1["outputs"]) == 3
+        assert {o["uniqueAttributes"]["qualifiedName"] for o in a1["outputs"]} == {
+            f"{conn_qn}/dashboards/201",
+            f"{conn_qn}/dashboards/202",
+            f"{conn_qn}/dashboards/203",
+        }
