@@ -24,7 +24,7 @@ from typing import Any
 
 import daft
 from application_sdk.app import App, entrypoint, task
-from application_sdk.contracts.storage import UploadInput
+from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.observability.logger_adaptor import get_logger
@@ -33,6 +33,8 @@ from app.client import MetabaseApiClient, build_client
 from app.contracts import (
     TRANSFORM_ASSET_TYPES,
     TYPENAME_TO_PROCESS_DIR,
+    BuildLineageInput,
+    BuildLineageOutput,
     FetchDetailInput,
     FetchInput,
     FetchOutput,
@@ -792,6 +794,75 @@ class MetabaseApp(App):
         )
 
     # ------------------------------------------------------------------
+    # LINEAGE @task — file I/O for extract_lineage
+    # ------------------------------------------------------------------
+    # Lives in a @task (not the entrypoint) because Temporal's workflow
+    # sandbox blocks built-in open() inside workflow code. Activities
+    # are free to do file I/O.
+
+    @task(timeout_seconds=1800)
+    async def build_lineage_records(
+        self, input: BuildLineageInput
+    ) -> BuildLineageOutput:
+        """Read QI parsed-SQL output and stage Process + ColumnProcess NDJSON.
+
+        QI NDJSON shape: {QUERY_ID, SQL, PARSED_DATA{dbobjs, relationships}, OUTPUT_FLAGS}
+        See app/lineage/qi_reader.py for format coercion and
+        app/lineage/ars_builder.py for the PARTIAL_OBJECT / PARTIAL_FIELD
+        record construction.
+        """
+        processes: list[dict[str, Any]] = []
+        column_processes: list[dict[str, Any]] = []
+
+        for record in iter_qi_records(input.qi_local_path):
+            query_id, sql, source_tables, source_columns = parse_qi_record(record)
+            if not query_id:
+                continue
+            # QI QUERY_ID is the MetabaseQuestion qualifiedName
+            # (default/metabase/<conn>/questions/<id>) — extract the trailing id.
+            question_id = query_id.rsplit("/", 1)[-1]
+            question_name = record.get("QUESTION_NAME") or query_id
+
+            process = build_process(
+                connection_qualified_name=input.connection_qualified_name,
+                connection_name=input.connection_name,
+                question_id=question_id,
+                question_name=question_name,
+                sql=sql,
+                source_tables=source_tables,
+            )
+            if process is None:
+                continue
+            processes.append(process)
+
+            cp = build_column_process(
+                connection_qualified_name=input.connection_qualified_name,
+                connection_name=input.connection_name,
+                question_id=question_id,
+                question_name=question_name,
+                sql=sql,
+                source_columns=source_columns,
+                parent_process_hash=process_hash(question_id, sql),
+            )
+            if cp is not None:
+                column_processes.append(cp)
+
+        stage_dir = os.path.join(input.output_path, "lineage-stage")
+        os.makedirs(os.path.join(stage_dir, "PROCESS"), exist_ok=True)
+        os.makedirs(os.path.join(stage_dir, "COLUMNPROCESS"), exist_ok=True)
+        write_jsonl(os.path.join(stage_dir, "PROCESS", "result-0.json"), processes)
+        write_jsonl(
+            os.path.join(stage_dir, "COLUMNPROCESS", "result-0.json"),
+            column_processes,
+        )
+
+        return BuildLineageOutput(
+            stage_dir=stage_dir,
+            process_count=len(processes),
+            column_process_count=len(column_processes),
+        )
+
+    # ------------------------------------------------------------------
     # extract_lineage — second @entrypoint
     # ------------------------------------------------------------------
 
@@ -828,68 +899,42 @@ class MetabaseApp(App):
             or input.connection.attributes.qualified_name
         )
         output_path = input.output_path or _default_output_path(input.workflow_id)
+        connection_name = input.connection.attributes.name or "metabase"
         logger.info(
             "MetabaseApp.extract_lineage: connection_qn=%s, view_lineage_input_prefix=%s",
             connection_qn,
             input.view_lineage_input_prefix,
         )
 
-        # Read QI parsed-SQL output → build ARS Process + ColumnProcess.
-        # QI NDJSON shape: {QUERY_ID, SQL, PARSED_DATA{dbobjs, relationships}, OUTPUT_FLAGS}
-        # See app/lineage/qi_reader.py for format coercion and
-        # app/lineage/ars_builder.py for the PARTIAL_OBJECT / PARTIAL_FIELD
-        # record construction.
-        connection_name = input.connection.attributes.name or "metabase"
-        processes: list[dict[str, Any]] = []
-        column_processes: list[dict[str, Any]] = []
+        # Download QI parsed-SQL output from the object store. The Pkl
+        # contract threads ``view_lineage_input_prefix`` as a storage key
+        # (``$.extract.outputs.view_lineage_output_prefix``); iter_qi_records
+        # needs a local path. download() handles a missing prefix gracefully
+        # (returns an empty local dir, file_count=0).
+        qi_local_path = ""
+        if input.view_lineage_input_prefix:
+            dl = await self.download(
+                DownloadInput(storage_path=input.view_lineage_input_prefix)
+            )
+            qi_local_path = dl.ref.local_path or ""
 
-        for record in iter_qi_records(input.view_lineage_input_prefix):
-            query_id, sql, source_tables, source_columns = parse_qi_record(record)
-            if not query_id:
-                continue
-            # QI QUERY_ID is the MetabaseQuestion qualifiedName
-            # (default/metabase/<conn>/questions/<id>) — extract the trailing id.
-            question_id = query_id.rsplit("/", 1)[-1]
-            question_name = record.get("QUESTION_NAME") or query_id
-
-            process = build_process(
+        # File I/O (read QI NDJSON, write Process/ColumnProcess staging) is
+        # delegated to build_lineage_records — the workflow sandbox forbids
+        # built-in open() in entrypoint code.
+        build = await self.build_lineage_records(
+            BuildLineageInput(
+                output_path=output_path,
+                qi_local_path=qi_local_path,
                 connection_qualified_name=connection_qn,
                 connection_name=connection_name,
-                question_id=question_id,
-                question_name=question_name,
-                sql=sql,
-                source_tables=source_tables,
             )
-            if process is None:
-                continue
-            processes.append(process)
-
-            cp = build_column_process(
-                connection_qualified_name=connection_qn,
-                connection_name=connection_name,
-                question_id=question_id,
-                question_name=question_name,
-                sql=sql,
-                source_columns=source_columns,
-                parent_process_hash=process_hash(question_id, sql),
-            )
-            if cp is not None:
-                column_processes.append(cp)
-
-        stage_dir = os.path.join(output_path, "lineage-stage")
-        os.makedirs(os.path.join(stage_dir, "PROCESS"), exist_ok=True)
-        os.makedirs(os.path.join(stage_dir, "COLUMNPROCESS"), exist_ok=True)
-        write_jsonl(os.path.join(stage_dir, "PROCESS", "result-0.json"), processes)
-        write_jsonl(
-            os.path.join(stage_dir, "COLUMNPROCESS", "result-0.json"),
-            column_processes,
         )
 
         # Upload lineage-stage/ to object store at the canonical prefix.
         lineage_stage_prefix = ""
-        if os.path.isdir(stage_dir):
+        if build.stage_dir:
             upload = await self.upload(
-                UploadInput(local_path=stage_dir, tier=StorageTier.RETAINED)
+                UploadInput(local_path=build.stage_dir, tier=StorageTier.RETAINED)
             )
             lineage_stage_prefix = upload.ref.storage_path or ""
 
@@ -904,8 +949,8 @@ class MetabaseApp(App):
         logger.info(
             "MetabaseApp.extract_lineage complete: processes=%d, column_processes=%d, "
             "lineage_stage_prefix=%s",
-            len(processes),
-            len(column_processes),
+            build.process_count,
+            build.column_process_count,
             lineage_stage_prefix,
         )
 
@@ -914,6 +959,6 @@ class MetabaseApp(App):
             connection_qualified_name=connection_qn,
             lineage_publish_state_prefix=lineage_publish_state_prefix,
             lineage_current_state_prefix=lineage_current_state_prefix,
-            process_count=len(processes),
-            column_process_count=len(column_processes),
+            process_count=build.process_count,
+            column_process_count=build.column_process_count,
         )
