@@ -463,6 +463,7 @@ class MetabaseApp(App):
             dashboard_details=dashboard_details,
             filtered_questions=filtered_questions,
             metabase_host=metabase_host,
+            connection_qualified_name=input.connection_qualified_name,
         )
 
         c_out = _processed_file(input.output_path, "collections")
@@ -711,6 +712,7 @@ class MetabaseApp(App):
                 questions_filtered_file=filtered.questions_filtered_file,
                 credential_ref=cred_ref,
                 inline_credentials=inline_creds,
+                connection_qualified_name=input.connection.attributes.qualified_name,
             )
         )
 
