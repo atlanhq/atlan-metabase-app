@@ -24,7 +24,7 @@ from typing import Any
 
 import daft
 from application_sdk.app import App, entrypoint, task
-from application_sdk.contracts.storage import UploadInput
+from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.observability.logger_adaptor import get_logger
@@ -814,7 +814,7 @@ class MetabaseApp(App):
         processes: list[dict[str, Any]] = []
         column_processes: list[dict[str, Any]] = []
 
-        for record in iter_qi_records(input.view_lineage_input_prefix):
+        for record in iter_qi_records(input.qi_local_path):
             query_id, sql, source_tables, source_columns = parse_qi_record(record)
             if not query_id:
                 continue
@@ -906,13 +906,25 @@ class MetabaseApp(App):
             input.view_lineage_input_prefix,
         )
 
+        # Download QI parsed-SQL output from the object store. The Pkl
+        # contract threads ``view_lineage_input_prefix`` as a storage key
+        # (``$.extract.outputs.view_lineage_output_prefix``); iter_qi_records
+        # needs a local path. download() handles a missing prefix gracefully
+        # (returns an empty local dir, file_count=0).
+        qi_local_path = ""
+        if input.view_lineage_input_prefix:
+            dl = await self.download(
+                DownloadInput(storage_path=input.view_lineage_input_prefix)
+            )
+            qi_local_path = dl.ref.local_path or ""
+
         # File I/O (read QI NDJSON, write Process/ColumnProcess staging) is
         # delegated to build_lineage_records — the workflow sandbox forbids
         # built-in open() in entrypoint code.
         build = await self.build_lineage_records(
             BuildLineageInput(
                 output_path=output_path,
-                view_lineage_input_prefix=input.view_lineage_input_prefix,
+                qi_local_path=qi_local_path,
                 connection_qualified_name=connection_qn,
                 connection_name=connection_name,
             )
