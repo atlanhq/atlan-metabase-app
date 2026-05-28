@@ -352,7 +352,9 @@ class BuildLineageInput(Input):
     """
 
     output_path: str = ""
-    view_lineage_input_prefix: str = ""
+    # Local directory holding QI parsed-SQL NDJSON (already downloaded from
+    # ``view_lineage_input_prefix`` by the entrypoint).
+    qi_local_path: str = ""
     connection_qualified_name: str = ""
     connection_name: str = ""
 
