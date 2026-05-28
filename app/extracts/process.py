@@ -182,6 +182,7 @@ def process_assets(
     dashboard_details: List[Dict],
     filtered_questions: List[Dict],
     metabase_host: str,
+    connection_qualified_name: str = "",
 ) -> Tuple[List[Dict], List[Dict], List[Dict]]:
     """Process and enrich all Metabase assets.
 
@@ -235,8 +236,11 @@ def process_assets(
         - ``enriched_questions`` (List[Dict]) — questions with query object,
           collection, dashboards list, and sourceURL.
         - ``questions_dashboards_lineage`` (List[Dict]) — BIProcess records
-          ``{question_id, question_name, dashboards: [{id, name}]}``.
-          Only questions that appear on at least one dashboard are included.
+          ``{name, question_id, inputs, outputs}`` where ``inputs`` is a
+          single-element list pointing at the MetabaseQuestion and
+          ``outputs`` is a list of MetabaseDashboard refs (Atlas-style
+          ``{typeName, uniqueAttributes: {qualifiedName}}``). Only
+          questions that appear on at least one dashboard are included.
 
     Note:
         The first element of the tuple is kept for symmetry but is the same
@@ -383,16 +387,31 @@ def process_assets(
                 if dashboard_obj is not None:
                     question["dashboards"].append(dashboard_obj)
 
-        # Emit lineage record if the question appears on at least one dashboard
+        # Emit lineage record if the question appears on at least one dashboard.
+        # Records are shaped for the BIProcess transformer YAML: pre-built
+        # Atlas refs avoid building list-of-struct columns in Daft SQL.
         if question["dashboards"]:
+            question_ref = {
+                "typeName": "MetabaseQuestion",
+                "uniqueAttributes": {
+                    "qualifiedName": f"{connection_qualified_name}/questions/{question['id']}"
+                },
+            }
+            dashboard_refs = [
+                {
+                    "typeName": "MetabaseDashboard",
+                    "uniqueAttributes": {
+                        "qualifiedName": f"{connection_qualified_name}/dashboards/{d['id']}"
+                    },
+                }
+                for d in question["dashboards"]
+            ]
             questions_dashboards_lineage.append(
                 {
+                    "name": question["name"],
                     "question_id": question["id"],
-                    "question_name": question["name"],
-                    "dashboards": [
-                        {"id": d["id"], "name": d["name"]}
-                        for d in question["dashboards"]
-                    ],
+                    "inputs": [question_ref],
+                    "outputs": dashboard_refs,
                 }
             )
 
