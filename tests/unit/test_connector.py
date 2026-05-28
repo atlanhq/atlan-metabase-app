@@ -580,11 +580,11 @@ class TestExtractLineage:
 # ---------------------------------------------------------------------------
 
 
-def test_passthrough_modules_includes_transformers_and_lineage():
-    """Both helper packages must be in passthrough_modules so the SDK
-    instrumentation skips them."""
+def test_passthrough_modules_includes_lineage():
+    """The lineage helper package must be in passthrough_modules so the SDK
+    instrumentation skips it. The transformers package was removed in the
+    asset-mapper migration."""
     pt = MetabaseApp.passthrough_modules or set()
-    assert "app.transformers" in pt
     assert "app.lineage" in pt
 
 
