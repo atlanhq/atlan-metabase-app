@@ -478,12 +478,17 @@ class TestExtractLineage:
     async def test_empty_qi_output_returns_zero_counts(self, connection, tmp_path):
         app = MetabaseApp()
         type(app).run_id = property(lambda _self: "run-x")  # type: ignore[misc]
+        missing_local = str(tmp_path / "nope")
+        # Download a missing storage prefix returns an empty local dir.
+        app.download = AsyncMock(
+            return_value=MagicMock(ref=MagicMock(local_path=missing_local))
+        )
         app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
         inp = MetabaseLineageInput(
             workflow_id="wf",
             connection=connection,
             connection_qualified_name="default/metabase/test",
-            view_lineage_input_prefix=str(tmp_path / "nope"),
+            view_lineage_input_prefix="artifacts/missing/view-lineage",
             output_path=str(tmp_path / "out"),
         )
         out = await app.extract_lineage(inp)  # type: ignore[call-arg]
@@ -528,6 +533,11 @@ class TestExtractLineage:
 
         app = MetabaseApp()
         type(app).run_id = property(lambda _self: "run-x")  # type: ignore[misc]
+        # Mock download to hand back the local qi_dir (simulating the QI
+        # storage prefix already being materialised on disk).
+        app.download = AsyncMock(
+            return_value=MagicMock(ref=MagicMock(local_path=str(qi_dir)))
+        )
         app.upload = AsyncMock(
             return_value=MagicMock(ref=MagicMock(storage_path="x/y"))
         )
@@ -535,7 +545,7 @@ class TestExtractLineage:
             workflow_id="wf",
             connection=connection,
             connection_qualified_name="default/metabase/test",
-            view_lineage_input_prefix=str(qi_dir),
+            view_lineage_input_prefix="artifacts/wf/run-x/view-lineage",
             output_path=str(tmp_path / "out"),
         )
 
