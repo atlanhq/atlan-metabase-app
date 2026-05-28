@@ -104,9 +104,9 @@ class TestQualifiedNameUsesConcat:
     )
     def test_qualified_name_source_query_uses_concat(self, filename):
         query = self._get_qualified_name_source_query(filename)
-        assert "concat(" in query, (
-            f"{filename}: qualifiedName.source_query should use 'concat(', got: {query!r}"
-        )
+        assert (
+            "concat(" in query
+        ), f"{filename}: qualifiedName.source_query should use 'concat(', got: {query!r}"
 
 
 # =============================================================================

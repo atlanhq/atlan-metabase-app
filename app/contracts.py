@@ -330,6 +330,7 @@ class ProcessInput(Input, allow_unbounded_fields=True):
     questions_filtered_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
     inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    connection_qualified_name: str = ""
 
 
 class ProcessOutput(Output):

@@ -712,6 +712,7 @@ class MetabaseApp(App):
                 questions_filtered_file=filtered.questions_filtered_file,
                 credential_ref=cred_ref,
                 inline_credentials=inline_creds,
+                connection_qualified_name=input.connection.attributes.qualified_name,
             )
         )
 
