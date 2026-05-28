@@ -198,6 +198,21 @@ extraNodes {
     publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
     currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
     waitForAssetPublish = false
+
+    // Pin lineage-publish's cache flags to `false`. The connection-cache
+    // index (SQLite, mapping typeName + qualifiedName → metadata) is built
+    // and uploaded by the asset publish step from Database/Schema/Table-class
+    // rows. If lineage-publish also writes the index from lineage-stage data
+    // (Process / ColumnProcess), it overwrites the asset crawler's index and
+    // breaks downstream qualified-name lookups for miners / BI lineage builders.
+    //
+    // Toolkit 0.10.0 (what this app pins) defaults these to `true` for
+    // LineagePublishNode — fixed upstream in INTERNAL-TICKET to
+    // `false`, but not yet released. Remove these two overrides once we
+    // bump to toolkit > 0.10.0.
+    connectionCacheEnabled = false
+    connectionCacheViaAppEnabled = false
+
     errorHandling = new ErrorHandlingConfig {
       startToCloseTimeoutSeconds = 86400
     }
