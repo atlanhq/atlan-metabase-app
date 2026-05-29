@@ -247,7 +247,7 @@ def process_assets(
         list as ``enriched_dashboards``; callers can unpack all four values.
     """
     # ------------------------------------------------------------------
-    # Local lookup dicts (mirror SqliteDict usage in legacy main.py)
+    # Local lookup dicts
     # ------------------------------------------------------------------
     dashboards: Dict[Any, Dict] = {}
     cards_dashboard_map: Dict[Any, List[Any]] = {}

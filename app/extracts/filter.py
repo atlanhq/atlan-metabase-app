@@ -117,7 +117,7 @@ def filter_dashboards(
         if collection_id not in collections: continue
 
     Note: The legacy code stores integer collection ids as keys in a
-    ``SqliteDict`` and compares them without stringification.  Here we
+    in-process dicts and compares them without stringification.  Here we
     normalise to strings (matching :func:`build_accepted_collection_ids`)
     so that ``"1"`` and ``1`` are treated identically.
 
