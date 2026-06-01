@@ -36,6 +36,6 @@ deploy:
     ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS: '86400'
     ATLAN_TENANT_ID: default
     APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR: 'false'
-dockerfile: ./deploy/Dockerfile
+dockerfile: ./Dockerfile
 argo_package_names:
 - '@atlan/metabase'

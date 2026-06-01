@@ -3,7 +3,7 @@ name: Build & Publish
 # CI/CD-managed via Global Marketplace.
 #
 # Pushes to main automatically build the container image (from
-# ./deploy/Dockerfile per atlan.yaml) and publish a release to GM. By
+# ./Dockerfile per atlan.yaml) and publish a release to GM. By
 # default this creates a draft release for channel=all that needs
 # approval before going live.
 #
