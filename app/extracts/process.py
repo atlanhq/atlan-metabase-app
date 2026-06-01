@@ -246,9 +246,6 @@ def process_assets(
         The first element of the tuple is kept for symmetry but is the same
         list as ``enriched_dashboards``; callers can unpack all four values.
     """
-    # ------------------------------------------------------------------
-    # Local lookup dicts (mirror SqliteDict usage in legacy main.py)
-    # ------------------------------------------------------------------
     dashboards: Dict[Any, Dict] = {}
     cards_dashboard_map: Dict[Any, List[Any]] = {}
 

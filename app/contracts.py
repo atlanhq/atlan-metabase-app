@@ -18,16 +18,17 @@ accepts.
 from __future__ import annotations
 
 import json
-import logging
 from typing import Annotated, Any
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
-from application_sdk.credentials.types import BasicCredential
+from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-_logger = logging.getLogger(__name__)
+from app.credentials import MetabaseCredential
+
+_logger = get_logger(__name__)
 
 
 def _coerce_collection_filter(value: Any) -> Any:
@@ -67,35 +68,7 @@ def _coerce_collection_filter(value: Any) -> Any:
     return value
 
 
-__all__ = ["CredentialRef"]  # keep import live (annotations-only otherwise)
-
-# ---------------------------------------------------------------------------
-# Typed credential
-# ---------------------------------------------------------------------------
-
-
-class MetabaseCredential(BasicCredential, frozen=True):
-    """Username + password credential plus Metabase host/port.
-
-    ``host`` is stored with its protocol prefix (e.g.
-    ``https://acme.metabaseapp.com``) — the v2 ``restCredentialTemplate``
-    writes the URL as ``{{host}}:{{port}}/...`` without prepending a scheme,
-    and the e2e Docker pipeline targets ``http://localhost:3000``.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    host: str = ""
-    port: int = 443
-
-    # Override BasicCredential's required fields so the model can be
-    # constructed empty (e.g. as a default_factory) and populated later.
-    username: str = ""
-    password: str = ""
-
-    @property
-    def credential_type(self) -> str:  # type: ignore[override]
-        return "basic"
+__all__ = ["CredentialRef", "MetabaseCredential"]
 
 
 # ---------------------------------------------------------------------------

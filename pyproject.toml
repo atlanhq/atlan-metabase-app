@@ -14,18 +14,14 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pre-commit>=3.8.0",
-    "isort>=5.13.2",
-    "watchdog>=6.0.0",
     "requests",
     "pyright>=1.1.403",
     "ruff>=0.12.7",
 ]
 test = [
     "pytest>=8.3.3",
-    "pytest-timeout>=2.2.0",
     "coverage>=7.6.1",
     "pytest-asyncio>=0.24.0",
-    "pytest-cov>=6.2.1",
 ]
 
 [tool.poe.tasks]
@@ -80,6 +76,24 @@ packages = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.ruff.lint]
+# Logging-quality rules to prevent regressions of patterns the
+# signal-over-noise audit fixed.
+# Note: G002 (%-style formatting) is intentionally NOT enabled — the SDK's
+# get_logger() adapter bridges %-style to loguru via _format_printf_args,
+# making %-style the *correct* pattern in this repo.
+select = [
+    "G004",   # logging-f-string
+    "G003",   # logging-string-concat
+    "T201",   # print statement
+    "LOG009", # logger.warn deprecated; use logger.warning
+]
+
+[tool.ruff.lint.per-file-ignores]
+# E2E scripts print human-readable diagnostics — stdout is the intended
+# output for these tests; structured logging is unnecessary.
+"tests/e2e/**" = ["T201"]
 
 [tool.pyright]
 venvPath = "."
