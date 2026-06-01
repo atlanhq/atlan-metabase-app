@@ -109,8 +109,10 @@ class MetabaseHandler(Handler):
                 if not collection.get("personal_owner_id")
             ]
             logger.info(
-                f"fetch_metadata: returning {len(objects)} non-personal collections "
-                f"(filtered from {len(raw_collections)} total)"
+                "fetch_metadata: returning %d non-personal collections "
+                "(filtered from %d total)",
+                len(objects),
+                len(raw_collections),
             )
             return ApiMetadataOutput(objects=objects)
         finally:
