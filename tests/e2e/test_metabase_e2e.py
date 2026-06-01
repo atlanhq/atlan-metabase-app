@@ -31,13 +31,10 @@ if not os.environ.get("ATLAN_BASE_URL") or not os.environ.get("ATLAN_API_KEY"):
 # SDK is older the test is cleanly skipped rather than erroring. The
 # type-ignore comments silence pyright on stale local pins; the runtime
 # import-guard handles correctness.
+# pyright: reportAttributeAccessIssue=false, reportMissingImports=false
 try:
-    from application_sdk.testing.e2e import (  # type: ignore[attr-defined] # noqa: E402
-        RunMode,
-    )
-    from application_sdk.testing.e2e.payload import (  # type: ignore[import-not-found] # noqa: E402
-        AgentSpec,
-    )
+    from application_sdk.testing.e2e import RunMode  # noqa: E402
+    from application_sdk.testing.e2e.payload import AgentSpec  # noqa: E402
 
     from app.generated._e2e_base import MetabaseGeneratedE2EBase  # noqa: E402
     from app.generated._e2e_substitutions import (  # noqa: E402
@@ -50,8 +47,8 @@ except ImportError as _exc:
     )
 
 
-@pytest.mark.e2e_full
-class TestMetabaseE2EFull(MetabaseGeneratedE2EBase):
+@pytest.mark.e2e
+class TestMetabaseE2E(MetabaseGeneratedE2EBase):
     """Full-DAG e2e against a real tenant + docker-compose Metabase.
 
     Name-derived attrs (``connector_short_name``, ``connection_type``,
