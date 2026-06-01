@@ -280,13 +280,13 @@ uv run pre-commit run --all-files
 The container entry point is `python main.py`, which is a thin shim that
 calls `app.run_dev.main`. In production deployments the SDK runtime is
 invoked via `ATLAN_APP_MODULE=app.connector:MetabaseApp` (set in
-`atlan.yaml` → `deploy.env`); the image is built from `deploy/Dockerfile`
+`atlan.yaml` → `deploy.env`); the image is built from `Dockerfile`
 by the shared build-and-publish workflow.
 
 Build locally:
 
 ```bash
-docker build --no-cache -t atlan-metabase-app:latest -f deploy/Dockerfile .
+docker build --no-cache -t atlan-metabase-app:latest .
 ```
 
 ---
