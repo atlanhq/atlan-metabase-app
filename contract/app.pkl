@@ -35,24 +35,16 @@ connector = Connectors.METABASE
 icon = "https://assets.atlan.com/assets/metabase.svg"
 logo = "https://assets.atlan.com/assets/metabase.svg"
 credentialConnectorType = "rest"
-docsUrl = "https://docs.atlan.com/apps/connectors/business-intelligence/metabase"
 appId = "019e3a59-89d2-7310-acea-e8eae494483f"
 visibility = "public"
 buildTag = "v1"
 selfDeployedRuntime = false
 
 // Extra atlan.yaml keys the typed App.pkl doesn't model yet (dockerfile
-// path, argo_package_names, top-level docs_url). Deep-merged on top of
-// the generated atlan.yaml.
-//
-// `docsUrl` is a typed first-class field on App.pkl@0.10.0, but the
-// toolkit only renders it under each entrypoint (`entrypoints[].docs_url`)
-// and not at the top level. Override here so the GM listing picks it
-// up at the app root.
+// path, argo_package_names). Deep-merged on top of the generated atlan.yaml.
 atlanYamlOverrides {
   ["dockerfile"] = "./deploy/Dockerfile"
   ["argo_package_names"] = new Listing { "@atlan/metabase" }
-  ["docs_url"] = "https://docs.atlan.com/apps/connectors/business-intelligence/metabase"
 }
 
 // ---- Deployment config (rendered into atlan.yaml's deploy: block) -----
