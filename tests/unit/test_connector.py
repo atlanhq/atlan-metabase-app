@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from application_sdk.contracts.types import ConnectionRef, FileReference
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors import InvalidInputError
 
 from app.connector import MetabaseApp, _ref
 from app.contracts import FetchInput, FilterInput, MetabaseInput, MetabaseLineageInput
@@ -88,7 +89,9 @@ class TestBuildClient:
         fake_input = MagicMock()
         fake_input.credential_ref = None
         fake_input.inline_credentials = {}
-        with pytest.raises(ValueError, match="no credential_ref or inline_credentials"):
+        with pytest.raises(
+            InvalidInputError, match="no credential_ref or inline_credentials"
+        ):
             await app._build_client(fake_input)
 
 

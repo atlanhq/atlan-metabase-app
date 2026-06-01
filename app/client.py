@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from application_sdk.clients.base import BaseClient
+from application_sdk.errors import AuthError
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.constants import MetabaseUrls
@@ -67,7 +68,12 @@ class MetabaseApiClient(BaseClient):
 
         if response is None or not response.is_success:
             status = response.status_code if response else "No response"
-            raise Exception(f"Metabase authentication failed with status: {status}")
+            raise AuthError(
+                message=f"Metabase authentication failed with status: {status}",
+                auth_method="session-token",
+                principal=self.username,
+                failure_reason=str(status),
+            )
 
         self.session_token = response.json()["id"]
         logger.info("Metabase session token obtained successfully")
@@ -75,8 +81,10 @@ class MetabaseApiClient(BaseClient):
     async def test_connection(self) -> bool:
         """Verify that authentication succeeded and a session token is held."""
         if not self.session_token:
-            raise Exception(
-                "No session token available — authentication did not succeed"
+            raise AuthError(
+                message="No session token available — authentication did not succeed",
+                auth_method="session-token",
+                principal=self.username,
             )
         return True
 
