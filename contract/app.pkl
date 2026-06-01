@@ -52,6 +52,15 @@ deploy {
   executionMode = "native"
   replicaCount = 1
 
+  // Toolkit 0.10.4 defaults flipped both of these to true. Pin them
+  // off explicitly so the bump is a no-op for deploy behaviour — KEDA
+  // scale-to-zero is a separate decision and splitDeployment changes
+  // the worker/HTTP container topology.
+  splitDeployment = false
+  keda {
+    enabled = false
+  }
+
   // Dapr sidecars enabled. secretstore is needed for credential
   // resolution (CredentialRef → raw creds via
   // self.context.resolve_credential_raw). objectstore is enabled because

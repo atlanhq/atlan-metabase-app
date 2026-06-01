@@ -266,7 +266,7 @@ jobs:
       - name: Run e2e tests
         run: |
           set -euo pipefail
-          uv run pytest tests/e2e/ \
+          uv run pytest tests/e2e/docker/ \
             -v -s -m e2e \
             --junitxml=e2e-report.xml \
             --tb=short \
@@ -309,10 +309,48 @@ jobs:
             echo "::endgroup::"
           done
 
+  # ── Full-DAG e2e (system apps — extract→qi→publish→lineage-publish) ───
+  # Submits a real AE workflow to a test tenant, lets the system apps run
+  # the DAG against a docker-compose Metabase (.github/e2e/e2e-full-docker-compose.yaml),
+  # and asserts that MetabaseCollection / MetabaseDashboard / MetabaseQuestion /
+  # BIProcess assets plus Process / ColumnProcess lineage records land in Atlas.
+  #
+  # Triggered by `e2e-full` PR label or workflow_dispatch. Requires
+  # SDR_TEST_TENANT / SDR_CLIENT_ID / SDR_CLIENT_SECRET secrets — the
+  # source side is docker, but qi / publish / lineage-publish all write
+  # to the real tenant Atlas.
+  e2e-full:
+    name: e2e-full
+    concurrency:
+      group: tests-e2e-full-${{ github.ref }}
+      cancel-in-progress: false
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'e2e-full') ||
+          contains(github.event.pull_request.labels.*.name, 'e2e-full')
+        ) &&
+        github.event.pull_request.head.repo.fork != true &&
+        github.event.pull_request.user.login != 'dependabot[bot]'
+      )
+    uses: atlanhq/application-sdk/.github/workflows/e2e-full-reusable.yaml@main
+    with:
+      app-name: metabase
+      app-image-name: atlan-metabase-app
+      # Scope to the new full-DAG sub-dir — the source-side Docker tests
+      # under tests/e2e/docker/ are exercised by the `e2e` job above.
+      test-path: tests/e2e/full_dag/
+      secrets-script: .github/e2e/make-secrets-e2e-full.py
+      compose-overlay: .github/e2e/e2e-full-docker-compose.yaml
+      distinct-id: ${{ inputs.distinct_id }}
+    secrets: inherit
+
   # ── Aggregator gate (single required check for branch protection) ─────
   tests-passed:
     name: tests-passed
-    needs: [tests, e2e]
+    needs: [tests, e2e, e2e-full]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -331,8 +369,9 @@ jobs:
             |---|---|---|
             | tests | ${{ needs.tests.result == 'success' && '✅ Passed' || (needs.tests.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
             | e2e | ${{ needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || '❌ Failed') }} | (see run) |
+            | e2e-full | ${{ needs['e2e-full'].result == 'success' && '✅ Passed' || (needs['e2e-full'].result == 'skipped' && '⊘ Skipped — add `e2e-full` label to trigger' || '❌ Failed') }} | (see run) |
 
-            **Overall:** ${{ (needs.tests.result == 'success' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Overall:** ${{ (needs.tests.result == 'success' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped') && (needs['e2e-full'].result == 'success' || needs['e2e-full'].result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
         continue-on-error: true
 
       - name: Verify all test jobs succeeded
@@ -343,6 +382,10 @@ jobs:
           fi
           if [ "${{ needs.e2e.result }}" != "success" ] && [ "${{ needs.e2e.result }}" != "skipped" ]; then
             echo "::error::e2e did not succeed (result=${{ needs.e2e.result }})"
+            exit 1
+          fi
+          if [ "${{ needs['e2e-full'].result }}" != "success" ] && [ "${{ needs['e2e-full'].result }}" != "skipped" ]; then
+            echo "::error::e2e-full did not succeed (result=${{ needs['e2e-full'].result }})"
             exit 1
           fi
           echo "All test jobs passed."
