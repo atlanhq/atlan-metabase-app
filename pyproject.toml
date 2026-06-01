@@ -92,8 +92,9 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 # E2E scripts print human-readable diagnostics — stdout is the intended
-# output for these tests; structured logging is unnecessary.
+# output for these tests / CI helpers; structured logging is unnecessary.
 "tests/e2e/**" = ["T201"]
+".github/e2e/**" = ["T201"]
 
 [tool.pyright]
 venvPath = "."
