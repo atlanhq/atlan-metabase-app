@@ -1,29 +1,140 @@
-# atlan-metabase-app
+# Metabase Connector
 
-Metabase connector built on the [Atlan Application SDK](https://github.com/atlanhq/application-sdk). Crawls Collections / Dashboards / Questions / Question-on-Dashboard lineage from a Metabase instance and publishes them to Atlan, plus emits ARS 2.0 cross-connector lineage edges from each native-SQL Metabase question to the upstream tables / columns in whichever connector owns them (Postgres, Snowflake, BigQuery, MySQL, …).
-
-The app exposes:
-- **HTTP handler** — `/workflows/v1/auth`, `/workflows/v1/check`, `/workflows/v1/metadata`, `/workflows/v1/start`, `/workflows/v1/result/<id>`. Used by the Atlan UI for credential test, 4 named preflight checks, the collection-tree picker, and to start/poll workflows.
-- **Temporal workflows** — two `@entrypoint` methods (`extract_metadata`, `extract_lineage`) registered as separate workflow types; dispatched by Atlan's Automation Engine as a 5-node DAG.
+Crawls Collections, Dashboards, Questions, and Question↔Dashboard relationships from a Metabase instance and publishes them to Atlan. Native-SQL Metabase questions also produce ARS 2.0 cross-connector lineage edges to upstream tables/columns in the underlying database connector (Snowflake, Postgres, BigQuery, MySQL, …).
 
 ---
 
-## Try it in 30 seconds
+## What it does
 
-You need **Python 3.11+** and [**`uv`**](https://github.com/astral-sh/uv). The SDK handles everything else for you (no Temporal CLI, no Dapr, no Redis required).
+1. **Extract** — fetches collections, dashboards, questions (cards), and databases from Metabase's REST API into per-entity JSONL files under `raw/`.
+2. **Filter** — applies `include_collections` / `exclude_collections` to drop personal collections and anything outside the selection; cascades to dashboards and questions by collection id.
+3. **Detail-fetch** — per-id calls for each filtered dashboard (ordered cards), database (schemas/tables), and question (native SQL string).
+4. **Enrich** — joins the streams, stamps `metabaseQuery` / `metabaseSourceDatabaseName` / `metabaseSourceSchemaName` onto each question (the keys QueryIntelligence reads), and emits `BIProcess` records for pinned-card relationships.
+5. **Transform** — runs each record through a typed pyatlan asset mapper and writes the final Atlas JSON to `transformed/<TYPENAME>/result-0.json`.
+6. **Upload** — `self.upload(UploadInput(...))` ships the `transformed/` tree to object storage; the prefix is handed to the Automation Engine's publish node.
+7. **Build cross-connector lineage** — `extract_lineage` (second entrypoint) reads the QueryIntelligence app's parsed-SQL NDJSON, builds ARS 2.0 `Process` + `ColumnProcess` records with PARTIAL_OBJECT / PARTIAL_FIELD references, and uploads the staged NDJSON for `lineage-publish` to resolve against the owning connector.
 
-```bash
-git clone https://github.com/atlanhq/atlan-metabase-app.git
-cd atlan-metabase-app
-uv sync --all-extras --all-groups   # one-time: install deps
-uv run python -m app.run_dev        # boots the dev server on :8000
+### Assets produced
+
+| Asset | Atlan type | QN pattern | Count |
+|---|---|---|---|
+| Collection | `MetabaseCollection` | `{connection_qn}/collection/{id}` | 1 per non-filtered collection |
+| Dashboard | `MetabaseDashboard` | `{connection_qn}/dashboard/{id}` | 1 per dashboard in selected collections |
+| Question | `MetabaseQuestion` | `{connection_qn}/question/{id}` | 1 per card in selected collections |
+| BI process | `BIProcess` | `{connection_qn}/bi-process/{question_id}/{dashboard_id}` | 1 per pinned card on a dashboard |
+| Process / ColumnProcess (ARS 2.0) | `Process` / `ColumnProcess` | hash-based; PARTIAL_OBJECT / PARTIAL_FIELD refs to upstream | Built by the platform's QueryIntelligence node, finalized by `extract_lineage` |
+
+---
+
+## Input
+
+Input is defined in [`contract/app.pkl`](contract/app.pkl) and code-generated into [`app/generated/_input.py`](app/generated/_input.py). To regenerate after editing the pkl:
+
+```
+pkl eval -m . --project-dir contract contract/app.pkl
 ```
 
-The first run takes ~30 s while the SDK fetches runtime binaries (cached after that).
+### Credential channels
 
-In a second terminal, point the app at a Metabase instance:
+Credentials can arrive on three paths (resolved by [`build_credential_ref`](app/credentials.py)):
+
+| Channel | Field on input | When it is set |
+|---|---|---|
+| Pkl `CredentialRef` | `metabase_credential` | v3 native marketplace path — the secret store key is resolved at task time via `self.context.resolve_credential_raw`. |
+| Legacy GUID | `credential_guid` | Older platform builds — a `CredentialRef` is synthesised from the GUID. |
+| Inline | `credentials` (`list[{key,value}]` or `dict`) | Local dev / direct API consumers — passed through as `inline_credentials` to every `@task`. |
+
+Per-task inputs (`FetchInput`, `FilterInput`, `FetchDetailInput`, `ProcessInput`) carry `credential_ref` + `inline_credentials` so each Temporal activity rebuilds its own client.
+
+### `extract_metadata` input fields ([`MetabaseInput`](app/contracts.py))
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `workflow_id` | `str` | `""` | Temporal workflow id. Threaded into output paths. |
+| `metabase_credential` | `CredentialRef \| None` | `None` | Pkl-contract credential reference. |
+| `credential_guid` | `str` | `""` | Legacy credential GUID. |
+| `credentials` | `list[dict] \| dict` | `[]` | Inline credentials (local dev). |
+| `extraction_method` | `str` | `"direct"` | Always `"direct"` for Metabase. |
+| `agent_json` | `str` | `""` | Reserved for agent-based credential resolution. |
+| `connection` | `ConnectionRef` | empty | The Atlan connection assets are written under. |
+| `include_collections` | `dict[str, CollectionSelection]` | `{}` | Collection ids to include. Empty = include all non-personal. |
+| `exclude_collections` | `dict[str, CollectionSelection]` | `{}` | Collection ids to skip. |
+| `output_path` | `str` | `""` | Local working directory. Defaults to a temp dir. |
+| `output_prefix` | `str` | `""` | Object-store prefix for the `transformed/` upload. |
+| `processed_data_path` | `str` | `""` | Override read root for `transform_data` (debug-only). |
+| `chunk_start` | `int` | `0` | Chunk index threaded into output filenames. |
+
+### `extract_lineage` input fields ([`MetabaseLineageInput`](app/contracts.py))
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `workflow_id` | `str` | `""` | Temporal workflow id. |
+| `connection` | `ConnectionRef` | empty | Same connection as `extract_metadata`. |
+| `connection_qualified_name` | `str` | `""` | Threaded from `extract_metadata.outputs.connection_qualified_name`. |
+| `view_lineage_input_prefix` | `str` | `""` | Object-store prefix where the QueryIntelligence node wrote parsed-SQL NDJSON. |
+| `output_path` | `str` | `""` | Local working directory. |
+| `output_prefix` | `str` | `""` | Object-store prefix for the `lineage-stage/` upload. |
+
+---
+
+## Output
+
+### `extract_metadata` output fields ([`MetabaseOutput`](app/contracts.py))
+
+| Field | Type | Description |
+|---|---|---|
+| `transformed_data_prefix` | `str` | Object-store prefix of the uploaded `transformed/` tree. Read by the publish node. |
+| `connection_qualified_name` | `str` | Echoed from `input.connection`. Used to scope downstream state buckets. |
+| `output_path` | `str` | Local working directory (so re-runs / debug tools can find intermediate files). |
+| `view_lineage_output_prefix` | `str` | Prefix the QueryIntelligence node will write parsed-SQL output to. Threaded into `extract_lineage`. |
+| `publish_state_prefix` | `str` | Blue-green publish state prefix derived under `persistent-artifacts/`. |
+| `current_state_prefix` | `str` | Current-state cache prefix derived under `argo-artifacts/`. |
+| `lineage_publish_state_prefix` | `str` | Lineage-scoped publish state prefix. |
+| `lineage_current_state_prefix` | `str` | Lineage-scoped current-state cache prefix. |
+| `lineage_stage_prefix` | `str` | Prefix `extract_lineage` will upload its staged NDJSON to. |
+| `total_records` | `int` | Total transformed assets across the four typenames. |
+
+### `extract_lineage` output fields ([`MetabaseLineageOutput`](app/contracts.py))
+
+| Field | Type | Description |
+|---|---|---|
+| `lineage_stage_prefix` | `str` | Object-store prefix of the uploaded `lineage-stage/` tree. Read by the lineage-publish node. |
+| `connection_qualified_name` | `str` | Echoed for state-bucket scoping. |
+| `lineage_publish_state_prefix` | `str` | Lineage-scoped publish state prefix. |
+| `lineage_current_state_prefix` | `str` | Lineage-scoped current-state cache prefix. |
+| `process_count` | `int` | Number of `Process` records emitted. |
+| `column_process_count` | `int` | Number of `ColumnProcess` records emitted. |
+
+---
+
+## Local development
+
+### Prerequisites
+
+- Python 3.11+, [`uv`](https://github.com/astral-sh/uv)
+- [`pkl`](https://pkl-lang.org/) — only if you edit `contract/app.pkl` (`brew install pkl`)
+- Docker — only for the live e2e harness in `tests/e2e/`
+
+The SDK boots embedded Temporal in-process via `run_dev_combined`, so the Temporal CLI and a Dapr sidecar are **not** required for local dev.
+
+### Setup
 
 ```bash
+uv sync --all-extras --all-groups
+```
+
+### Run
+
+```bash
+# Boots the SDK's combined HTTP handler + worker on http://localhost:8000.
+# In-process Temporal, in-process backends — no external services required.
+uv run python -m app.run_dev
+```
+
+### Trigger a run
+
+```bash
+# Start an extract_metadata workflow
 curl -X POST http://localhost:8000/workflows/v1/start \
   -H "Content-Type: application/json" \
   -d '{
@@ -42,171 +153,30 @@ curl -X POST http://localhost:8000/workflows/v1/start \
   }'
 # → {"success": true, "data": {"workflow_id": "metabase-...", ...}}
 
+# Check result (use workflow_id from the response above)
 curl http://localhost:8000/workflows/v1/result/<workflow_id>
-# → {"data": {"status": "completed",
-#             "result": {"total_records": 80,
-#                        "transformed_data_prefix": "...",
-#                        ...}}}
 ```
 
-Hit `Ctrl-C` in the first terminal to stop the dev server.
+No Metabase handy? The repo ships an end-to-end harness that spins up `metabase/metabase` in Docker, seeds it, and runs the connector against it — see [`tests/e2e/`](tests/e2e/README.md).
 
-> **No Metabase handy?** The repo ships an end-to-end harness that spins up `metabase/metabase` Docker, seeds it, and runs the connector against it — see [`tests/e2e/`](tests/e2e/README.md). Run it locally or trigger the `e2e-metabase` GitHub workflow.
-
----
-
-## How the app fits together
-
-```
-                  ┌────────────────────────────────────┐
-trigger   ─────▶  │  extract  (extract_metadata @ep)   │ ─── transformed/ JSONL
-{credentials,     │     extract → filter → detail →    │     (Collection, Dashboard,
- connection,      │     enrich → transform → upload    │      Question, BIProcess)
- collection                       │
- filters}                         ▼
-                  ┌────────────────────────────────────┐
-                  │  qi  (QueryIntelligence app)       │ ─── parsed-SQL NDJSON
-                  │  reads attributes.metabaseQuery,   │     ({QUERY_ID, SQL,
-                  │  scoped by                         │      PARSED_DATA, ...})
-                  │  metabaseSourceDatabaseName +      │
-                  │  metabaseSourceSchemaName          │
-                  └─────────────────┬──────────────────┘
-                                    │
-                  ┌────────────────────────────────────┐
-                  │  publish  (atlan-publish-app)      │ ─── Atlan assets
-                  └─────────────────┬──────────────────┘
-                                    │
-                  ┌────────────────────────────────────┐
-                  │  extract-lineage  (extract_lineage @ep)
-                  │  reads QI output → emits ARS 2.0   │
-                  │  Process + ColumnProcess records   │ ─── lineage-stage/ JSONL
-                  │  with PARTIAL_OBJECT / PARTIAL_FIELD│    (cross-connector refs)
-                  └─────────────────┬──────────────────┘
-                                    │
-                  ┌────────────────────────────────────┐
-                  │  lineage-publish (atlan-publish-app │
-                  │  ARS 2.0 resolver mode)            │ ─── Atlan lineage edges
-                  └────────────────────────────────────┘
-```
-
-Two `@entrypoint`s on `MetabaseApp`:
-
-```python
-class MetabaseApp(App):
-    name = "metabase"
-
-    @entrypoint
-    async def extract_metadata(self, input: MetabaseInput) -> MetabaseOutput:
-        # extract → filter → detail-fetch → enrich → transform → upload
-        ...
-
-    @entrypoint
-    async def extract_lineage(
-        self, input: MetabaseLineageInput
-    ) -> MetabaseLineageOutput:
-        # read QI parsed-SQL → build ARS 2.0 Process + ColumnProcess → upload
-        ...
-```
-
-Detailed walkthrough: [`docs/flow.md`](docs/flow.md) (todo) — for now, see the comments at the top of `app/connector.py` and `contract/app.pkl`.
-
----
-
-## Useful commands
+### Tests
 
 ```bash
-# Install dependencies
-uv sync --all-extras --all-groups
+uv run python -m pytest tests/unit -q
+```
 
-# Run the dev server (in-process Temporal + handlers; no Dapr / Temporal CLI needed)
-uv run python -m app.run_dev
+### Regenerate contract artifacts
 
-# Run unit tests (304 tests, 86% coverage)
-uv run pytest tests/unit/
-
-# Run the e2e harness against metabase/metabase Docker (locally; see tests/e2e/README.md)
-docker compose -f tests/e2e/compose.yaml up -d   # spin up Metabase + postgres
-uv run python tests/e2e/seed_metabase.py         # seed admin + collections + questions + dashboards
-uv run pytest tests/e2e/ -v -m e2e               # run e2e tests
-
-# Regenerate PKL contract artifacts after editing contract/app.pkl
+```bash
 pkl eval -m . --project-dir contract contract/app.pkl
-
-# Run all pre-commit hooks (ruff, ruff-format, pyright, isort)
-uv run pre-commit run --all-files
 ```
 
----
+Regenerates `atlan.yaml`, `app/generated/_input.py`, `app/generated/manifest.json`, and the workflow + credential configmap JSONs from `contract/app.pkl`. Commit the outputs.
 
-## Container
-
-The container entry point is `python main.py`, which is a thin shim that calls `app.run_dev.main`. In production deployments the SDK runtime is invoked via `ATLAN_APP_MODULE=app.connector:MetabaseApp` (set in `atlan.yaml` → `deploy.env`); the image is built from `deploy/Dockerfile` by the shared build-and-publish workflow.
-
-Build locally:
+### Container
 
 ```bash
-docker build --no-cache -t atlan-metabase-app:latest -f deploy/Dockerfile .
+docker build --no-cache -t atlan-metabase-app:latest .
 ```
 
----
-
-## Project Structure
-
-```
-atlan-metabase-app/
-├── atlan.yaml                     # AUTO-GENERATED from contract/app.pkl by the
-│                                  # PKL toolkit (App.pkl@0.10.0).
-│                                  # Source of truth for Global Marketplace.
-├── deploy/
-│   └── Dockerfile                 # Built + published by build-and-publish.yaml
-├── contract/
-│   ├── app.pkl                    # PKL contract (declares the 5-node DAG, deploy
-│   │                              # config, credential schema, UI form)
-│   ├── PklProject
-│   └── PklProject.deps.json
-├── app/
-│   ├── connector.py               # MetabaseApp — two @entrypoint methods
-│   ├── contracts.py               # Typed Pydantic Input/Output for both
-│   │                              # entrypoints + per-@task contracts
-│   ├── client.py                  # Metabase REST client (session-token auth)
-│   ├── handler.py                 # /workflows/v1/{auth,check,metadata}
-│   │                              # (4 named preflight checks; personal-collection
-│   │                              # filter in fetch_metadata)
-│   ├── constants.py               # Metabase URL builders
-│   ├── models.py                  # Shared Pydantic models
-│   ├── utils.py                   # JSONL helpers
-│   ├── run_dev.py                 # Local-dev entry (run_dev_combined)
-│   ├── extracts/                  # Per-asset extraction + filter + enrich
-│   │   ├── collections.py
-│   │   ├── dashboards.py
-│   │   ├── databases.py
-│   │   ├── filter.py
-│   │   ├── process.py             # Enrichment — stamps QI input keys
-│   │   │                          # (metabaseQuery, metabaseSourceDatabaseName, …)
-│   │   └── questions.py
-│   ├── transformers/              # YAML-driven Atlas-JSON transforms
-│   │                              # (Collection / Dashboard / Question / BIProcess)
-│   ├── lineage/                   # ARS 2.0 cross-connector lineage builder
-│   │   ├── ars_builder.py         # PARTIAL_OBJECT / PARTIAL_FIELD record builders
-│   │   └── qi_reader.py           # Reads QueryIntelligence parsed-SQL NDJSON
-│   └── generated/                 # PKL-generated — manifest.json, _input.py,
-│                                  # configmap JSONs (do not hand-edit)
-├── tests/
-│   ├── unit/                      # 304 tests, 86% coverage
-│   ├── integration/
-│   └── e2e/                       # Live e2e against metabase/metabase Docker (~1000 assets)
-├── main.py                        # Container entry shim → app.run_dev.main
-└── pyproject.toml
-```
-
----
-
-## Contributing
-
-- Run `uv run pre-commit run --all-files` before pushing.
-- Unit tests must keep coverage at ≥ 85 % (`fail_under = 85` in `pyproject.toml`).
-- After editing `contract/app.pkl`, regenerate artifacts with
-  `pkl eval -m . --project-dir contract contract/app.pkl` and commit them.
-- E2E gate runs against `metabase/metabase:v0.61.2.3` (pinned in
-  `.github/workflows/e2e-metabase.yaml`); bump policy documented in
-  `tests/e2e/README.md`.
+In production the SDK runtime is invoked via `ATLAN_APP_MODULE=app.connector:MetabaseApp` (set in `atlan.yaml` → `deploy.env`); the image is built from `Dockerfile` by the shared build-and-publish workflow.

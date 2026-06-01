@@ -116,10 +116,9 @@ def filter_dashboards(
         collection_id = dashboard['collection_id'] if dashboard['collection_id'] else 'root'
         if collection_id not in collections: continue
 
-    Note: The legacy code stores integer collection ids as keys in a
-    ``SqliteDict`` and compares them without stringification.  Here we
-    normalise to strings (matching :func:`build_accepted_collection_ids`)
-    so that ``"1"`` and ``1`` are treated identically.
+    Note: collection ids are normalised to strings (matching
+    :func:`build_accepted_collection_ids`) so that ``"1"`` and ``1`` are
+    treated identically.
 
     Args:
         dashboards: List of raw dashboard dicts.  Each must contain a
