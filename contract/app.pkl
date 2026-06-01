@@ -43,7 +43,7 @@ selfDeployedRuntime = false
 // Extra atlan.yaml keys the typed App.pkl doesn't model yet (dockerfile
 // path, argo_package_names). Deep-merged on top of the generated atlan.yaml.
 atlanYamlOverrides {
-  ["dockerfile"] = "./deploy/Dockerfile"
+  ["dockerfile"] = "./Dockerfile"
   ["argo_package_names"] = new Listing { "@atlan/metabase" }
 }
 
