@@ -130,7 +130,14 @@ workflowType = "metabase:extract-metadata"
 extraNodes {
   ["qi"] = new QueryIntelligenceNode {
     displayName = "Parse Metabase Question SQL"
-    vendorName = "metabase"
+    // Metabase questions can target any backend (Snowflake, Redshift,
+    // Postgres, H2, BigQuery, …), so SQL dialect must be resolved
+    // per-record rather than from a single connector-wide `vendorName`.
+    // The connector emits `attributes.metabaseSourceEngine` on each
+    // MetabaseQuestion; QI reads that via `vendorKey` to pick the right
+    // parser. Without this, QI defaults to its Oracle fallback and every
+    // Snowflake/Redshift `LIMIT n` clause fails with a syntax error.
+    vendorKey = "attributes.metabaseSourceEngine"
     sqlKey = "attributes.metabaseQuery"
     catalogKey = "attributes.metabaseSourceDatabaseName"
     schemaKey = "attributes.metabaseSourceSchemaName"

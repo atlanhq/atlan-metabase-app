@@ -337,9 +337,27 @@ def process_assets(
         atlan_compatible_engine = METABASE_ATLAN_SOURCE_ENGINE_MAP.get(
             database.get("engine", ""), database.get("engine", "")
         )
-        if database and (
-            dataset_query.get("type") != "native" or "details" in database
-        ):
+        # Resolve query kind across Metabase API versions:
+        #   pre-v1.50: dataset_query.type = "native" | "query"
+        #   v1.50+:    dataset_query.stages[0].lib/type = "mbql.stage/native"
+        #              | "mbql.stage/mbql"
+        # Fall back through both paths so the connector keeps working when
+        # the tenant straddles versions.
+        legacy_type = dataset_query.get("type") or ""
+        stage_type = ""
+        stages = dataset_query.get("stages")
+        if isinstance(stages, list) and stages:
+            first = stages[0]
+            if isinstance(first, dict):
+                raw_stage_type = first.get("lib/type") or ""
+                if raw_stage_type == "mbql.stage/native":
+                    stage_type = "native"
+                elif raw_stage_type == "mbql.stage/mbql":
+                    stage_type = "query"
+        resolved_query_type = legacy_type or stage_type
+        is_native = resolved_query_type == "native"
+
+        if database and (not is_native or "details" in database):
             query_object = {
                 **query,
                 **{
@@ -368,12 +386,19 @@ def process_assets(
         question["metabase_query"] = (
             query_object.get("query", "") if query_object else ""
         )
-        question["query_type"] = dataset_query.get("type") or ""
+        question["query_type"] = resolved_query_type
         question["metabase_database_name"] = (
             query_object.get("default_database_name") or "" if query_object else ""
         )
         question["metabase_schema_name"] = (
             query_object.get("default_schema_name") or "" if query_object else ""
+        )
+        # Flat engine field so the asset mapper / Atlas attribute layer can
+        # expose ``metabaseSourceEngine`` for the QI node's ``vendorKey``
+        # routing (per-query SQL dialect rather than the broken
+        # ``vendorName = "metabase"`` fallback).
+        question["metabase_source_engine"] = (
+            atlan_compatible_engine if query_object else ""
         )
         question["dashboards"] = []
 
