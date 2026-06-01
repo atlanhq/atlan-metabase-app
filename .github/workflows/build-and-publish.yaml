@@ -48,10 +48,10 @@ jobs:
       publish: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.inputs.publish == 'true' }}
       channel: ${{ inputs.channel || 'all' }}
       tenants: ${{ inputs.tenants || '' }}
-      # Block publish unless unit-tests.yml has passed on the publish SHA.
-      # If no successful run exists, the shared workflow dispatches it on
-      # the publish ref (unit-tests.yml has workflow_dispatch enabled) and
-      # waits before spending build minutes. See
+      # Block publish unless the `tests` job in tests.yaml has passed on the
+      # publish SHA. If no successful run exists, the shared workflow
+      # dispatches tests.yaml on the publish ref (workflow_dispatch is enabled)
+      # and waits before spending build minutes. See
       # atlanhq/application-sdk docs/standards/unit-tests-gate.md.
-      unit_tests_workflow_file: unit-tests.yml
+      unit_tests_workflow_file: tests.yaml
     secrets: inherit

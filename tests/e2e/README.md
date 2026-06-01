@@ -22,8 +22,8 @@ spun up as a GitHub Actions service container.
 
 ## How it runs
 
-`.github/workflows/e2e-metabase.yaml` is triggered by the
-`e2e-metabase` PR label or `workflow_dispatch`. It:
+The `e2e` job in `.github/workflows/tests.yaml` is triggered by the `e2e`
+PR label or `workflow_dispatch`. It:
 
 1. Brings up three service containers — `postgres` (Metabase's metadata
    DB), `metabase` (the BI tool we crawl), and `mb-source` (a postgres
@@ -38,12 +38,12 @@ spun up as a GitHub Actions service container.
 ## Image pinning + bump policy
 
 The pin lives in two places — keep them in sync:
-- `.github/workflows/e2e-metabase.yaml` → `services.metabase.image:`
+- `.github/workflows/tests.yaml` → `services.metabase.image:` (in the `e2e` job)
 - `tests/e2e/conftest.py` (referenced in comments)
 
 **To bump the Metabase image**:
 1. Open a PR with the new tag (e.g. `v0.61.3.0`) in both files above.
-2. Apply the `e2e-metabase` label to trigger the workflow.
+2. Apply the `e2e` label to trigger the workflow.
 3. Promote the pin only when the workflow goes green; if API contracts
    change in the new Metabase version, fix the seed script and tests
    first.

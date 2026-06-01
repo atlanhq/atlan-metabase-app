@@ -1,0 +1,348 @@
+name: Tests
+
+# Unified workflow — unit + integration tests in a single pytest invocation,
+# plus a label-gated full-DAG-equivalent e2e against a containerised Metabase.
+#
+#   tests        — tests/unit/ + tests/integration/ via the SDK's
+#                  connector-integration-tests composite. Runs on every PR and
+#                  on every push to main.
+#   e2e          — tests/e2e/ against Postgres + Metabase + source-DB service
+#                  containers. The `e2e-full-reusable.yaml` SDK workflow assumes
+#                  a real Atlan tenant DAG; Metabase tests an external BI tool
+#                  instead, so the containerised harness lives inline here.
+#                  Triggered by the `e2e` PR label or workflow_dispatch.
+#   tests-passed — aggregator gate. Set this as the single required check on
+#                  the `main` branch protection rule.
+#
+# Cross-repo dispatch (from application-sdk PRs):
+#   distinct_id pins a 40-char SDK commit SHA via uv add --rev so the
+#   connector exercises the dispatched SDK ref.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+    branches:
+      - main
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      distinct_id:
+        description: "40-char application-sdk commit SHA to test against (leave empty for lockfile version)"
+        required: false
+      scale:
+        description: "Metabase seed scale for the e2e job (small ≈ 12 assets; large ≈ 1000)"
+        type: choice
+        options: [small, large]
+        default: large
+
+jobs:
+
+  # ── Unit + Integration (against a real Metabase tenant via secrets) ───
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: tests-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    permissions:
+      pull-requests: write
+      contents: read
+    outputs:
+      summary: ${{ steps.tests.outputs.summary }}
+    env:
+      # Metabase basic auth — session-token via POST /api/session.
+      # E2E_METABASE_HOST stores the URL WITH protocol (e.g. https://acme.metabaseapp.com)
+      # because the v3 contract concatenates host + port without prepending a scheme.
+      E2E_METABASE_HOST: ${{ secrets.E2E_METABASE_HOST }}
+      E2E_METABASE_PORT: ${{ secrets.E2E_METABASE_PORT }}
+      E2E_METABASE_USERNAME: ${{ secrets.E2E_METABASE_USERNAME }}
+      E2E_METABASE_PASSWORD: ${{ secrets.E2E_METABASE_PASSWORD }}
+      ATLAN_APPLICATION_NAME: metabase
+    steps:
+      - name: echo distinct ID ${{ github.event.inputs.distinct_id }}
+        if: github.event.inputs.distinct_id != ''
+        run: echo "Dispatched; SDK ref=${{ github.event.inputs.distinct_id }}"
+
+      # Explicit checkout so the SDK override (below) can modify uv.lock on
+      # disk before connector-integration-tests runs its uv sync.
+      - uses: actions/checkout@v4
+
+      - name: Pin application-sdk to dispatched ref
+        if: github.event.inputs.distinct_id != ''
+        run: |
+          commit_hash=${{ github.event.inputs.distinct_id }}
+          if ! [[ "$commit_hash" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "distinct_id must be a 40-char hex SHA"; exit 1
+          fi
+          uv add git+https://github.com/atlanhq/application-sdk --rev "$commit_hash"
+
+      - name: Run unit + integration tests
+        id: tests
+        uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
+        with:
+          app-name: metabase
+          # Scope to unit + integration; tests/e2e/ (containerised Metabase) runs
+          # in its own job below.
+          test-paths: "tests/unit/ tests/integration/"
+          pytest-args: >-
+            -n auto --dist=loadfile --tb=short
+            --cov=app --cov-report=xml --cov-report=html --cov-report=term
+            --cov-fail-under=0
+
+  # ── Containerised Metabase e2e (label-gated) ─────────────────────────
+  # Spins up three service containers (postgres + metabase + mb-source),
+  # seeds Metabase to scale, runs the connector against it, and asserts:
+  #   - preflight 4 named checks pass
+  #   - personal collections filtered out of fetch_metadata
+  #   - every extract @task returns the seeded entities
+  #   - include / exclude filter behaviour
+  #   - sqlglot ARS Process + ColumnProcess records
+  #   - scale invariants (≥ 50 collections, ≥ 800 questions, ≥ 150 dashboards)
+  #   - auth handler edge cases (success, bad creds, unreachable host)
+  #
+  # Image bump policy: see tests/e2e/README.md. Pin lives at the `metabase:`
+  # service `image:` line below and tests/e2e/conftest.py.
+  e2e:
+    name: e2e
+    concurrency:
+      group: tests-e2e-${{ github.ref }}
+      cancel-in-progress: true
+    # Run on workflow_dispatch or when the `e2e` label is added to a PR.
+    # Forks and dependabot are excluded — full Metabase Docker cold-start +
+    # 1000-asset seed is too expensive for fork PRs and bot churn.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'e2e') ||
+          contains(github.event.pull_request.labels.*.name, 'e2e')
+        ) &&
+        github.event.pull_request.head.repo.fork != true &&
+        github.event.pull_request.user.login != 'dependabot[bot]'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      pull-requests: write
+      contents: read
+
+    services:
+      # Metabase's own metadata DB. Postgres is the supported production
+      # option; using H2 (the default) would leave artefacts in the
+      # container fs and complicate teardown.
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: metabase
+          POSTGRES_PASSWORD: metabase
+          POSTGRES_DB: metabase_app_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U metabase"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      # The Metabase server we crawl. Cold-start on a fresh postgres
+      # backend typically takes 60-90 s; --health-retries 60 gives a
+      # 10-minute cap so any one-off slow run does not get killed.
+      metabase:
+        image: metabase/metabase:v0.61.2.3
+        env:
+          MB_DB_TYPE: postgres
+          MB_DB_HOST: postgres
+          MB_DB_PORT: "5432"
+          MB_DB_DBNAME: metabase_app_db
+          MB_DB_USER: metabase
+          MB_DB_PASS: metabase
+          MB_CHECK_FOR_UPDATES: "false"
+          MB_ANON_TRACKING_ENABLED: "false"
+          JAVA_OPTS: "-Xmx1500m"
+        ports:
+          - 3000:3000
+        options: >-
+          --health-cmd "curl -fsS http://localhost:3000/api/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 60
+          --health-start-period 30s
+
+      # Source postgres used as a Metabase data source. The seed script
+      # registers this as a Metabase database, runs a sync, then creates
+      # native-SQL questions referencing its tables — that gives us real
+      # lineage edges to validate (sqlglot must resolve `source_db.public.<table>`
+      # against the cached database_metadata).
+      mb-source:
+        image: postgres:15
+        env:
+          POSTGRES_USER: source
+          POSTGRES_PASSWORD: source
+          POSTGRES_DB: testdata
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U source"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MB_URL: http://localhost:3000
+      MB_ADMIN_EMAIL: e2e@atlan.com
+      MB_ADMIN_PASSWORD: AtlanMetabaseE2E!1
+      MB_SOURCE_HOST: mb-source
+      MB_SOURCE_PORT: "5432"
+      MB_SOURCE_USER: source
+      MB_SOURCE_PASSWORD: source
+      MB_SOURCE_DB: testdata
+      E2E_SCALE: ${{ inputs.scale || 'large' }}
+      E2E_SEED_PARALLELISM: "10"
+      E2E_METABASE_HOST: http://localhost
+      E2E_METABASE_PORT: "3000"
+      E2E_METABASE_USERNAME: e2e@atlan.com
+      E2E_METABASE_PASSWORD: AtlanMetabaseE2E!1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups
+
+      - name: Seed source postgres
+        run: |
+          set -euo pipefail
+          echo "::group::seed analytics + reports schemas"
+          PGPASSWORD=$MB_SOURCE_PASSWORD psql -h localhost -p 5433 \
+            -U "$MB_SOURCE_USER" -d "$MB_SOURCE_DB" \
+            -f tests/e2e/fixtures/seed_source.sql
+          echo "::endgroup::"
+          echo "::group::source schema inventory"
+          PGPASSWORD=$MB_SOURCE_PASSWORD psql -h localhost -p 5433 \
+            -U "$MB_SOURCE_USER" -d "$MB_SOURCE_DB" -c \
+            "SELECT table_schema, COUNT(*) AS tables FROM information_schema.tables WHERE table_schema IN ('analytics','reports') GROUP BY table_schema ORDER BY table_schema;"
+          echo "::endgroup::"
+
+      # Belt-and-braces — the `services:` health check waits for the
+      # HTTP port but Metabase serves /api/health only once its internal
+      # migrations have completed. Poll until 'ok' or time out.
+      - name: Wait for Metabase /api/health
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 600 ))
+          attempts=0
+          while [ $(date +%s) -lt $deadline ]; do
+            attempts=$((attempts + 1))
+            status=$(curl -sf "$MB_URL/api/health" 2>/dev/null | jq -r .status 2>/dev/null || echo "")
+            if [ "$status" = "ok" ]; then
+              echo "::notice::Metabase healthy after $attempts attempts ($(($(date +%s) - (deadline - 600))) s)"
+              break
+            fi
+            echo "  attempt $attempts: status=$status — sleeping 5 s"
+            sleep 5
+          done
+          [ "$status" = "ok" ] || { echo "::error::Metabase did not report healthy within 10 min" ; exit 1; }
+
+      - name: Seed Metabase (admin + source DB + ${{ inputs.scale || 'large' }} scale)
+        run: uv run python tests/e2e/seed_metabase.py
+
+      - name: Run e2e tests
+        run: |
+          set -euo pipefail
+          uv run pytest tests/e2e/ \
+            -v -s -m e2e \
+            --junitxml=e2e-report.xml \
+            --tb=short \
+            -o log_cli=true \
+            -o log_cli_level=INFO
+
+      - name: Summarise test results
+        if: always()
+        run: |
+          if [ -f e2e-report.xml ]; then
+            python3 -c "
+          import xml.etree.ElementTree as ET
+          root = ET.parse('e2e-report.xml').getroot()
+          for s in root.iter('testsuite'):
+              print(f'{s.attrib.get(\"name\",\"\"):40s}  '
+                    f'tests={s.attrib.get(\"tests\",\"?\")} '
+                    f'failures={s.attrib.get(\"failures\",\"?\")} '
+                    f'errors={s.attrib.get(\"errors\",\"?\")} '
+                    f'skipped={s.attrib.get(\"skipped\",\"?\")} '
+                    f'time={s.attrib.get(\"time\",\"?\")}s')
+          "
+          fi
+
+      - name: Upload e2e report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            e2e-report.xml
+            tests/e2e/_artifacts/**
+          if-no-files-found: ignore
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          for c in $(docker ps -a --format '{{.Names}}'); do
+            echo "::group::logs $c (last 300 lines)"
+            docker logs --tail 300 "$c" 2>&1 || true
+            echo "::endgroup::"
+          done
+
+  # ── Aggregator gate (single required check for branch protection) ─────
+  tests-passed:
+    name: tests-passed
+    needs: [tests, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Post unified test-summary comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2.8.2
+        with:
+          message-id: tests-summary
+          message: |
+            ## Tests Summary
+
+            | Job | Status | Result |
+            |---|---|---|
+            | tests | ${{ needs.tests.result == 'success' && '✅ Passed' || (needs.tests.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
+            | e2e | ${{ needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || '❌ Failed') }} | (see run) |
+
+            **Overall:** ${{ (needs.tests.result == 'success' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        continue-on-error: true
+
+      - name: Verify all test jobs succeeded
+        run: |
+          if [ "${{ needs.tests.result }}" != "success" ]; then
+            echo "::error::tests job did not succeed (result=${{ needs.tests.result }})"
+            exit 1
+          fi
+          if [ "${{ needs.e2e.result }}" != "success" ] && [ "${{ needs.e2e.result }}" != "skipped" ]; then
+            echo "::error::e2e did not succeed (result=${{ needs.e2e.result }})"
+            exit 1
+          fi
+          echo "All test jobs passed."
