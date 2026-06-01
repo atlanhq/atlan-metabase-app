@@ -24,6 +24,7 @@ from typing import Any
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.errors import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.api_types import (
@@ -166,8 +167,9 @@ class MetabaseApp(App):
         else:
             inline = getattr(input, "inline_credentials", {}) or {}
             if not inline:
-                raise ValueError(
-                    "_build_client: no credential_ref or inline_credentials"
+                raise InvalidInputError(
+                    message="_build_client: no credential_ref or inline_credentials",
+                    field="credentials",
                 )
             raw_creds = inline
 
@@ -485,9 +487,15 @@ class MetabaseApp(App):
         """
         typename = (input.typename or "").upper()
         if not typename:
-            raise ValueError("transform_data: 'typename' is required")
+            raise InvalidInputError(
+                message="transform_data: 'typename' is required",
+                field="typename",
+            )
         if not input.output_path:
-            raise ValueError("transform_data: 'output_path' is required")
+            raise InvalidInputError(
+                message="transform_data: 'output_path' is required",
+                field="output_path",
+            )
 
         subdir = TYPENAME_TO_PROCESS_DIR.get(typename, input.typename.lower())
         processed_root = input.processed_data_path or input.output_path

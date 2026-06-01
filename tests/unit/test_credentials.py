@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors import InvalidInputError
 from application_sdk.handler.contracts import HandlerCredential
 
 from app.contracts import MetabaseInput
@@ -144,5 +145,5 @@ class TestParseMetabaseCredentials:
         assert result is original
 
     def test_unsupported_payload_type_raises(self):
-        with pytest.raises(ValueError, match="Unsupported credentials payload"):
+        with pytest.raises(InvalidInputError, match="Unsupported credentials payload"):
             parse_metabase_credentials(42)  # type: ignore[arg-type]

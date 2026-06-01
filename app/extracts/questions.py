@@ -127,7 +127,12 @@ async def fetch_question_queries_single(
             "params": data.get("params"),
         }
     except Exception:
-        return None  # silently skip any exception (FailureHandler.NONE)
+        logger.warning(
+            "fetch_question_query: skipping question_id=%s after error",
+            question_id,
+            exc_info=True,
+        )
+        return None
 
 
 async def _fetch_question_query(

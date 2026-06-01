@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
+from application_sdk.errors import InvalidInputError
 from application_sdk.handler.contracts import HandlerCredential
 from pydantic import ConfigDict
 
@@ -82,7 +83,10 @@ def parse_metabase_credentials(
         raw = flat
 
     if not isinstance(raw, dict):
-        raise ValueError(f"Unsupported credentials payload type: {type(raw).__name__}")
+        raise InvalidInputError(
+            message=f"Unsupported credentials payload type: {type(raw).__name__}",
+            field="credentials",
+        )
 
     if not raw:
         return MetabaseCredential()
