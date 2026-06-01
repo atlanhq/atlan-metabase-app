@@ -1,8 +1,6 @@
 """Unit tests for app/connector.py.
 
 Covers:
-- Module-level helpers (build_credential_ref, _parse_credential_dict,
-  _default_output_path, _raw_file, _processed_file, _ref).
 - _build_client credential routing (CredentialRef vs inline; error path).
 - @task method bodies — each one mocks the API client and asserts the
   JSONL output is written + FileReference is returned correctly.
@@ -10,6 +8,9 @@ Covers:
   asserts the call sequence + returned MetabaseOutput path fields.
 - extract_lineage @entrypoint — feeds canonical QI NDJSON through the
   pipeline and verifies Process/ColumnProcess records hit lineage-stage/.
+
+Credential helpers and path helpers are tested in test_credentials.py and
+test_paths.py respectively.
 """
 
 from __future__ import annotations
@@ -21,127 +22,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from application_sdk.contracts.types import ConnectionRef, FileReference
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors import InvalidInputError
 
-from app.connector import (
-    MetabaseApp,
-    _default_output_path,
-    _parse_credential_dict,
-    _processed_file,
-    _raw_file,
-    _ref,
-    build_credential_ref,
-)
-from app.contracts import (
-    FetchInput,
-    FilterInput,
-    MetabaseCredential,
-    MetabaseInput,
-    MetabaseLineageInput,
-)
-
-# ---------------------------------------------------------------------------
-# Module-level helpers
-# ---------------------------------------------------------------------------
+from app.connector import MetabaseApp, _ref
+from app.contracts import FetchInput, FilterInput, MetabaseInput, MetabaseLineageInput
 
 
-class TestBuildCredentialRef:
-    def test_metabase_credential_ref_takes_precedence(self):
-        ref = CredentialRef(name="x", credential_type="basic", credential_guid="g")
-        inp = MetabaseInput(metabase_credential=ref)
-        out_ref, inline = build_credential_ref(inp)
-        assert out_ref is ref
-        assert inline == {}
-
-    def test_credential_guid_creates_ref(self):
-        inp = MetabaseInput(credential_guid="guid-123")
-        out_ref, inline = build_credential_ref(inp)
-        assert out_ref is not None
-        assert out_ref.name == "guid-123"
-        assert out_ref.credential_type == "basic"
-        assert inline == {}
-
-    def test_credentials_list_flattens_to_inline(self):
-        inp = MetabaseInput(
-            credentials=[
-                {"key": "host", "value": "http://localhost"},
-                {"key": "port", "value": "3000"},
-                {"key": "username", "value": "u"},
-                {"key": "password", "value": "p"},
-            ]
-        )
-        out_ref, inline = build_credential_ref(inp)
-        assert out_ref is None
-        assert inline == {
-            "host": "http://localhost",
-            "port": "3000",
-            "username": "u",
-            "password": "p",
-        }
-
-    def test_credentials_dict_passes_through(self):
-        inp = MetabaseInput(credentials={"host": "h", "port": 3000})
-        out_ref, inline = build_credential_ref(inp)
-        assert out_ref is None
-        assert inline == {"host": "h", "port": 3000}
-
-    def test_no_credentials_returns_empty_inline(self):
-        out_ref, inline = build_credential_ref(MetabaseInput())
-        assert out_ref is None
-        assert inline == {}
-
-
-class TestParseCredentialDict:
-    def test_empty_raw_returns_default_credential(self):
-        cred = _parse_credential_dict({})
-        assert isinstance(cred, MetabaseCredential)
-        assert cred.host == ""
-        assert cred.port == 443
-
-    def test_flat_shape(self):
-        cred = _parse_credential_dict(
-            {"host": "http://x", "port": 3000, "username": "u", "password": "p"}
-        )
-        assert cred.host == "http://x"
-        assert cred.port == 3000
-        assert cred.username == "u"
-        assert cred.password == "p"
-
-    def test_nested_extra_shape(self):
-        cred = _parse_credential_dict(
-            {"host": "h", "extra": {"username": "u", "password": "p"}}
-        )
-        assert cred.username == "u"
-        assert cred.password == "p"
-
-    def test_none_port_falls_back_to_443(self):
-        cred = _parse_credential_dict({"host": "h", "port": None})
-        assert cred.port == 443
-
-
-class TestPathHelpers:
-    def test_default_output_path_uses_tempdir_with_workflow_id(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
-        result = _default_output_path("wf-abc")
-        assert result == str(tmp_path / "atlan-metabase-app" / "wf-abc")
-        assert Path(result).exists()
-
-    def test_default_output_path_no_workflow_id(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
-        result = _default_output_path("")
-        assert result == str(tmp_path / "atlan-metabase-app")
-
-    def test_raw_file_path_layout(self):
-        assert _raw_file("/tmp/out", "collections") == (
-            "/tmp/out/raw/collections/result-0.json"
-        )
-
-    def test_processed_file_path_layout(self):
-        assert _processed_file("/tmp/out", "questions") == (
-            "/tmp/out/processed/questions/result-0.json"
-        )
-
+class TestRef:
     def test_ref_returns_retained_file_reference(self):
         ref = _ref("/tmp/out/raw/collections/result-0.json")
         assert isinstance(ref, FileReference)
@@ -202,7 +89,9 @@ class TestBuildClient:
         fake_input = MagicMock()
         fake_input.credential_ref = None
         fake_input.inline_credentials = {}
-        with pytest.raises(ValueError, match="no credential_ref or inline_credentials"):
+        with pytest.raises(
+            InvalidInputError, match="no credential_ref or inline_credentials"
+        ):
             await app._build_client(fake_input)
 
 
