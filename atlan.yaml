@@ -39,4 +39,3 @@ deploy:
 dockerfile: ./deploy/Dockerfile
 argo_package_names:
 - '@atlan/metabase'
-docs_url: https://docs.atlan.com/apps/connectors/business-intelligence/metabase

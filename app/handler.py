@@ -32,65 +32,9 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 from app.client import MetabaseApiClient, build_client
 from app.constants import MetabaseUrls
-from app.contracts import MetabaseCredential
+from app.credentials import parse_metabase_credentials
 
 logger = get_logger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Credential parsing — accept v3 ``list[HandlerCredential]`` or legacy nested dict.
-# ---------------------------------------------------------------------------
-
-
-def _parse_credentials(
-    raw: list[HandlerCredential] | dict[str, Any] | MetabaseCredential,
-) -> MetabaseCredential:
-    """Parse the inbound credential payload into a typed ``MetabaseCredential``.
-
-    Accepts:
-    - ``list[HandlerCredential]`` — v3 normalized ``[{key, value}]`` pairs
-      (frontend / the platform).
-    - ``dict[str, Any]`` — legacy v2 nested dict ``{host, username, password,
-      extra: {port}}``.
-    - ``MetabaseCredential`` — already-typed credential (pass-through).
-    """
-    if isinstance(raw, MetabaseCredential):
-        return raw
-
-    if isinstance(raw, list):
-        flat: dict[str, Any] = {}
-        for cred in raw:
-            key = cred.key
-            value = cred.value
-            if key.startswith("extra."):
-                flat[key[len("extra.") :]] = value
-            else:
-                flat[key] = value
-        raw = flat
-
-    if not isinstance(raw, dict):
-        raise ValueError(f"Unsupported credentials payload type: {type(raw).__name__}")
-
-    extra = raw.get("extra") or {}
-    if isinstance(extra, str):
-        try:
-            extra = json.loads(extra) or {}
-        except (json.JSONDecodeError, ValueError):
-            extra = {}
-
-    # Port may live at the top level or under extra; coerce safely.
-    port_raw = raw.get("port", extra.get("port", 443))
-    try:
-        port = int(port_raw) if port_raw not in (None, "") else 443
-    except (TypeError, ValueError):
-        port = 443
-
-    return MetabaseCredential(
-        host=str(raw.get("host", "")),
-        port=port,
-        username=str(raw.get("username", "")),
-        password=str(raw.get("password", "")),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +72,7 @@ class MetabaseHandler(Handler):
             if not input.credentials:
                 raise Exception("Metabase client not initialized")
 
-            credential = _parse_credentials(input.credentials)
+            credential = parse_metabase_credentials(input.credentials)
             client = await build_client(credential)
             try:
                 await client.test_connection()
@@ -263,7 +207,7 @@ class MetabaseHandler(Handler):
             return self.client
         if not credentials:
             raise Exception("Metabase client not initialized")
-        credential = _parse_credentials(credentials)
+        credential = parse_metabase_credentials(credentials)
         return await build_client(credential)
 
     @staticmethod

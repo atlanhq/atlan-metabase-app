@@ -18,15 +18,12 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import time
-from pathlib import Path
 from typing import Any
 
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.credentials.ref import CredentialRef
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.api_types import (
@@ -53,7 +50,6 @@ from app.contracts import (
     FetchOutput,
     FilterInput,
     FilterOutput,
-    MetabaseCredential,
     MetabaseInput,
     MetabaseLineageInput,
     MetabaseLineageOutput,
@@ -63,6 +59,7 @@ from app.contracts import (
     TransformTaskInput,
     TransformTaskOutput,
 )
+from app.credentials import build_credential_ref, parse_metabase_credentials
 from app.extracts.collections import fetch_collections_summaries
 from app.extracts.dashboards import fetch_dashboards_details, fetch_dashboards_summaries
 from app.extracts.databases import fetch_databases_details, fetch_databases_summaries
@@ -82,93 +79,16 @@ from app.extracts.questions import fetch_question_queries, fetch_questions_summa
 from app.handler import MetabaseHandler  # noqa: F401 — registers handler
 from app.lineage.ars_builder import build_column_process, build_process, process_hash
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
+from app.paths import (
+    PROCESSED_DIR,
+    TRANSFORMED_DIR,
+    default_output_path,
+    processed_file,
+    raw_file,
+)
 from app.utils import read_jsonl, write_jsonl
 
 logger = get_logger(__name__)
-
-
-# Module-level constants — Temporal sandbox blocks os.environ inside run().
-_RAW_DIR = "raw"
-_PROCESSED_DIR = "processed"
-_TRANSFORMED_DIR = "transformed"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def build_credential_ref(
-    input: MetabaseInput,
-) -> tuple[CredentialRef | None, dict[str, Any]]:
-    """Resolve credentials from the three supported paths into (ref, inline).
-
-    Exactly one of the returned values is populated:
-
-    - ``credential_ref`` — from ``input.metabase_credential`` (PKL contract)
-      or constructed from ``input.credential_guid`` (legacy GUID).
-    - ``inline_credentials`` — from ``input.credentials`` (list[{key,value}]
-      from the HTTP service layer, or a flat dict for local dev).
-
-    Tasks read ``credential_ref`` first; if absent they fall back to inline.
-    """
-    if input.metabase_credential is not None:
-        return input.metabase_credential, {}
-    if input.credential_guid:
-        ref = CredentialRef(
-            name=input.credential_guid,
-            credential_type="basic",
-            credential_guid=input.credential_guid,
-        )
-        return ref, {}
-    # Inline fallback (local-dev or service-passed raw creds).
-    inline: dict[str, Any] = {}
-    creds = input.credentials
-    if isinstance(creds, list):
-        for item in creds:
-            if isinstance(item, dict) and "key" in item:
-                inline[item["key"]] = item.get("value", "")
-    elif isinstance(creds, dict):
-        inline = creds
-    return None, inline
-
-
-def _parse_credential_dict(raw: dict[str, Any]) -> MetabaseCredential:
-    """Coerce a raw credential dict into a typed :class:`MetabaseCredential`.
-
-    Accepts both the flat HTTP shape (``{host, port, username, password}``)
-    and the v2 nested shape (``{host, port, extra: {username, password}}``).
-    """
-    if not raw:
-        return MetabaseCredential()
-    flat = dict(raw)
-    extra = raw.get("extra")
-    if isinstance(extra, dict):
-        for k, v in extra.items():
-            flat.setdefault(k, v)
-    return MetabaseCredential(
-        host=str(flat.get("host", "") or ""),
-        port=int(flat.get("port", 443) or 443),
-        username=str(flat.get("username", "") or ""),
-        password=str(flat.get("password", "") or ""),
-    )
-
-
-def _default_output_path(workflow_id: str) -> str:
-    """Build a sensible local output path when AE doesn't supply one."""
-    base = Path(tempfile.gettempdir()) / "atlan-metabase-app"
-    if workflow_id:
-        base = base / workflow_id
-    base.mkdir(parents=True, exist_ok=True)
-    return str(base)
-
-
-def _raw_file(output_path: str, name: str) -> str:
-    return os.path.join(output_path, _RAW_DIR, name, "result-0.json")
-
-
-def _processed_file(output_path: str, name: str) -> str:
-    return os.path.join(output_path, _PROCESSED_DIR, name, "result-0.json")
 
 
 def _ref(local_path: str) -> FileReference:
@@ -251,7 +171,7 @@ class MetabaseApp(App):
                 )
             raw_creds = inline
 
-        credential = _parse_credential_dict(raw_creds)
+        credential = parse_metabase_credentials(raw_creds)
         return await build_client(credential)
 
     # ------------------------------------------------------------------
@@ -263,7 +183,7 @@ class MetabaseApp(App):
         """Fetch all collections → ``raw/collections/result-0.json``."""
         client = await self._build_client(input)
         records = await fetch_collections_summaries(client)
-        out = _raw_file(input.output_path, "collections")
+        out = raw_file(input.output_path, "collections")
         write_jsonl(out, records)
         logger.info(f"extract_collections: wrote {len(records)} records")
         return FetchOutput(
@@ -275,7 +195,7 @@ class MetabaseApp(App):
         """Fetch dashboard summaries → ``raw/dashboards/result-0.json``."""
         client = await self._build_client(input)
         records = await fetch_dashboards_summaries(client)
-        out = _raw_file(input.output_path, "dashboards")
+        out = raw_file(input.output_path, "dashboards")
         write_jsonl(out, records)
         logger.info(f"extract_dashboards: wrote {len(records)} records")
         return FetchOutput(
@@ -287,7 +207,7 @@ class MetabaseApp(App):
         """Fetch question (card) summaries → ``raw/questions/result-0.json``."""
         client = await self._build_client(input)
         records = await fetch_questions_summaries(client)
-        out = _raw_file(input.output_path, "questions")
+        out = raw_file(input.output_path, "questions")
         write_jsonl(out, records)
         logger.info(f"extract_questions: wrote {len(records)} records")
         return FetchOutput(
@@ -299,7 +219,7 @@ class MetabaseApp(App):
         """Fetch database summaries → ``raw/databases/result-0.json``."""
         client = await self._build_client(input)
         records = await fetch_databases_summaries(client)
-        out = _raw_file(input.output_path, "databases")
+        out = raw_file(input.output_path, "databases")
         write_jsonl(out, records)
         logger.info(f"extract_databases: wrote {len(records)} records")
         return FetchOutput(
@@ -337,10 +257,10 @@ class MetabaseApp(App):
         filtered_dashboards = filter_dashboards(raw_dashboards, accepted_ids)
         filtered_questions = filter_questions(raw_questions, accepted_ids)
 
-        c_out = _raw_file(input.output_path, "collections_filtered")
-        d_out = _raw_file(input.output_path, "dashboards_filtered")
-        q_out = _raw_file(input.output_path, "questions_filtered")
-        db_out = _raw_file(input.output_path, "databases_filtered")
+        c_out = raw_file(input.output_path, "collections_filtered")
+        d_out = raw_file(input.output_path, "dashboards_filtered")
+        q_out = raw_file(input.output_path, "questions_filtered")
+        db_out = raw_file(input.output_path, "databases_filtered")
 
         write_jsonl(c_out, filtered_collections)
         write_jsonl(d_out, filtered_dashboards)
@@ -386,7 +306,7 @@ class MetabaseApp(App):
             len(filtered_dashboards),
         )
         records = await fetch_dashboards_details(client, filtered_dashboards)
-        out = _raw_file(input.output_path, "dashboard_details")
+        out = raw_file(input.output_path, "dashboard_details")
         write_jsonl(out, records)
         logger.info("extract_individual_dashboards: wrote %d records", len(records))
         return FetchOutput(
@@ -411,7 +331,7 @@ class MetabaseApp(App):
             len(databases),
         )
         records = await fetch_databases_details(client, databases)
-        out = _raw_file(input.output_path, "database_metadata")
+        out = raw_file(input.output_path, "database_metadata")
         write_jsonl(out, records)
         logger.info("extract_individual_databases: wrote %d records", len(records))
         return FetchOutput(
@@ -436,7 +356,7 @@ class MetabaseApp(App):
             len(questions),
         )
         records = await fetch_question_queries(client, questions)
-        out = _raw_file(input.output_path, "question_queries")
+        out = raw_file(input.output_path, "question_queries")
         write_jsonl(out, records)
         logger.info("fetch_question_queries_activity: wrote %d records", len(records))
         return FetchOutput(
@@ -504,10 +424,10 @@ class MetabaseApp(App):
             connection_qualified_name=input.connection_qualified_name,
         )
 
-        c_out = _processed_file(input.output_path, "collections")
-        d_out = _processed_file(input.output_path, "dashboards")
-        q_out = _processed_file(input.output_path, "questions")
-        qd_out = _processed_file(input.output_path, "questions_dashboards")
+        c_out = processed_file(input.output_path, "collections")
+        d_out = processed_file(input.output_path, "dashboards")
+        q_out = processed_file(input.output_path, "questions")
+        qd_out = processed_file(input.output_path, "questions_dashboards")
 
         write_jsonl(c_out, filtered_collections)
         write_jsonl(d_out, enriched_dashboards)
@@ -572,7 +492,7 @@ class MetabaseApp(App):
         subdir = TYPENAME_TO_PROCESS_DIR.get(typename, input.typename.lower())
         processed_root = input.processed_data_path or input.output_path
         input_file = os.path.join(
-            processed_root, _PROCESSED_DIR, subdir, "result-0.json"
+            processed_root, PROCESSED_DIR, subdir, "result-0.json"
         )
 
         logger.info("transform_data: typename=%s, input_file=%s", typename, input_file)
@@ -582,7 +502,7 @@ class MetabaseApp(App):
             logger.info("transform_data: no records found for %s", typename)
             return TransformTaskOutput(typename=typename, record_count=0)
 
-        out_dir = os.path.join(input.output_path, _TRANSFORMED_DIR, typename)
+        out_dir = os.path.join(input.output_path, TRANSFORMED_DIR, typename)
         os.makedirs(out_dir, exist_ok=True)
         out_file = os.path.join(out_dir, f"result-{input.chunk_start}.json")
 
@@ -636,7 +556,7 @@ class MetabaseApp(App):
              LineagePublishNode (no upload yet — that's extract_lineage's job)
          10. Return MetabaseOutput
         """
-        output_path = input.output_path or _default_output_path(input.workflow_id)
+        output_path = input.output_path or default_output_path(input.workflow_id)
         logger.info("MetabaseApp.run: output_path=%s", output_path)
 
         # Resolve credentials ONCE and thread through every @task input.
@@ -747,7 +667,7 @@ class MetabaseApp(App):
             total_transformed += stats.record_count
 
         # --- 8. Upload transformed/ tree -------------------------------
-        transformed_dir = os.path.join(output_path, _TRANSFORMED_DIR)
+        transformed_dir = os.path.join(output_path, TRANSFORMED_DIR)
         transformed_data_prefix = ""
         if os.path.isdir(transformed_dir):
             upload = await self.upload(
@@ -899,7 +819,7 @@ class MetabaseApp(App):
             input.connection_qualified_name
             or input.connection.attributes.qualified_name
         )
-        output_path = input.output_path or _default_output_path(input.workflow_id)
+        output_path = input.output_path or default_output_path(input.workflow_id)
         connection_name = input.connection.attributes.name or "metabase"
         logger.info(
             "MetabaseApp.extract_lineage: connection_qn=%s, view_lineage_input_prefix=%s",
