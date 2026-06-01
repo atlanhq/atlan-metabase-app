@@ -187,7 +187,7 @@ class MetabaseApp(App):
         records = await fetch_collections_summaries(client)
         out = raw_file(input.output_path, "collections")
         write_jsonl(out, records)
-        logger.info(f"extract_collections: wrote {len(records)} records")
+        logger.info("extract_collections: wrote %d records", len(records))
         return FetchOutput(
             typename="collections", record_count=len(records), output_file=_ref(out)
         )
@@ -199,7 +199,7 @@ class MetabaseApp(App):
         records = await fetch_dashboards_summaries(client)
         out = raw_file(input.output_path, "dashboards")
         write_jsonl(out, records)
-        logger.info(f"extract_dashboards: wrote {len(records)} records")
+        logger.info("extract_dashboards: wrote %d records", len(records))
         return FetchOutput(
             typename="dashboards", record_count=len(records), output_file=_ref(out)
         )
@@ -211,7 +211,7 @@ class MetabaseApp(App):
         records = await fetch_questions_summaries(client)
         out = raw_file(input.output_path, "questions")
         write_jsonl(out, records)
-        logger.info(f"extract_questions: wrote {len(records)} records")
+        logger.info("extract_questions: wrote %d records", len(records))
         return FetchOutput(
             typename="questions", record_count=len(records), output_file=_ref(out)
         )
@@ -223,7 +223,7 @@ class MetabaseApp(App):
         records = await fetch_databases_summaries(client)
         out = raw_file(input.output_path, "databases")
         write_jsonl(out, records)
-        logger.info(f"extract_databases: wrote {len(records)} records")
+        logger.info("extract_databases: wrote %d records", len(records))
         return FetchOutput(
             typename="databases", record_count=len(records), output_file=_ref(out)
         )
