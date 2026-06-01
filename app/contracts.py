@@ -18,17 +18,17 @@ accepts.
 from __future__ import annotations
 
 import json
-import logging
 from typing import Annotated, Any
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.credentials import MetabaseCredential
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 def _coerce_collection_filter(value: Any) -> Any:

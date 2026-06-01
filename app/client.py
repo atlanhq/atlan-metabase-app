@@ -53,7 +53,7 @@ class MetabaseApiClient(BaseClient):
             "X-Metabase-Session": self.session_token,
             "Content-Type": "application/json",
         }
-        logger.info(f"MetabaseApiClient loaded for host: {self.host}")
+        logger.info("MetabaseApiClient loaded for host: %s", self.host)
 
     async def _authenticate(self) -> None:
         """Obtain a Metabase session token via ``POST /api/session``."""
