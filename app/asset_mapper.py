@@ -200,12 +200,19 @@ def map_question(
 ) -> tuple[MetabaseQuestion, dict[str, Any]]:
     """Build a MetabaseQuestion plus the QI-specific extra attributes.
 
-    Returns ``(asset, extras)``. ``extras`` carries
-    ``metabaseSourceDatabaseName`` / ``metabaseSourceSchemaName`` — Atlan
-    custom attributes the platform's QueryIntelligenceNode reads via
-    JSONPath ``attributes.metabaseSourceDatabaseName/SchemaName``. They are
-    not present in the pyatlan_v9 model so the transform task injects them
-    after :func:`serialize_entity`.
+    Returns ``(asset, extras)``. ``extras`` carries Atlan custom attributes
+    the platform's QueryIntelligenceNode reads via JSONPath on
+    ``attributes.*``:
+
+    - ``metabaseSourceDatabaseName`` — catalog scope for SQL parsing.
+    - ``metabaseSourceSchemaName`` — schema scope for SQL parsing.
+    - ``metabaseSourceEngine`` — per-query SQL dialect (snowflake,
+      redshift, postgres, h2, …) read via ``vendorKey`` so QI picks the
+      right parser. Without this, the contract's ``vendorName = "metabase"``
+      falls through to the Oracle default and ``LIMIT n`` syntax explodes.
+
+    None of these fields are in the pyatlan_v9 model, so the transform task
+    injects them after :func:`serialize_entity`.
     """
     asset = MetabaseQuestion(
         name=record.name,
@@ -265,6 +272,8 @@ def map_question(
         extras["metabaseSourceDatabaseName"] = record.metabase_database_name
     if record.metabase_schema_name is not None:
         extras["metabaseSourceSchemaName"] = record.metabase_schema_name
+    if record.metabase_source_engine:
+        extras["metabaseSourceEngine"] = record.metabase_source_engine
     return asset, extras
 
 

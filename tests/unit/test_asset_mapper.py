@@ -166,25 +166,45 @@ class TestMapQuestion:
 
     def test_qi_extras_for_lineage(self):
         """QueryIntelligenceNode reads metabaseSourceDatabaseName /
-        metabaseSourceSchemaName via JSONPath — they must land in attributes.
-        The pyatlan_v9 model does not have these fields, so the mapper
-        returns them as extras and the serializer merges them."""
+        metabaseSourceSchemaName / metabaseSourceEngine via JSONPath — they
+        must land in attributes. The pyatlan_v9 model does not have these
+        fields, so the mapper returns them as extras and the serializer
+        merges them."""
         rec = QuestionRecord.from_dict(
             {
                 "id": 200,
                 "name": "Top Customers",
                 "metabase_database_name": "analytics_db",
                 "metabase_schema_name": "public",
+                "metabase_source_engine": "snowflake",
             }
         )
         asset, extras = map_question(rec, **CTX)
         assert extras == {
             "metabaseSourceDatabaseName": "analytics_db",
             "metabaseSourceSchemaName": "public",
+            "metabaseSourceEngine": "snowflake",
         }
         out = serialize_entity(asset, extras)
         assert out["attributes"]["metabaseSourceDatabaseName"] == "analytics_db"
         assert out["attributes"]["metabaseSourceSchemaName"] == "public"
+        assert out["attributes"]["metabaseSourceEngine"] == "snowflake"
+
+    def test_engine_extra_omitted_when_empty(self):
+        """An empty engine must NOT land in attributes — the QI node treats
+        a missing ``vendorKey`` lookup as 'fall through to default', which
+        is what we want for records the connector couldn't resolve. An
+        empty string would route every such query through the empty-string
+        parser branch (effectively the same Oracle fallback we're fixing)."""
+        rec = QuestionRecord.from_dict(
+            {
+                "id": 200,
+                "name": "Top Customers",
+                "metabase_source_engine": "",
+            }
+        )
+        _, extras = map_question(rec, **CTX)
+        assert "metabaseSourceEngine" not in extras
 
     def test_dashboard_relationship_refs(self):
         rec = QuestionRecord.from_dict(
