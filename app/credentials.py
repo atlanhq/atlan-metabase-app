@@ -82,9 +82,7 @@ def parse_metabase_credentials(
         raw = flat
 
     if not isinstance(raw, dict):
-        raise ValueError(
-            f"Unsupported credentials payload type: {type(raw).__name__}"
-        )
+        raise ValueError(f"Unsupported credentials payload type: {type(raw).__name__}")
 
     if not raw:
         return MetabaseCredential()
