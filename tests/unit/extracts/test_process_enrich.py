@@ -289,7 +289,8 @@ class TestProcessAssets:
         filtered_questions,
     ):
         """The QI node needs metabaseQuery / metabaseSourceDatabaseName /
-        metabaseSourceSchemaName populated on each enriched question."""
+        metabaseSourceSchemaName / metabaseSourceEngine populated on each
+        enriched question."""
         _, questions, _ = process_assets(
             collections_map=collections_map,
             databases_map=databases_map,
@@ -303,6 +304,103 @@ class TestProcessAssets:
         assert q["query_type"] == "native"
         assert q["metabase_database_name"] == "testdata"
         assert q["metabase_schema_name"] == "analytics"
+        # Engine drives the QI vendorKey routing. The fixture's
+        # databases_map declares engine=postgres, which is in
+        # METABASE_ATLAN_SOURCE_ENGINE_MAP and survives unchanged.
+        assert q["metabase_source_engine"] == "postgres"
+
+    def test_query_type_from_v1_50_stages_format(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+    ):
+        """Metabase v1.50+ moved dataset_query.type into
+        dataset_query.stages[0].lib/type with values like
+        ``mbql.stage/native`` / ``mbql.stage/mbql``. The connector must
+        normalise both back to ``native`` / ``query`` so attributes.
+        metabaseQueryType is non-empty for QI downstream."""
+        new_format_native = [
+            {
+                "id": 10,
+                "name": "Top Customers",
+                "collection_id": 1,
+                "database_id": 100,
+                "dataset_query": {
+                    "lib/type": "mbql/query",
+                    "stages": [
+                        {
+                            "lib/type": "mbql.stage/native",
+                            "native": "SELECT 1",
+                        }
+                    ],
+                },
+            }
+        ]
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=new_format_native,
+            metabase_host="http://m",
+        )
+        assert questions[0]["query_type"] == "native"
+
+        new_format_mbql = [
+            {
+                "id": 10,
+                "name": "Top Customers",
+                "collection_id": 1,
+                "database_id": 100,
+                "dataset_query": {
+                    "lib/type": "mbql/query",
+                    "stages": [
+                        {
+                            "lib/type": "mbql.stage/mbql",
+                            "source-table": 12,
+                        }
+                    ],
+                },
+            }
+        ]
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=new_format_mbql,
+            metabase_host="http://m",
+        )
+        assert questions[0]["query_type"] == "query"
+
+    def test_engine_maps_via_atlan_source_engine_map(
+        self,
+        collections_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        """Metabase's ``bigquery-cloud-sdk`` engine must map to Atlan's
+        ``bigquery`` so the QI vendorKey routing picks the right parser."""
+        bq_dbs = {
+            100: {
+                "id": 100,
+                "name": "bq",
+                "engine": "bigquery-cloud-sdk",
+                "details": {"dbname": "proj", "schema": "ds"},
+            }
+        }
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=bq_dbs,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        assert questions[0]["metabase_source_engine"] == "bigquery"
 
     def test_db_name_falls_back_to_details_db_for_h2(
         self,
