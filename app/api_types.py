@@ -94,6 +94,11 @@ class QuestionRecord:
     query_type: str | None
     metabase_database_name: str | None
     metabase_schema_name: str | None
+    # Atlan-mapped SQL dialect (snowflake, redshift, postgres, h2, …).
+    # Surfaced to QI via ``attributes.metabaseSourceEngine`` so the parser
+    # routes by per-record vendor instead of the broken
+    # ``vendorName = "metabase"`` default that collapsed to Oracle.
+    metabase_source_engine: str | None
     collection_id: Any | None
     collection_name: str | None
     dashboard_count: int
@@ -121,6 +126,7 @@ class QuestionRecord:
             query_type=raw.get("query_type"),
             metabase_database_name=raw.get("metabase_database_name"),
             metabase_schema_name=raw.get("metabase_schema_name"),
+            metabase_source_engine=raw.get("metabase_source_engine"),
             collection_id=collection.get("id"),
             collection_name=collection.get("name"),
             dashboard_count=len(dashboard_ids),

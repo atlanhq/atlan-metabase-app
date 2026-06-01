@@ -40,7 +40,7 @@
           "timestamp_key": "",
           "mine_output_type": "json",
           "parsing_mode": "competitive",
-          "vendor_name": "metabase"
+          "vendor_key": "attributes.metabaseSourceEngine"
         }
       },
       "depends_on": {
