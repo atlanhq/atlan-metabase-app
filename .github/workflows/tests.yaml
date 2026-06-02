@@ -90,8 +90,14 @@ jobs:
         with:
           app-name: metabase
           test-paths: "tests/unit/ tests/integration/"
+          # ``--dist=loadscope`` spreads each test class to a separate xdist
+          # worker so the 3 heavy class-scoped fixtures in
+          # ``test_metabase_workflow.py`` (each one runs a full Metabase
+          # extract workflow through embedded Temporal) execute in parallel
+          # rather than sequentially. Wall time drops from sum-of-classes
+          # to max-of-classes — ~3× speedup on a 4-vCPU runner.
           pytest-args: >-
-            -n auto --dist=loadfile --tb=short
+            -n auto --dist=loadscope --tb=short
             --cov=app --cov-report=xml --cov-report=html --cov-report=term
             --cov-fail-under=0
 
