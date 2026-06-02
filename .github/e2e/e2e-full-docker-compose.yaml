@@ -1,0 +1,130 @@
+# App-level docker compose overrides for the Metabase connector e2e full-DAG tests.
+# Merged on top of the SDK's base CI layer by the e2e-full-reusable.yaml composite
+# action.
+#
+# ATLAN_DEPLOYMENT_NAME drives the Temporal queue suffix via SDK _derive_task_queue:
+#   worker queue = atlan-metabase-e2e-full-ci-{GITHUB_RUN_ID}
+# The test's agent_spec() in tests/e2e/full_dag/test_metabase_e2e.py must
+# produce the same suffix so AE dispatches to the queue the worker listens on.
+#
+# Adds three source-side services (postgres + metabase + mb-source) plus a
+# one-shot seed-metabase service that runs tests/e2e/seed_metabase.py against
+# the Metabase API once it's healthy. The worker container's depends_on
+# gates on seed-metabase completing successfully — otherwise it would crawl
+# an empty Metabase and the test's expected_min_asset_counts would fail.
+#
+# Compose service names are DNS-resolvable on the default compose network:
+#   - metabase:3000   — the BI tool the connector crawls
+#   - mb-source:5432  — postgres source registered as a Metabase database for
+#                       lineage validation
+# make-secrets-e2e-full.py wires the connector's credential bundle to
+# http://metabase:3000 so the worker's `parse_metabase_credentials` resolves
+# to the compose-network Metabase instead of localhost.
+
+services:
+  atlan-app:
+    environment:
+      ATLAN_APP_MODULE: "app.connector:MetabaseApp"
+      ATLAN_DEPLOYMENT_NAME: "e2e-full-ci-${GITHUB_RUN_ID}"
+    depends_on:
+      # Block worker startup until the seed has populated Metabase with the
+      # collections / dashboards / native-SQL questions the test asserts on.
+      seed-metabase:
+        condition: service_completed_successfully
+
+  # Metabase's own metadata DB.
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: metabase
+      POSTGRES_PASSWORD: metabase
+      POSTGRES_DB: metabase_app_db
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "metabase"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # The Metabase server the connector crawls. Pin matches the docker e2e job
+  # in tests.yaml and tests/e2e/conftest.py — bump together (see
+  # tests/e2e/README.md image-bump policy).
+  metabase:
+    image: metabase/metabase:v0.61.2.3
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: postgres
+      MB_DB_PORT: "5432"
+      MB_DB_DBNAME: metabase_app_db
+      MB_DB_USER: metabase
+      MB_DB_PASS: metabase
+      MB_CHECK_FOR_UPDATES: "false"
+      MB_ANON_TRACKING_ENABLED: "false"
+      JAVA_OPTS: "-Xmx1500m"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  # Source postgres registered with Metabase as a data source. The seed
+  # script (tests/e2e/seed_metabase.py) registers this as a Metabase
+  # database, runs a sync, then creates native-SQL questions referencing
+  # its tables — that gives QI real lineage edges to validate.
+  # seed_source.sql is auto-loaded by the postgres image's
+  # /docker-entrypoint-initdb.d/ mechanism on first boot.
+  mb-source:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: source
+      POSTGRES_PASSWORD: source
+      POSTGRES_DB: testdata
+    volumes:
+      - ${GITHUB_WORKSPACE}/tests/e2e/fixtures/seed_source.sql:/docker-entrypoint-initdb.d/seed_source.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "source"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot seeder. Brings up an admin user, registers mb-source as a
+  # Metabase database, triggers sync, then applies the declarative seed
+  # spec from tests/e2e/fixtures/seed_metabase_spec.yaml plus the
+  # E2E_SCALE-driven generator. The script is idempotent — second run
+  # against an already-seeded Metabase is a no-op except for sync.
+  #
+  # Uses python:3.11-slim with httpx + pyyaml pip-installed at runtime;
+  # avoids building a dedicated image for a single script. Mounts the
+  # workspace read-only so seed_metabase.py + fixtures are visible.
+  seed-metabase:
+    image: python:3.11-slim
+    working_dir: /workspace
+    volumes:
+      - ${GITHUB_WORKSPACE}:/workspace:ro
+    environment:
+      MB_URL: http://metabase:3000
+      MB_ADMIN_EMAIL: e2e@atlan.com
+      MB_ADMIN_PASSWORD: AtlanMetabaseE2E!1
+      MB_SOURCE_HOST: mb-source
+      MB_SOURCE_PORT: "5432"
+      MB_SOURCE_USER: source
+      MB_SOURCE_PASSWORD: source
+      MB_SOURCE_DB: testdata
+      E2E_SCALE: "large"
+      E2E_SEED_PARALLELISM: "10"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        pip install --no-cache-dir httpx pyyaml
+        python tests/e2e/seed_metabase.py
+    depends_on:
+      metabase:
+        condition: service_healthy
+      mb-source:
+        condition: service_healthy
+    restart: "no"

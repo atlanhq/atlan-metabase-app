@@ -92,8 +92,9 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 # E2E scripts print human-readable diagnostics — stdout is the intended
-# output for these tests; structured logging is unnecessary.
+# output for these tests / CI helpers; structured logging is unnecessary.
 "tests/e2e/**" = ["T201"]
+".github/e2e/**" = ["T201"]
 
 [tool.pyright]
 venvPath = "."
@@ -107,8 +108,12 @@ reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Session-scoped default loop so the conftest's session-scoped embedded
+# Temporal + worker fixtures share the same loop with per-test async tests.
+# Matches atlan-openapi-app/pyproject.toml.
+asyncio_default_fixture_loop_scope = "session"
 markers = [
-    "e2e: end-to-end tests requiring a live Metabase server (see tests/e2e/README.md)",
+    "e2e: tenant-hitting end-to-end test (requires ATLAN_BASE_URL + ATLAN_API_KEY)",
 ]
 
 [tool.coverage.run]
