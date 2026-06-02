@@ -1,0 +1,205 @@
+name: Tests
+
+# Unified workflow — unit + integration tests in a single pytest invocation,
+# plus a label-gated full-DAG e2e via the SDK's reusable workflow.
+#
+#   tests        — tests/unit/ + tests/integration/ via the SDK's
+#                  connector-integration-tests composite. Integration tests
+#                  use embedded_runtime (in-process Temporal + mocked secret /
+#                  state / storage), so no external services are required.
+#                  Runs on every PR and every push to main.
+#   e2e          — tests/e2e/ via atlanhq/application-sdk/.github/workflows/
+#                  e2e-full-reusable.yaml@main. Spins up the docker-compose
+#                  Metabase overlay (`.github/e2e/e2e-full-docker-compose.yaml`),
+#                  submits a real AE workflow to a test tenant, and asserts
+#                  that the extract → qi → publish → lineage-publish DAG
+#                  lands assets in Atlas. Label-gated on `e2e`.
+#   tests-passed — aggregator gate. Set this as the single required check on
+#                  the `main` branch protection rule.
+#
+# Cross-repo dispatch (from application-sdk PRs):
+#   distinct_id pins a 40-char SDK commit SHA via `uv add --rev` so the
+#   connector exercises the dispatched SDK ref. Pattern lifted from
+#   atlan-openapi-app/.github/workflows/tests.yaml.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+    branches:
+      - main
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      distinct_id:
+        description: "40-char application-sdk commit SHA to test against (leave empty for lockfile version)"
+        required: false
+
+jobs:
+
+  # ── Unit + Integration (embedded Temporal, mocked infra) ─────────────
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: tests-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    permissions:
+      pull-requests: write
+      contents: read
+    outputs:
+      summary: ${{ steps.tests.outputs.summary }}
+    env:
+      # Metabase basic auth — used by the embedded-runtime integration tests
+      # to seed the mock secret store. The connector's parse_metabase_credentials
+      # accepts the flat shape {host, port, username, password}; the conftest
+      # writes it into MockSecretStore under the key "metabase".
+      E2E_METABASE_HOST: ${{ secrets.E2E_METABASE_HOST }}
+      E2E_METABASE_PORT: ${{ secrets.E2E_METABASE_PORT }}
+      E2E_METABASE_USERNAME: ${{ secrets.E2E_METABASE_USERNAME }}
+      E2E_METABASE_PASSWORD: ${{ secrets.E2E_METABASE_PASSWORD }}
+      ATLAN_APPLICATION_NAME: metabase
+    steps:
+      - name: echo distinct ID ${{ github.event.inputs.distinct_id }}
+        if: github.event.inputs.distinct_id != ''
+        run: echo "Dispatched; SDK ref=${{ github.event.inputs.distinct_id }}"
+
+      # Explicit checkout so the SDK pin step can modify uv.lock on disk
+      # before connector-integration-tests runs its uv sync.
+      - uses: actions/checkout@v4
+
+      - name: Pin application-sdk to dispatched ref
+        if: github.event.inputs.distinct_id != ''
+        run: |
+          commit_hash=${{ github.event.inputs.distinct_id }}
+          if ! [[ "$commit_hash" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "distinct_id must be a 40-char hex SHA"; exit 1
+          fi
+          uv add git+https://github.com/atlanhq/application-sdk --rev "$commit_hash"
+
+      # We deliberately do NOT use the SDK's
+      # ``atlanhq/application-sdk/.github/actions/connector-integration-tests``
+      # composite here. That action's "Start app server" step always runs
+      # ``uv run python main.py &`` and waits for :8000 (regardless of the
+      # SDK >= 3.13 embedded-runtime detection that gates its Dapr/Temporal
+      # install). Our integration tests use ``application_sdk.dev.embedded_runtime``
+      # in conftest.py to boot Temporal in-process; we never bind :8000.
+      # Running main.py in parallel risks port/Temporal-namespace contention
+      # and adds 30-60s of dead wait. Just run pytest directly.
+      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+
+      - name: Run unit + integration tests
+        id: tests
+        shell: bash
+        env:
+          ATLAN_LOCAL_DEVELOPMENT: "true"
+          ATLAN_APPLICATION_NAME: metabase
+        run: |
+          mkdir -p results
+          set +e
+          # ``--dist=loadscope`` spreads each test class to a separate xdist
+          # worker so the heavy class-scoped fixtures in
+          # ``test_metabase_workflow.py`` (each runs a full Metabase extract
+          # workflow through embedded Temporal) execute in parallel.
+          uv run --with pytest-xdist --with pytest-cov pytest tests/unit/ tests/integration/ \
+            -n auto --dist=loadscope --tb=short \
+            --cov=app --cov-report=xml --cov-report=html --cov-report=term \
+            --cov-fail-under=0 \
+            --junitxml=results/junit.xml \
+            2>&1 | tee results/output.txt
+          exit_code=${PIPESTATUS[0]}
+          summary=$(grep -E '^=+ .* in [0-9.]+s' results/output.txt | tail -1 || echo "no summary")
+          echo "summary=${summary}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+          exit $exit_code
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: results/
+
+  # ── Full-DAG e2e (system apps — extract→qi→publish→lineage-publish) ──
+  # Submits a real AE workflow to a test tenant, lets the system apps run
+  # the DAG against a docker-compose Metabase (`.github/e2e/e2e-full-docker-compose.yaml`
+  # + `.github/e2e/make-secrets-e2e-full.py`), and asserts that
+  # MetabaseCollection / MetabaseDashboard / MetabaseQuestion / BIProcess
+  # plus Process / ColumnProcess lineage records land in Atlas.
+  #
+  # Triggered by the `e2e` PR label or workflow_dispatch. Requires
+  # SDR_TEST_TENANT / SDR_CLIENT_ID / SDR_CLIENT_SECRET secrets — the
+  # source side is docker, but qi / publish / lineage-publish all write
+  # to the real tenant Atlas.
+  e2e:
+    name: e2e
+    concurrency:
+      group: tests-e2e-${{ github.ref }}
+      cancel-in-progress: false
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'e2e') ||
+          contains(github.event.pull_request.labels.*.name, 'e2e')
+        ) &&
+        github.event.pull_request.head.repo.fork != true &&
+        github.event.pull_request.user.login != 'dependabot[bot]'
+      )
+    uses: atlanhq/application-sdk/.github/workflows/e2e-full-reusable.yaml@main
+    with:
+      app-name: metabase
+      app-image-name: atlan-metabase-app
+      test-path: tests/e2e/
+      # secrets-script and compose-overlay defaults
+      # (.github/e2e/make-secrets-e2e-full.py and
+      # .github/e2e/e2e-full-docker-compose.yaml) match this repo's layout,
+      # so they don't need explicit overrides.
+      distinct-id: ${{ inputs.distinct_id }}
+    secrets: inherit
+
+  # ── Aggregator gate (single required check for branch protection) ─────
+  tests-passed:
+    name: tests-passed
+    needs: [tests, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Post unified test-summary comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2.8.2
+        with:
+          message-id: tests-summary
+          message: |
+            ## Tests Summary
+
+            | Job | Status | Result |
+            |---|---|---|
+            | tests | ${{ needs.tests.result == 'success' && '✅ Passed' || (needs.tests.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
+            | e2e | ${{ needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || '❌ Failed') }} | (see run) |
+
+            **Overall:** ${{ (needs.tests.result == 'success' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        continue-on-error: true
+
+      - name: Verify all test jobs succeeded
+        run: |
+          if [ "${{ needs.tests.result }}" != "success" ]; then
+            echo "::error::tests job did not succeed (result=${{ needs.tests.result }})"
+            exit 1
+          fi
+          if [ "${{ needs.e2e.result }}" != "success" ] && [ "${{ needs.e2e.result }}" != "skipped" ]; then
+            echo "::error::e2e did not succeed (result=${{ needs.e2e.result }})"
+            exit 1
+          fi
+          echo "All test jobs passed."
