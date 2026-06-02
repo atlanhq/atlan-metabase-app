@@ -79,6 +79,7 @@ from app.extracts.process import (
 from app.extracts.questions import fetch_question_queries, fetch_questions_summaries
 from app.handler import MetabaseHandler  # noqa: F401 — registers handler
 from app.lineage.ars_builder import build_column_process, build_process, process_hash
+from app.lineage.qi_reader import _question_name as _qi_question_name
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
 from app.paths import (
     PROCESSED_DIR,
@@ -747,10 +748,13 @@ class MetabaseApp(App):
             query_id, sql, source_tables, source_columns = parse_qi_record(record)
             if not query_id:
                 continue
-            # QI QUERY_ID is the MetabaseQuestion qualifiedName
-            # (default/metabase/<conn>/questions/<id>) — extract the trailing id.
+            # QI emits the source-question qualifiedName at
+            # extra.attributes.qualifiedName (current) or top-level
+            # QUERY_ID (legacy). Format is
+            # ``default/metabase/<conn>/questions/<id>``; the trailing id
+            # is what builds the BIProcess QN.
             question_id = query_id.rsplit("/", 1)[-1]
-            question_name = record.get("QUESTION_NAME") or query_id
+            question_name = _qi_question_name(record) or query_id
 
             process = build_process(
                 connection_qualified_name=input.connection_qualified_name,
