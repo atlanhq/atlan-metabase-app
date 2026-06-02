@@ -73,7 +73,7 @@ jobs:
 
       # Explicit checkout so the SDK pin step can modify uv.lock on disk
       # before connector-integration-tests runs its uv sync.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Pin application-sdk to dispatched ref
         if: github.event.inputs.distinct_id != ''
@@ -122,7 +122,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: integration-test-results
           path: results/
@@ -178,7 +178,7 @@ jobs:
     steps:
       - name: Post unified test-summary comment on PR
         if: always() && github.event_name == 'pull_request'
-        uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2.8.2
+        uses: mshick/add-pr-comment@8e4927817251f1ff60c001f04568532b38e0b4a0 # v3.11.0
         with:
           message-id: tests-summary
           message: |
