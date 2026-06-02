@@ -91,15 +91,20 @@ jobs:
           app-name: metabase
           test-paths: "tests/unit/ tests/integration/"
           # ``--dist=loadscope`` spreads each test class to a separate xdist
-          # worker so the 3 heavy class-scoped fixtures in
-          # ``test_metabase_workflow.py`` (each one runs a full Metabase
-          # extract workflow through embedded Temporal) execute in parallel
-          # rather than sequentially. Wall time drops from sum-of-classes
-          # to max-of-classes — ~3× speedup on a 4-vCPU runner.
+          # worker so the heavy class-scoped fixtures in
+          # ``test_metabase_workflow.py`` (each runs a full Metabase extract
+          # workflow through embedded Temporal) execute in parallel rather
+          # than sequentially. Wall time drops from sum-of-classes to
+          # max-of-classes on the 4-vCPU runner.
           pytest-args: >-
             -n auto --dist=loadscope --tb=short
             --cov=app --cov-report=xml --cov-report=html --cov-report=term
             --cov-fail-under=0
+          # Our embedded-runtime conftest spins up its own in-process Temporal
+          # via ``application_sdk.dev.embedded_runtime``; we never bind :8000
+          # and never need ``python main.py`` to be running. The default 60s
+          # wait would always time out and burn a minute. Drop to 1s.
+          health-check-timeout-seconds: 1
 
   # ── Full-DAG e2e (system apps — extract→qi→publish→lineage-publish) ──
   # Submits a real AE workflow to a test tenant, lets the system apps run
