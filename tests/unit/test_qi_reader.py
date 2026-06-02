@@ -19,7 +19,6 @@ from app.lineage.qi_reader import (
     parse_qi_record,
 )
 
-
 CURRENT_SHAPE_RECORD = {
     "OUTPUT_FLAGS": 33558531,
     "P0_PROCESSING_TIME": 98,
