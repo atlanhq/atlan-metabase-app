@@ -250,13 +250,20 @@ def map_question(
             qualified_name=collection_qn
         )
 
-    if record.dashboard_ids:
-        asset.metabase_dashboards = [
-            RelatedMetabaseDashboard(
-                qualified_name=_dashboard_qn(connection_qualified_name, did)
-            )
-            for did in record.dashboard_ids
-        ]
+    # NOTE: deliberately do NOT populate ``asset.metabase_dashboards``.
+    #
+    # The publish-app's dependency-ordering layer treats MetabaseQuestion as
+    # depending only on MetabaseCollection (the typedef's explicit outgoing
+    # edge). Populating ``metabase_dashboards`` here would silently make
+    # Question depend on Dashboard too, but the publish ordering still
+    # schedules Question (Layer 2) before Dashboard (Layer 3) — at which
+    # point Atlas rejects the unresolvable refs with
+    # ``ATLAS-404-00-00A: Referenced entity ... not found``.
+    #
+    # ``metabaseDashboardCount`` (int, already set above) still surfaces
+    # the count in the UI, and the question→dashboard tie itself is carried
+    # by the BIProcess lineage records this connector emits. Equivalent
+    # information, no cyclic publish ordering hazard.
 
     _apply_sync_metadata(
         asset,
