@@ -306,68 +306,13 @@ class TestMetabaseExtractionWithFilters:
         assert filtered_result.transformed_data_prefix
 
 
-# ---------------------------------------------------------------------------
-# TestMetabaseInlineCredentials — credentials=[...] (no CredentialRef)
-# ---------------------------------------------------------------------------
-
-
-class TestMetabaseInlineCredentials:
-    """Workflow accepts inline ``credentials=[...]`` and resolves them.
-
-    The credential routing logic is unit-tested in
-    ``tests/unit/test_credentials.py``; this class verifies the inline
-    path threads through the workflow via ``build_credential_ref`` →
-    per-task ``inline_credentials`` → ``parse_metabase_credentials`` →
-    Metabase client.
-    """
-
-    @pytest.fixture(scope="class")
-    def tmp_dir_class(self, tmp_path_factory: pytest.TempPathFactory) -> Path:
-        return tmp_path_factory.mktemp("metabase_inline_creds")
-
-    @pytest.fixture(scope="class")
-    async def inline_result(
-        self,
-        metabase_executor: "AppExecutor",
-        tmp_dir_class: Path,
-    ) -> MetabaseOutput:
-        output_dir = tmp_dir_class / "output"
-        output_dir.mkdir()
-        port = int(os.environ.get("E2E_METABASE_PORT", "443") or "443")
-        return cast(
-            "MetabaseOutput",
-            await metabase_executor.execute_app(
-                MetabaseApp,
-                MetabaseInput(
-                    workflow_id="integration-inline-creds",
-                    # metabase_credential intentionally None — exercise the
-                    # inline ``credentials`` fallback in build_credential_ref.
-                    metabase_credential=None,
-                    credentials=[
-                        {"key": "host", "value": os.environ["E2E_METABASE_HOST"]},
-                        {"key": "port", "value": str(port)},
-                        {
-                            "key": "username",
-                            "value": os.environ["E2E_METABASE_USERNAME"],
-                        },
-                        {
-                            "key": "password",
-                            "value": os.environ["E2E_METABASE_PASSWORD"],
-                        },
-                    ],
-                    connection=_CONNECTION,
-                    output_path=str(output_dir),
-                ),
-            ),
-        )
-
-    @pytest.mark.asyncio
-    async def test_inline_credentials_workflow_completes(
-        self, inline_result: MetabaseOutput
-    ) -> None:
-        """Workflow with inline credentials produces the same shape of output."""
-        assert inline_result.connection_qualified_name == _CONNECTION_QN
-        assert inline_result.total_records >= 1
+# NOTE: A previous ``TestMetabaseInlineCredentials`` class ran the entire
+# extract workflow a third time just to exercise the inline-credentials
+# fallback. That credential-routing logic is fully covered by
+# ``tests/unit/test_credentials.py::test_build_credential_ref_inline``;
+# re-running the heavy workflow only to assert the same code path was a
+# duplicate full-extract worth ~5 min on CI. Removed in favour of the unit
+# coverage so the integration suite stays within budget.
 
 
 # ---------------------------------------------------------------------------
