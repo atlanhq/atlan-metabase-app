@@ -1,0 +1,99 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
+
+jobs:
+  unit-integration:
+    name: unit + integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: tests-unit-integration-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    permissions:
+      pull-requests: write
+      contents: read
+    outputs:
+      summary: ${{ steps.tests.outputs.summary }}
+    env:
+      # TODO(owner): wire E2E_METABASE_* secrets in repo settings
+      ATLAN_APP_MODULE: app.connector:MetabaseApp
+      OTEL_SDK_DISABLED: "true"
+      DAPR_HTTP_PORT: "3500"
+      DAPR_GRPC_PORT: "50001"
+      ATLAN_APP_HTTP_HOST: "0.0.0.0"
+      ATLAN_APP_HTTP_PORT: "8000"
+    steps:
+      - name: Run all tests in one pytest invocation
+        id: tests
+        uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
+        with:
+          app-name: metabase
+          test-paths: "tests/unit tests/integration"
+          pytest-args: "-n auto --dist=loadfile --tb=short --cov=app --cov-report=xml --cov-report=html --cov-report=term --cov-fail-under=0"
+
+  sdr:
+    name: sdr
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: tests-sdr-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    permissions:
+      pull-requests: write
+      contents: read
+      statuses: write
+      packages: write
+    outputs:
+      summary: ${{ steps.sdr.outputs.test-summary }}
+    env:
+      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      # TODO(owner): add E2E_METABASE_* env vars sourced from repo secrets
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Run connector SDR tests
+        id: sdr
+        uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
+        with:
+          app-name: metabase
+          app-image-name: atlan-metabase-app
+          secrets-script: .github/sdr-e2e/make-secrets.py
+
+  tests-passed:
+    name: tests-passed
+    needs: [unit-integration, sdr]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Post unified test-summary comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2.8.2
+        with:
+          message-id: tests-summary
+          message: |
+            ## Tests Summary
+
+            | Job | Status | Result |
+            |---|---|---|
+            | unit + integration | ${{ needs.unit-integration.result == 'success' && '✅ Passed' || (needs.unit-integration.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.unit-integration.outputs.summary || 'no summary' }}` |
+            | sdr | ${{ needs.sdr.result == 'success' && '✅ Passed' || (needs.sdr.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.sdr.outputs.summary || 'no summary' }}` |
+
+            **Overall:** ${{ (needs.unit-integration.result == 'success' && needs.sdr.result == 'success') && '✅ All passed' || '❌ Some failed' }}
+        continue-on-error: true
+      - name: Verify all test jobs succeeded
+        run: |
+          [ "${{ needs.unit-integration.result }}" = "success" ] || { echo "::error::unit + integration failed"; exit 1; }
+          [ "${{ needs.sdr.result }}" = "success" ] || { echo "::error::sdr failed"; exit 1; }
+          echo "All test jobs passed."
