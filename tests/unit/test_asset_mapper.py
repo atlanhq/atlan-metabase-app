@@ -206,7 +206,14 @@ class TestMapQuestion:
         _, extras = map_question(rec, **CTX)
         assert "metabaseSourceEngine" not in extras
 
-    def test_dashboard_relationship_refs(self):
+    def test_dashboard_count_surfaced_without_relationship(self):
+        """``metabaseDashboardCount`` (int) must reflect the dashboards a
+        question appears on, but the cyclic ``metabaseDashboards``
+        relationship MUST NOT be populated — the publish-app orders
+        Question (Layer 2) before Dashboard (Layer 3), so any Dashboard
+        refs on a Question would resolve to entities Atlas hasn't seen
+        yet and fail with ``ATLAS-404-00-00A``. The question→dashboard tie
+        is carried by BIProcess lineage instead."""
         rec = QuestionRecord.from_dict(
             {
                 "id": 200,
@@ -220,10 +227,8 @@ class TestMapQuestion:
         asset, extras = map_question(rec, **CTX)
         out = serialize_entity(asset, extras)
         assert out["attributes"]["metabaseDashboardCount"] == 2
-        dashboard_refs = out["relationshipAttributes"]["metabaseDashboards"]
-        qns = {r["uniqueAttributes"]["qualifiedName"] for r in dashboard_refs}
-        assert qns == {f"{CONN_QN}/dashboards/100", f"{CONN_QN}/dashboards/101"}
-        assert all(r["typeName"] == "MetabaseDashboard" for r in dashboard_refs)
+        rel = out.get("relationshipAttributes", {})
+        assert "metabaseDashboards" not in rel
 
 
 # ---------------------------------------------------------------------------
