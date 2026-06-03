@@ -112,6 +112,10 @@ asyncio_mode = "auto"
 # Temporal + worker fixtures share the same loop with per-test async tests.
 # Matches atlan-openapi-app/pyproject.toml.
 asyncio_default_fixture_loop_scope = "session"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 markers = [
     "e2e: tenant-hitting end-to-end test (requires ATLAN_BASE_URL + ATLAN_API_KEY)",
 ]
