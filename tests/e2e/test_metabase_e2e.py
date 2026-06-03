@@ -59,15 +59,16 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
 
     mode = RunMode.AGENT
 
-    # Minimum counts the seed script materialises at ``E2E_SCALE=large``.
-    # The compose overlay's seed step runs ``tests/e2e/seed_metabase.py``
-    # which currently produces ~50 collections, ~150 dashboards, ~800
-    # questions, ~800 BIProcess records — keep the floor well below those.
+    # Minimum counts produced by ``tests/e2e/seed_metabase.py`` (light spec:
+    # 4 collections + 5 questions + 3 dashboards, with BIProcess derived
+    # from dashboard→card pairings). Floors are set just below the seed
+    # so personal/sample-DB collections don't have to be accounted for
+    # in each assertion.
     expected_min_asset_counts = {
-        "MetabaseCollection": 10,
-        "MetabaseDashboard": 50,
-        "MetabaseQuestion": 200,
-        "BIProcess": 50,
+        "MetabaseCollection": 2,
+        "MetabaseDashboard": 2,
+        "MetabaseQuestion": 4,
+        "BIProcess": 2,
     }
     # Lineage is produced by the qi → extract-lineage → lineage-publish
     # branch of the DAG; QI parses native-SQL questions against the seeded
