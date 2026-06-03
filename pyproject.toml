@@ -22,6 +22,16 @@ test = [
     "pytest>=8.3.3",
     "coverage>=7.6.1",
     "pytest-asyncio>=0.24.0",
+    # Fail-fast on hung tests instead of eating the CI budget. Belt-and-
+    # suspenders alongside the testcontainer fixture — hangs can still
+    # surface inside Temporal / embedded_runtime.
+    "pytest-timeout>=2.3.1",
+    # Drives the Metabase testcontainer in tests/integration/conftest.py.
+    "testcontainers>=4.0.0",
+    # httpx is used by conftest's Metabase seed flow (POST /api/setup etc).
+    "httpx>=0.27.0",
+    # docker SDK powers _docker_available() probe + testcontainers backend.
+    "docker>=7.0.0",
 ]
 
 [tool.poe.tasks]
@@ -112,6 +122,16 @@ asyncio_mode = "auto"
 # Temporal + worker fixtures share the same loop with per-test async tests.
 # Matches atlan-openapi-app/pyproject.toml.
 asyncio_default_fixture_loop_scope = "session"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Per-test timeout. Belt-and-suspenders against hangs inside Temporal /
+# embedded_runtime / Metabase HTTP — without this, a hang eats the full
+# 60-min CI job budget with no diagnostic. ``thread`` method dumps a
+# stack trace on timeout so we can see what was stuck.
+timeout = 300
+timeout_method = "thread"
 markers = [
     "e2e: tenant-hitting end-to-end test (requires ATLAN_BASE_URL + ATLAN_API_KEY)",
 ]

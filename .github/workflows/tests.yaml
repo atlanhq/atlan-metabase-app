@@ -3,11 +3,14 @@ name: Tests
 # Unified workflow — unit + integration tests in a single pytest invocation,
 # plus a label-gated full-DAG e2e via the SDK's reusable workflow.
 #
-#   tests        — tests/unit/ + tests/integration/ via the SDK's
-#                  connector-integration-tests composite. Integration tests
-#                  use embedded_runtime (in-process Temporal + mocked secret /
-#                  state / storage), so no external services are required.
-#                  Runs on every PR and every push to main.
+#   tests        — tests/unit/ + tests/integration/ via pytest direct
+#                  invocation. Integration tests use embedded_runtime
+#                  (in-process Temporal + mocked secret / state / storage)
+#                  and bring up Metabase as a session-scoped Docker
+#                  testcontainer (see tests/integration/conftest.py),
+#                  mirroring atlan-mysql-app. No external services or
+#                  repo secrets required. Runs on every PR and every push
+#                  to main.
 #   e2e          — tests/e2e/ via atlanhq/application-sdk/.github/workflows/
 #                  e2e-full-reusable.yaml@main. Spins up the docker-compose
 #                  Metabase overlay (`.github/e2e/e2e-full-docker-compose.yaml`),
@@ -18,9 +21,13 @@ name: Tests
 #                  the `main` branch protection rule.
 #
 # Cross-repo dispatch (from application-sdk PRs):
-#   distinct_id pins a 40-char SDK commit SHA via `uv add --rev` so the
-#   connector exercises the dispatched SDK ref. Pattern lifted from
-#   atlan-openapi-app/.github/workflows/tests.yaml.
+#   application_sdk_ref pins atlanhq/application-sdk to a branch/SHA via
+#   `uv add --rev` in both the tests and e2e jobs so the connector
+#   exercises the SDK ref under review.
+#   distinct_id is echoed in step names so codex-/return-dispatch can
+#   locate this run from the calling workflow via the GH Actions API.
+#
+# Aligned with atlan-mysql-app and atlan-openapi-app tests.yaml shape.
 
 on:
   push:
@@ -37,9 +44,32 @@ on:
   merge_group:
   workflow_dispatch:
     inputs:
-      distinct_id:
-        description: "40-char application-sdk commit SHA to test against (leave empty for lockfile version)"
+      application_sdk_ref:
+        description: |
+          Branch/SHA of atlanhq/application-sdk for cross-repo dispatch.
+          Pins SDK in tests + e2e jobs. Empty = lockfile version.
         required: false
+        default: ""
+        type: string
+      distinct_id:
+        description: |
+          Identifier for codex-/return-dispatch matching. Echoed in step
+          names so the calling workflow can locate this run via the GH API.
+        required: false
+        default: ""
+        type: string
+      agent_name_override:
+        description: |
+          Override agent-name for the e2e job (default ci-<run_id>).
+          Useful when re-running against a worker that is already up.
+        required: false
+        default: ""
+        type: string
+      run_e2e:
+        description: "Set to 'true' to trigger the e2e job (cross-repo dispatch from application-sdk). Defaults to off."
+        required: false
+        default: ""
+        type: string
 
 jobs:
 
@@ -57,32 +87,26 @@ jobs:
     outputs:
       summary: ${{ steps.tests.outputs.summary }}
     env:
-      # Metabase basic auth — used by the embedded-runtime integration tests
-      # to seed the mock secret store. The connector's parse_metabase_credentials
-      # accepts the flat shape {host, port, username, password}; the conftest
-      # writes it into MockSecretStore under the key "metabase".
-      E2E_METABASE_HOST: ${{ secrets.E2E_METABASE_HOST }}
-      E2E_METABASE_PORT: ${{ secrets.E2E_METABASE_PORT }}
-      E2E_METABASE_USERNAME: ${{ secrets.E2E_METABASE_USERNAME }}
-      E2E_METABASE_PASSWORD: ${{ secrets.E2E_METABASE_PASSWORD }}
+      # Integration tests bring up Metabase as a testcontainer — no
+      # E2E_METABASE_* repo secrets needed. ubuntu-latest ships Docker,
+      # so tests/integration/conftest.py pulls metabase/metabase directly.
       ATLAN_APPLICATION_NAME: metabase
     steps:
-      - name: echo distinct ID ${{ github.event.inputs.distinct_id }}
+      - name: echo distinct-id ${{ github.event.inputs.distinct_id }}
         if: github.event.inputs.distinct_id != ''
-        run: echo "Dispatched; SDK ref=${{ github.event.inputs.distinct_id }}"
+        run: echo "Dispatched; SDK ref=${{ github.event.inputs.application_sdk_ref }}"
 
       # Explicit checkout so the SDK pin step can modify uv.lock on disk
-      # before connector-integration-tests runs its uv sync.
-      - uses: actions/checkout@v6
+      # before setup-deps runs its uv sync.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
 
       - name: Pin application-sdk to dispatched ref
-        if: github.event.inputs.distinct_id != ''
+        if: github.event.inputs.application_sdk_ref != ''
         run: |
-          commit_hash=${{ github.event.inputs.distinct_id }}
-          if ! [[ "$commit_hash" =~ ^[a-f0-9]{40}$ ]]; then
-            echo "distinct_id must be a 40-char hex SHA"; exit 1
-          fi
-          uv add git+https://github.com/atlanhq/application-sdk --rev "$commit_hash"
+          sdk_ref=${{ github.event.inputs.application_sdk_ref }}
+          uv add git+https://github.com/atlanhq/application-sdk --rev "$sdk_ref"
 
       # We deliberately do NOT use the SDK's
       # ``atlanhq/application-sdk/.github/actions/connector-integration-tests``
@@ -93,8 +117,6 @@ jobs:
       # in conftest.py to boot Temporal in-process; we never bind :8000.
       # Running main.py in parallel risks port/Temporal-namespace contention
       # and adds 30-60s of dead wait. Just run pytest directly.
-      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
-
       - name: Run unit + integration tests
         id: tests
         shell: bash
@@ -104,12 +126,13 @@ jobs:
         run: |
           mkdir -p results
           set +e
-          # ``--dist=loadscope`` spreads each test class to a separate xdist
-          # worker so the heavy class-scoped fixtures in
-          # ``test_metabase_workflow.py`` (each runs a full Metabase extract
-          # workflow through embedded Temporal) execute in parallel.
-          uv run --with pytest-xdist --with pytest-cov pytest tests/unit/ tests/integration/ \
-            -n auto --dist=loadscope --tb=short \
+          # ``--dist=loadfile`` pins each test file to a single xdist worker.
+          # tests/integration/test_metabase_workflow.py has one class-scoped
+          # fixture that boots Metabase + runs ONE workflow; loadfile keeps
+          # that fixture running ONCE total while unit tests fan out across
+          # the remaining workers in parallel. Matches atlan-mysql-app.
+          uv run --with pytest-xdist --with pytest-cov --with pytest-timeout pytest tests/unit/ tests/integration/ \
+            -n auto --dist=loadfile --tb=short \
             --cov=app --cov-report=xml --cov-report=html --cov-report=term \
             --cov-fail-under=0 \
             --junitxml=results/junit.xml \
@@ -122,7 +145,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: integration-test-results
           path: results/
@@ -135,9 +158,9 @@ jobs:
   # plus Process / ColumnProcess lineage records land in Atlas.
   #
   # Triggered by the `e2e` PR label or workflow_dispatch. Requires
-  # SDR_TEST_TENANT / SDR_CLIENT_ID / SDR_CLIENT_SECRET secrets — the
-  # source side is docker, but qi / publish / lineage-publish all write
-  # to the real tenant Atlas.
+  # SDR_TEST_TENANT / SDR_CLIENT_ID / SDR_CLIENT_SECRET / ATLAN_API_KEY
+  # secrets — the source side is docker, but qi / publish / lineage-publish
+  # all write to the real tenant Atlas.
   e2e:
     name: e2e
     concurrency:
@@ -159,10 +182,8 @@ jobs:
       app-name: metabase
       app-image-name: atlan-metabase-app
       test-path: tests/e2e/
-      # secrets-script and compose-overlay defaults
-      # (.github/e2e/make-secrets-e2e-full.py and
-      # .github/e2e/e2e-full-docker-compose.yaml) match this repo's layout,
-      # so they don't need explicit overrides.
+      application-sdk-ref: ${{ inputs.application_sdk_ref }}
+      agent-name-override: ${{ inputs.agent_name_override }}
       distinct-id: ${{ inputs.distinct_id }}
     secrets: inherit
 

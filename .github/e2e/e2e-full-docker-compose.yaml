@@ -91,14 +91,15 @@ services:
       retries: 10
 
   # One-shot seeder. Brings up an admin user, registers mb-source as a
-  # Metabase database, triggers sync, then applies the declarative seed
-  # spec from tests/e2e/fixtures/seed_metabase_spec.yaml plus the
-  # E2E_SCALE-driven generator. The script is idempotent — second run
-  # against an already-seeded Metabase is a no-op except for sync.
+  # Metabase database, triggers sync, then applies the lightweight
+  # declared seed from tests/e2e/seed_metabase.py (4 collections + 5
+  # questions + 3 dashboards — same code path the integration testcontainer
+  # uses with a smaller count profile). The script is idempotent —
+  # rerunning against an already-seeded Metabase is a no-op.
   #
-  # Uses python:3.11-slim with httpx + pyyaml pip-installed at runtime;
-  # avoids building a dedicated image for a single script. Mounts the
-  # workspace read-only so seed_metabase.py + fixtures are visible.
+  # Uses python:3.11-slim with httpx pip-installed at runtime; avoids
+  # building a dedicated image for a single script. Mounts the
+  # workspace read-only so seed_metabase.py is visible.
   seed-metabase:
     image: python:3.11-slim
     working_dir: /workspace
@@ -113,14 +114,15 @@ services:
       MB_SOURCE_USER: source
       MB_SOURCE_PASSWORD: source
       MB_SOURCE_DB: testdata
-      E2E_SCALE: "large"
-      E2E_SEED_PARALLELISM: "10"
+      MB_SEED_COLLECTIONS: "4"
+      MB_SEED_QUESTIONS: "5"
+      MB_SEED_DASHBOARDS: "3"
     command:
       - sh
       - -c
       - |
         set -e
-        pip install --no-cache-dir httpx pyyaml
+        pip install --no-cache-dir httpx
         python tests/e2e/seed_metabase.py
     depends_on:
       metabase:
