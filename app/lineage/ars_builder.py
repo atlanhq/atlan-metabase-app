@@ -190,6 +190,23 @@ def build_process(
     )
     process_name = _truncate(question_name or f"Question {question_id}")
 
+    inputs = [build_partial_table_ref(**t) for t in source_tables]
+    outputs = [
+        {
+            "typeName": "MetabaseQuestion",
+            "uniqueAttributes": {"qualifiedName": question_qn},
+        }
+    ]
+
+    # Both ``attributes.inputs/outputs`` and ``relationshipAttributes.
+    # inputs/outputs`` are required on the wire. The publish-app's ARS
+    # resolver reads from ``attributes.inputs/outputs`` (the legacy v2
+    # contract — see ``serialize_entity`` in app/asset_mapper.py for the
+    # equivalent BIProcess hoist); Atlas itself reads
+    # ``relationshipAttributes`` for the relationship-side ObjectIds.
+    # Omitting ``relationshipAttributes`` lands ATLAS-400-00-021
+    # (INVALID_OBJECT_ID) because the constructed Atlas request has no
+    # valid relationship endpoints.
     return {
         "typeName": "Process",
         "status": "ACTIVE",
@@ -201,13 +218,8 @@ def build_process(
             "connectionQualifiedName": connection_qualified_name,
             "tenantId": tenant_id,
             "sql": sql,
-            "inputs": [build_partial_table_ref(**t) for t in source_tables],
-            "outputs": [
-                {
-                    "typeName": "MetabaseQuestion",
-                    "uniqueAttributes": {"qualifiedName": question_qn},
-                }
-            ],
+            "inputs": inputs,
+            "outputs": outputs,
             "arsEntityConfig": {
                 "publishTransformationHandling": "LINEAGE_ASSET",
                 "lookupResultHandling": "PICK_FIRST",
@@ -221,6 +233,10 @@ def build_process(
                 "fallbackQualifiedName": process_qn,
                 "fallbackQualifiedNameDelimiter": "/",
             },
+        },
+        "relationshipAttributes": {
+            "inputs": inputs,
+            "outputs": outputs,
         },
     }
 
@@ -263,6 +279,20 @@ def build_column_process(
     cp_qn = f"{connection_qualified_name}/question_columns/{question_id}/{cp_hash}"
     cp_name = _truncate(question_name or f"Question {question_id} columns")
 
+    inputs = [build_partial_column_ref(**c) for c in source_columns]
+    outputs = [
+        {
+            "typeName": "MetabaseQuestion",
+            "uniqueAttributes": {"qualifiedName": question_qn},
+        }
+    ]
+    process_ref = {
+        "typeName": "Process",
+        "uniqueAttributes": {"qualifiedName": parent_process_qn},
+    }
+
+    # See build_process for why ``relationshipAttributes`` must be
+    # populated in addition to ``attributes.inputs/outputs/process``.
     return {
         "typeName": "ColumnProcess",
         "status": "ACTIVE",
@@ -274,17 +304,9 @@ def build_column_process(
             "connectionQualifiedName": connection_qualified_name,
             "tenantId": tenant_id,
             "sql": sql,
-            "process": {
-                "typeName": "Process",
-                "uniqueAttributes": {"qualifiedName": parent_process_qn},
-            },
-            "inputs": [build_partial_column_ref(**c) for c in source_columns],
-            "outputs": [
-                {
-                    "typeName": "MetabaseQuestion",
-                    "uniqueAttributes": {"qualifiedName": question_qn},
-                }
-            ],
+            "process": process_ref,
+            "inputs": inputs,
+            "outputs": outputs,
             "arsEntityConfig": {
                 "publishTransformationHandling": "LINEAGE_ASSET",
                 "lookupResultHandling": "PICK_FIRST",
@@ -298,6 +320,11 @@ def build_column_process(
                 "fallbackQualifiedName": cp_qn,
                 "fallbackQualifiedNameDelimiter": "/",
             },
+        },
+        "relationshipAttributes": {
+            "inputs": inputs,
+            "outputs": outputs,
+            "process": process_ref,
         },
     }
 
