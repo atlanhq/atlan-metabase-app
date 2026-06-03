@@ -56,6 +56,15 @@ _CONNECTION = ConnectionRef.model_validate(
 def _inline_credentials(creds: dict[str, Any]) -> list[dict[str, str]]:
     """Pack ``{host, port, username, password}`` into the v3 ``[{key, value}]`` shape.
 
+    Uses FLAT keys (``username`` / ``password``) rather than the
+    ``extra.username`` / ``extra.password`` HTTP-layer convention. Reason:
+    ``build_credential_ref`` in app/credentials.py packs the list into a
+    dict with keys preserved literally, and the downstream
+    ``parse_metabase_credentials`` reads ``flat.get("username")`` directly —
+    it strips the ``extra.`` prefix only when given a list (not a dict).
+    Sending ``extra.``-prefixed keys lands them as literal dict keys and
+    leaves username/password empty, which Metabase rejects with HTTP 400.
+
     Using the inline path keeps the test scope on the extraction workflow
     rather than CredentialRef → secret-store resolution (covered in
     ``tests/unit/test_credentials.py``).
@@ -63,8 +72,8 @@ def _inline_credentials(creds: dict[str, Any]) -> list[dict[str, str]]:
     return [
         {"key": "host", "value": str(creds["host"])},
         {"key": "port", "value": str(creds["port"])},
-        {"key": "extra.username", "value": str(creds["username"])},
-        {"key": "extra.password", "value": str(creds["password"])},
+        {"key": "username", "value": str(creds["username"])},
+        {"key": "password", "value": str(creds["password"])},
     ]
 
 
