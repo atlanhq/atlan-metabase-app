@@ -25,6 +25,7 @@ Run tests with: uv run pytest tests/integration/ -v
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -112,6 +113,9 @@ class TestMetabaseExtraction:
                     connection=_CONNECTION,
                     output_path=str(output_dir),
                 ),
+                # Unique per-test-session prefix avoids Temporal "workflow
+                # already started" errors on retries. Matches mysql-app.
+                execution_id_prefix=f"metabase-int-{uuid.uuid4().hex[:8]}",
             ),
         )
 
