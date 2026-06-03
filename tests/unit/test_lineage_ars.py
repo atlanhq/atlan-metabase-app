@@ -235,6 +235,31 @@ class TestBuildProcess:
         assert cfg["publishTransformationHandling"] == "LINEAGE_ASSET"
         assert cfg["skipLookup"] is True
 
+    def test_relationship_attributes_mirrors_attributes(self):
+        # Guards the structural shape that publish-app + Atlas require.
+        # Pre-fix, the record had inputs/outputs only under ``attributes``
+        # and Atlas rejected every Process with ATLAS-400-00-021
+        # (INVALID_OBJECT_ID) because the constructed relationship-side
+        # payload had no valid endpoints. ``relationshipAttributes`` must
+        # exist at the top level and mirror the ``attributes`` content.
+        tables = [_table("testdata", "analytics", "orders")]
+        p = build_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_tables=tables,
+        )
+        assert p is not None
+        assert "relationshipAttributes" in p, (
+            "Process record must carry a top-level relationshipAttributes "
+            "key — Atlas reads relationship-side ObjectIds from there"
+        )
+        rel = p["relationshipAttributes"]
+        assert rel["inputs"] == p["attributes"]["inputs"]
+        assert rel["outputs"] == p["attributes"]["outputs"]
+
 
 # ---------------------------------------------------------------------------
 # ColumnProcess record assembly + Process linkage
@@ -292,6 +317,28 @@ class TestBuildColumnProcess:
             inputs[0]["attributes"]["arsEntityConfig"]["publishTransformationHandling"]
             == "PARTIAL_FIELD"
         )
+
+    def test_relationship_attributes_mirrors_attributes(self):
+        # Companion to TestBuildProcess.test_relationship_attributes_mirrors_attributes
+        # — same structural requirement applies to ColumnProcess.
+        h = process_hash(_QID, _SQL)
+        cp = build_column_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_columns=[
+                _column("testdata", "analytics", "customers", "customer_name")
+            ],
+            parent_process_hash=h,
+        )
+        assert cp is not None
+        assert "relationshipAttributes" in cp
+        rel = cp["relationshipAttributes"]
+        assert rel["inputs"] == cp["attributes"]["inputs"]
+        assert rel["outputs"] == cp["attributes"]["outputs"]
+        assert rel["process"] == cp["attributes"]["process"]
 
 
 # ---------------------------------------------------------------------------
