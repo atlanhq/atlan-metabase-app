@@ -35,6 +35,18 @@ import time
 from pathlib import Path
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# SDK-affecting env vars MUST be set BEFORE any application_sdk import — the
+# SDK reads them at module load to populate APPLICATION_NAME / DEPLOYMENT_NAME
+# module-level constants. Matches atlan-mysql-app's conftest pattern.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("ATLAN_APPLICATION_NAME", "metabase")
+os.environ.setdefault("ATLAN_DEPLOYMENT_NAME", "ci")
+# Preserve workflow artifacts (raw + transformed) under the LocalStore so
+# tests can assert against them. Without this the SDK's cleanup interceptor
+# deletes FileReference-tracked files after each workflow completes.
+os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
+
 import pytest
 import pytest_asyncio
 from application_sdk.dev import embedded_runtime
