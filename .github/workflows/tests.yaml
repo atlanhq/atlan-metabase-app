@@ -5,9 +5,12 @@ name: Tests
 #
 #   tests        — tests/unit/ + tests/integration/ via pytest direct
 #                  invocation. Integration tests use embedded_runtime
-#                  (in-process Temporal + mocked secret / state / storage),
-#                  so no external services are required. Runs on every PR
-#                  and every push to main.
+#                  (in-process Temporal + mocked secret / state / storage)
+#                  and bring up Metabase as a session-scoped Docker
+#                  testcontainer (see tests/integration/conftest.py),
+#                  mirroring atlan-mysql-app. No external services or
+#                  repo secrets required. Runs on every PR and every push
+#                  to main.
 #   e2e          — tests/e2e/ via atlanhq/application-sdk/.github/workflows/
 #                  e2e-full-reusable.yaml@main. Spins up the docker-compose
 #                  Metabase overlay (`.github/e2e/e2e-full-docker-compose.yaml`),
@@ -84,14 +87,13 @@ jobs:
     outputs:
       summary: ${{ steps.tests.outputs.summary }}
     env:
-      # Metabase basic auth — used by the embedded-runtime integration tests
-      # to seed the mock secret store. The connector's parse_metabase_credentials
-      # accepts the flat shape {host, port, username, password}; the conftest
-      # writes it into MockSecretStore under the key "metabase".
-      E2E_METABASE_HOST: ${{ secrets.E2E_METABASE_HOST }}
-      E2E_METABASE_PORT: ${{ secrets.E2E_METABASE_PORT }}
-      E2E_METABASE_USERNAME: ${{ secrets.E2E_METABASE_USERNAME }}
-      E2E_METABASE_PASSWORD: ${{ secrets.E2E_METABASE_PASSWORD }}
+      # Integration tests bring up Metabase as a testcontainer — no
+      # E2E_METABASE_* repo secrets are needed. ubuntu-latest ships with
+      # Docker, so tests/integration/conftest.py can pull
+      # metabase/metabase directly. If a future debugging workflow needs
+      # to point at an external Metabase, set E2E_METABASE_HOST and the
+      # conftest will short-circuit the container (mirrors mysql-app's
+      # MYSQL_HOST escape hatch).
       ATLAN_APPLICATION_NAME: metabase
     steps:
       - name: echo distinct-id ${{ github.event.inputs.distinct_id }}
@@ -132,7 +134,7 @@ jobs:
           # worker so the heavy class-scoped fixtures in
           # ``test_metabase_workflow.py`` (each runs a full Metabase extract
           # workflow through embedded Temporal) execute in parallel.
-          uv run --with pytest-xdist --with pytest-cov pytest tests/unit/ tests/integration/ \
+          uv run --with pytest-xdist --with pytest-cov --with pytest-timeout pytest tests/unit/ tests/integration/ \
             -n auto --dist=loadscope --tb=short \
             --cov=app --cov-report=xml --cov-report=html --cov-report=term \
             --cov-fail-under=0 \

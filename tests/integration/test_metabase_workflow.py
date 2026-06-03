@@ -1,10 +1,15 @@
 """Integration tests for the Metabase connector.
 
 Runs Metabase workflows through embedded Temporal + the in-process
-MetabaseApp worker, against a real Metabase server reached via
-``E2E_METABASE_*`` env vars. Each test class executes ONE workflow run
-via a class-scoped fixture, then asserts on the shared outcome — so the
-expensive crawl is paid once per scenario, not per assertion.
+MetabaseApp worker, against a Metabase server brought up by the session-
+scoped ``metabase_credentials`` fixture in ``conftest.py`` — either a
+local ``metabase/metabase`` testcontainer (the default; mirrors mysql-
+app's ``MySqlContainer`` pattern) or a preconfigured external Metabase
+when ``E2E_METABASE_HOST`` is set.
+
+Each test class executes ONE workflow run via a class-scoped fixture,
+then asserts on the shared outcome — the expensive crawl is paid once
+per scenario, not per assertion.
 
 Module shape mirrors ``atlan-openapi-app/tests/integration/test_openapi.py``:
 multiple ``TestX`` classes for different invocation scenarios, each with
@@ -16,15 +21,9 @@ Scenarios covered:
                                                 file-content assertions
     - TestMetabaseExtractionWithFilters     — include + exclude filters
                                                 accepted; workflow completes
-    - TestMetabaseInlineCredentials         — credentials=[...] inline path
-                                                (no CredentialRef)
     - TestMetabaseLineageEntrypoint         — extract_lineage @entrypoint
                                                 handles empty QI input
                                                 without crashing
-
-Requires:
-    E2E_METABASE_HOST / _PORT / _USERNAME / _PASSWORD env vars
-    (see tests/integration/conftest.py for the mock-secret-store seeding)
 
 Run with:
     uv run pytest tests/integration/ -v
@@ -33,7 +32,6 @@ Run with:
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -49,20 +47,17 @@ from app.contracts import (
     MetabaseLineageOutput,
     MetabaseOutput,
 )
-from tests.integration.conftest import require_metabase_env
 
 if TYPE_CHECKING:
     from tests.integration.conftest import AppExecutor
-
-require_metabase_env()
 
 
 _CONNECTION_NAME = "test-metabase-integration"
 _CONNECTION_QN = f"default/metabase/{_CONNECTION_NAME}"
 
-# CredentialRef the conftest seeds into the MockSecretStore from
-# E2E_METABASE_* env vars. Used by every scenario except the inline-
-# credentials test class.
+# CredentialRef the conftest seeds into the MockSecretStore from the
+# Metabase testcontainer (or preconfigured external host). Used by every
+# scenario.
 _CRED_REF = CredentialRef(
     name="metabase",
     credential_type="basic",
