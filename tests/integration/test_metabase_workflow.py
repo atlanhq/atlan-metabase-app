@@ -113,8 +113,13 @@ class TestMetabaseExtraction:
                     connection=_CONNECTION,
                     output_path=str(output_dir),
                 ),
-                # Unique per-test-session prefix avoids Temporal "workflow
-                # already started" errors on retries. Matches mysql-app.
+                # MetabaseApp is multi-entry-point — without ``entry_point``
+                # the backend would submit to workflow name "metabase",
+                # which has no registered handler (the registered names are
+                # "metabase:extract-metadata" and "metabase:extract-lineage").
+                # Without this, the Temporal client awaits forever for a
+                # listener that never claims the workflow.
+                entry_point="extract-metadata",
                 execution_id_prefix=f"metabase-int-{uuid.uuid4().hex[:8]}",
             ),
         )
