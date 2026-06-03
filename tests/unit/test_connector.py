@@ -442,8 +442,11 @@ class TestExtractLineage:
         assert out.process_count == 1
         assert out.column_process_count == 1
 
-        # NDJSON files written under output_path/lineage-stage/{PROCESS,COLUMNPROCESS}/
-        stage = tmp_path / "out" / "lineage-stage"
+        # ARS 2.0 producer-split: records carrying arsIdentity must land
+        # under ``lineage-stage/resolvable/`` for publish-app's Step 0
+        # resolver to pick them up. Files outside ``resolvable/`` are
+        # skipped by the resolver and flow through as plain entities.
+        stage = tmp_path / "out" / "lineage-stage" / "resolvable"
         p_records = [
             json.loads(line)
             for line in (stage / "PROCESS" / "result-0.json").read_text().splitlines()
