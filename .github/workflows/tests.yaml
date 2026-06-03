@@ -88,12 +88,8 @@ jobs:
       summary: ${{ steps.tests.outputs.summary }}
     env:
       # Integration tests bring up Metabase as a testcontainer — no
-      # E2E_METABASE_* repo secrets are needed. ubuntu-latest ships with
-      # Docker, so tests/integration/conftest.py can pull
-      # metabase/metabase directly. If a future debugging workflow needs
-      # to point at an external Metabase, set E2E_METABASE_HOST and the
-      # conftest will short-circuit the container (mirrors mysql-app's
-      # MYSQL_HOST escape hatch).
+      # E2E_METABASE_* repo secrets needed. ubuntu-latest ships Docker,
+      # so tests/integration/conftest.py pulls metabase/metabase directly.
       ATLAN_APPLICATION_NAME: metabase
     steps:
       - name: echo distinct-id ${{ github.event.inputs.distinct_id }}

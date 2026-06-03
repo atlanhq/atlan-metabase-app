@@ -21,9 +21,9 @@ resolution entirely — keeps the integration assertion focused on the
 extraction workflow itself, independent of credential plumbing (which is
 unit-tested in ``tests/unit/test_credentials.py``).
 
-Escape hatch: when ``E2E_METABASE_HOST`` is set, the container fixture is
-bypassed and tests run against the preconfigured external Metabase
-(useful for local debugging against a known-good tenant).
+Integration tests ALWAYS use a local testcontainer — there's no external-
+Metabase escape hatch. If Docker isn't available the suite skips with
+a clear message; that's the only mode aside from container-backed.
 
 Run with: uv run pytest tests/integration/ -v
 """
@@ -138,14 +138,6 @@ class AppExecutor:
 # ---------------------------------------------------------------------------
 
 
-def _metabase_host_preconfigured() -> bool:
-    """An external Metabase has been pointed at via env vars.
-
-    Mirrors ``_mysql_host_preconfigured`` in ``atlan-mysql-app/tests/integration/conftest.py``.
-    """
-    return bool(os.environ.get("E2E_METABASE_HOST"))
-
-
 def _docker_available() -> bool:
     """Docker daemon reachable from this process."""
     try:
@@ -165,34 +157,19 @@ def _docker_available() -> bool:
 
 @pytest.fixture(scope="session")
 def metabase_credentials() -> dict[str, Any]:
-    """Bring up Metabase and return the credential bundle.
+    """Bring up Metabase as a testcontainer and return the credential bundle.
 
-    Priority:
-        1. ``E2E_METABASE_HOST`` env var set → use that (preconfigured).
-        2. Docker available → start Metabase testcontainer + apply the
-           shared light seed from ``tests/e2e/seed_metabase.py`` with
-           counts 2/2/2.
-        3. Neither → skip the integration suite (mirrors mysql-app).
+    Starts ``metabase/metabase`` via testcontainers, applies the shared
+    light seed from ``tests/e2e/seed_metabase.py`` with counts 2/2/2,
+    yields ``{host, port, username, password}`` for the workflow to
+    authenticate against. ``host`` carries the protocol prefix because
+    ``MetabaseCredential.host`` is documented to.
 
-    Returns ``{host, port, username, password}`` ready for
-    ``parse_metabase_credentials``. ``host`` carries the protocol prefix
-    because ``MetabaseCredential.host`` is documented to.
+    Skips the integration suite when Docker is unreachable.
     """
-    if _metabase_host_preconfigured():
-        host = os.environ["E2E_METABASE_HOST"]
-        port = int(os.environ.get("E2E_METABASE_PORT", "443") or "443")
-        logger.info("Using preconfigured Metabase at %s:%d", host, port)
-        return {
-            "host": host,
-            "port": port,
-            "username": os.environ.get("E2E_METABASE_USERNAME", ""),
-            "password": os.environ.get("E2E_METABASE_PASSWORD", ""),
-        }
-
     if not _docker_available():
         pytest.skip(
-            "integration tests need Docker (for the Metabase testcontainer) "
-            "or E2E_METABASE_HOST + creds for an external Metabase",
+            "integration tests need Docker for the Metabase testcontainer",
             allow_module_level=True,
         )
 
