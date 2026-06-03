@@ -1,30 +1,53 @@
-"""Fixtures for integration tests.
+"""Fixtures for integration tests — Metabase testcontainer + embedded Temporal.
 
-Tests run entirely in-process: Temporal starts as an embedded dev server
-via the SDK's ``embedded_runtime()``, and secret / state / storage
-infrastructure is mocked — no external services required.
+Tests run entirely in-process:
+  - Temporal starts as an embedded dev server via the SDK's
+    ``embedded_runtime()``.
+  - State / storage infrastructure is mocked.
+  - **Metabase runs as a session-scoped Docker testcontainer** brought up
+    via testcontainers; a minimal seed (2 collections + 2 questions + 2
+    dashboards) is applied via the Metabase HTTP API before tests start.
+    The seed shares code with the e2e compose overlay's one-shot service
+    (``tests/e2e/seed_metabase.py``) — same shape, just different counts.
 
-The shape mirrors ``atlan-openapi-app/tests/integration/conftest.py``;
-metabase-specific deltas are the credentials fixture (the connector needs
-``E2E_METABASE_*`` env vars wired into the MockSecretStore so the workflow
-can reach a real Metabase server) and the task queue name.
+Pattern mirrors ``atlan-mysql-app/tests/integration/conftest.py`` which
+boots a ``MySqlContainer`` and seeds it from ``fixtures/seed.sql``. The
+Metabase image is pinned to the version the full-DAG e2e overlay uses
+(``.github/e2e/e2e-full-docker-compose.yaml``) — bump them together.
 
-Environment variables:
-    E2E_METABASE_HOST      — Metabase URL with protocol (e.g. https://acme.metabaseapp.com)
-    E2E_METABASE_PORT      — port (default 443)
-    E2E_METABASE_USERNAME  — Metabase username / email
-    E2E_METABASE_PASSWORD  — Metabase password
+The workflow input passes credentials INLINE (``credentials=[...]``)
+rather than via a ``CredentialRef`` so the test bypasses secret-store
+resolution entirely — keeps the integration assertion focused on the
+extraction workflow itself, independent of credential plumbing (which is
+unit-tested in ``tests/unit/test_credentials.py``).
 
-Run tests with: uv run pytest tests/integration/ -v
+Integration tests ALWAYS use a local testcontainer — there's no external-
+Metabase escape hatch. If Docker isn't available the suite skips with
+a clear message; that's the only mode aside from container-backed.
+
+Run with: uv run pytest tests/integration/ -v
 """
 
 from __future__ import annotations
 
 import os
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import orjson
+# ---------------------------------------------------------------------------
+# SDK-affecting env vars MUST be set BEFORE any application_sdk import — the
+# SDK reads them at module load to populate APPLICATION_NAME / DEPLOYMENT_NAME
+# module-level constants. Matches atlan-mysql-app's conftest pattern.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("ATLAN_APPLICATION_NAME", "metabase")
+os.environ.setdefault("ATLAN_DEPLOYMENT_NAME", "ci")
+# Preserve workflow artifacts (raw + transformed) under the LocalStore so
+# tests can assert against them. Without this the SDK's cleanup interceptor
+# deletes FileReference-tracked files after each workflow completes.
+os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
+
 import pytest
 import pytest_asyncio
 from application_sdk.dev import embedded_runtime
@@ -35,6 +58,7 @@ from application_sdk.infrastructure.context import (
     InfrastructureContext,
     set_infrastructure,
 )
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.storage import create_local_store, create_memory_store
 from application_sdk.testing.mocks import MockSecretStore, MockStateStore
@@ -47,12 +71,39 @@ from app.connector import MetabaseApp  # noqa: F401
 # observability flush does not keep retrying and spamming warnings in tests.
 AtlanObservability._deployment_store = create_memory_store()
 
+logger = get_logger("integration")
+
 _TASK_QUEUE = "metabase-queue"
-_CREDENTIAL_KEY = "metabase"
+
+# Pin matches .github/e2e/e2e-full-docker-compose.yaml — keep in sync.
+_METABASE_IMAGE = "metabase/metabase:v0.61.2.3"
+_METABASE_PORT = 3000
+
+# Same admin convention as the e2e compose overlay.
+_ADMIN_EMAIL = "e2e@atlan.com"
+_ADMIN_PASSWORD = "AtlanMetabaseE2E!1"
+
+# Integration count profile: 2 / 2 / 2. Light enough to keep boot+seed
+# under ~25 s on CI; rich enough that the connector emits ≥1 record per
+# typename and BIProcess (dashboard→question pairings).
+_INTEGRATION_N_COLLECTIONS = 2
+_INTEGRATION_N_QUESTIONS = 2
+_INTEGRATION_N_DASHBOARDS = 2
 
 
 class AppExecutor:
-    """Compatibility shim wrapping TemporalExecutorBackend for integration tests."""
+    """Compatibility shim wrapping TemporalExecutorBackend for integration tests.
+
+    Critical detail for multi-entry-point apps (like MetabaseApp, which has
+    both ``extract-metadata`` and ``extract-lineage``): the underlying
+    ``TemporalExecutorBackend.execute`` derives the workflow name from
+    ``f"{app_name}:{entry_point}"`` when ``entry_point`` is passed, but
+    falls back to just ``app_name`` when it isn't. Single-entry-point
+    apps (mysql) happen to register a workflow at the bare ``app_name``,
+    so omitting ``entry_point`` works there. Multi-entry-point apps don't —
+    the bare name is never registered, so submissions to it sit in the
+    Temporal queue forever with no listener. Always pass ``entry_point``.
+    """
 
     def __init__(self, backend: TemporalExecutorBackend) -> None:
         self._backend = backend
@@ -63,6 +114,7 @@ class AppExecutor:
         input_data: Any,
         *,
         execution_id_prefix: str = "",
+        entry_point: str | None = None,
     ) -> Any:
         from application_sdk.app.context import AppContext
         from application_sdk.execution.retry import RetryPolicy
@@ -78,11 +130,102 @@ class AppExecutor:
             input_data,
             context=context,
             retry_policy=RetryPolicy(),
+            entry_point=entry_point,
         )
 
 
 # ---------------------------------------------------------------------------
-# Infrastructure fixture — wires mock secret / state / storage (no Dapr)
+# Docker availability — graceful skip when Docker is unreachable.
+# ---------------------------------------------------------------------------
+
+
+def _docker_available() -> bool:
+    """Docker daemon reachable from this process."""
+    try:
+        import docker  # type: ignore[import-not-found]
+
+        docker.from_env().ping()
+        return True
+    except Exception:  # noqa: BLE001 — any failure means "no Docker"
+        logger.debug("Docker daemon not reachable", exc_info=True)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Metabase container fixture
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def metabase_credentials() -> Iterator[dict[str, Any]]:
+    """Bring up Metabase as a testcontainer and return the credential bundle.
+
+    Starts ``metabase/metabase`` via testcontainers, applies the shared
+    light seed from ``tests/e2e/seed_metabase.py`` with counts 2/2/2,
+    yields ``{host, port, username, password}`` for the workflow to
+    authenticate against. ``host`` carries the protocol prefix because
+    ``MetabaseCredential.host`` is documented to.
+
+    Skips the integration suite when Docker is unreachable.
+    """
+    if not _docker_available():
+        pytest.skip(
+            "integration tests need Docker for the Metabase testcontainer",
+            allow_module_level=True,
+        )
+
+    # Imports gated inside the fixture so unit-only runs don't need them.
+    import asyncio
+
+    from testcontainers.core.container import DockerContainer
+
+    from tests.e2e.seed_metabase import seed_metabase
+
+    logger.info("Starting Metabase container (%s)", _METABASE_IMAGE)
+    boot_start = time.monotonic()
+    container = (
+        DockerContainer(_METABASE_IMAGE)
+        .with_exposed_ports(_METABASE_PORT)
+        .with_env("JAVA_OPTS", "-Xmx1500m")
+        .with_env("MB_CHECK_FOR_UPDATES", "false")
+        .with_env("MB_ANON_TRACKING_ENABLED", "false")
+    )
+    container.start()
+    try:
+        ip = container.get_container_host_ip()
+        mapped_port = int(container.get_exposed_port(_METABASE_PORT))
+        base_url = f"http://{ip}:{mapped_port}"
+        logger.info("Metabase container up; seeding at %s", base_url)
+
+        # The seed function does its own /api/health wait internally.
+        asyncio.run(
+            seed_metabase(
+                base_url,
+                admin_email=_ADMIN_EMAIL,
+                admin_password=_ADMIN_PASSWORD,
+                n_collections=_INTEGRATION_N_COLLECTIONS,
+                n_questions=_INTEGRATION_N_QUESTIONS,
+                n_dashboards=_INTEGRATION_N_DASHBOARDS,
+                source=None,  # integration uses sample DB only (no lineage)
+            )
+        )
+        logger.info(
+            "Metabase boot + seed complete in %.1fs",
+            time.monotonic() - boot_start,
+        )
+        yield {
+            "host": f"http://{ip}",
+            "port": mapped_port,
+            "username": _ADMIN_EMAIL,
+            "password": _ADMIN_PASSWORD,
+        }
+    finally:
+        logger.info("Stopping Metabase container")
+        container.stop()
+
+
+# ---------------------------------------------------------------------------
+# Infrastructure fixture — wires mock secret / state / storage
 # ---------------------------------------------------------------------------
 
 
@@ -98,32 +241,20 @@ def store_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def infrastructure(store_root: Path) -> InfrastructureContext:
+def infrastructure(
+    store_root: Path,
+    metabase_credentials: dict[str, Any],  # noqa: ARG001 — gates on container readiness
+) -> InfrastructureContext:
     """Wire mock infrastructure for the session using a LocalStore.
 
-    Seeds MockSecretStore with the Metabase credential bundle from env
-    vars so workflow tasks resolving ``CredentialRef(name="metabase")`` see
-    a populated credential without needing a real Dapr secret store.
+    MockSecretStore is empty — tests pass credentials inline through the
+    workflow input, not via CredentialRef + secret-store lookup. Keeps
+    integration scope on the extraction workflow, not credential plumbing
+    (which has its own unit coverage).
     """
-    host = os.environ.get("E2E_METABASE_HOST", "")
-    port = int(os.environ.get("E2E_METABASE_PORT", "443") or "443")
-    username = os.environ.get("E2E_METABASE_USERNAME", "")
-    password = os.environ.get("E2E_METABASE_PASSWORD", "")
-
-    secrets: dict[str, str] = {}
-    if host and username and password:
-        secrets[_CREDENTIAL_KEY] = orjson.dumps(
-            {
-                "host": host,
-                "port": port,
-                "username": username,
-                "password": password,
-            }
-        ).decode()
-
     ctx = InfrastructureContext(
         state_store=MockStateStore(),
-        secret_store=MockSecretStore(secrets),
+        secret_store=MockSecretStore({}),
         storage=create_local_store(store_root),
     )
     set_infrastructure(ctx)
@@ -176,26 +307,3 @@ def metabase_executor(
         task_queue=_TASK_QUEUE,
     )
     return AppExecutor(backend=backend)
-
-
-# ---------------------------------------------------------------------------
-# Convenience — module-level skip when Metabase credentials are absent.
-# ---------------------------------------------------------------------------
-# Tests import this and call it at module level so the whole file gracefully
-# skips locally when ``tests/.env`` is not populated, instead of erroring with
-# an auth failure deep inside the workflow.
-
-
-def require_metabase_env() -> None:
-    """Skip the calling module if any Metabase env var is missing."""
-    required = (
-        "E2E_METABASE_HOST",
-        "E2E_METABASE_USERNAME",
-        "E2E_METABASE_PASSWORD",
-    )
-    missing = [k for k in required if not os.environ.get(k)]
-    if missing:
-        pytest.skip(
-            f"Metabase integration tests need {', '.join(missing)}",
-            allow_module_level=True,
-        )
