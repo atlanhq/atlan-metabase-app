@@ -736,10 +736,10 @@ class MetabaseApp(App):
     ) -> BuildLineageOutput:
         """Read QI parsed-SQL output and stage Process + ColumnProcess NDJSON.
 
-        QI NDJSON shape: {QUERY_ID, SQL, PARSED_DATA{dbobjs, relationships}, OUTPUT_FLAGS}
-        See app/lineage/qi_reader.py for format coercion and
-        app/lineage/ars_builder.py for the PARTIAL_OBJECT / PARTIAL_FIELD
-        record construction.
+        QI NDJSON shape: ``{sql, gudusoft: {dbobjs, relationships}, extra: {…}}``
+        (current Gudusoft 3.x output) — see app/lineage/qi_reader.py for the
+        format coercion and app/lineage/ars_builder.py for the ARS 2.0
+        ``arsIdentity``-bearing record construction.
         """
         processes: list[dict[str, Any]] = []
         column_processes: list[dict[str, Any]] = []
