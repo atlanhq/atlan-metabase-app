@@ -130,12 +130,13 @@ jobs:
         run: |
           mkdir -p results
           set +e
-          # ``--dist=loadscope`` spreads each test class to a separate xdist
-          # worker so the heavy class-scoped fixtures in
-          # ``test_metabase_workflow.py`` (each runs a full Metabase extract
-          # workflow through embedded Temporal) execute in parallel.
+          # ``--dist=loadfile`` pins each test file to a single xdist worker.
+          # tests/integration/test_metabase_workflow.py has one class-scoped
+          # fixture that boots Metabase + runs ONE workflow; loadfile keeps
+          # that fixture running ONCE total while unit tests fan out across
+          # the remaining workers in parallel. Matches atlan-mysql-app.
           uv run --with pytest-xdist --with pytest-cov --with pytest-timeout pytest tests/unit/ tests/integration/ \
-            -n auto --dist=loadscope --tb=short \
+            -n auto --dist=loadfile --tb=short \
             --cov=app --cov-report=xml --cov-report=html --cov-report=term \
             --cov-fail-under=0 \
             --junitxml=results/junit.xml \
