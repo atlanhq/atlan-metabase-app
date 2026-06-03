@@ -91,7 +91,18 @@ _INTEGRATION_N_DASHBOARDS = 2
 
 
 class AppExecutor:
-    """Compatibility shim wrapping TemporalExecutorBackend for integration tests."""
+    """Compatibility shim wrapping TemporalExecutorBackend for integration tests.
+
+    Critical detail for multi-entry-point apps (like MetabaseApp, which has
+    both ``extract-metadata`` and ``extract-lineage``): the underlying
+    ``TemporalExecutorBackend.execute`` derives the workflow name from
+    ``f"{app_name}:{entry_point}"`` when ``entry_point`` is passed, but
+    falls back to just ``app_name`` when it isn't. Single-entry-point
+    apps (mysql) happen to register a workflow at the bare ``app_name``,
+    so omitting ``entry_point`` works there. Multi-entry-point apps don't —
+    the bare name is never registered, so submissions to it sit in the
+    Temporal queue forever with no listener. Always pass ``entry_point``.
+    """
 
     def __init__(self, backend: TemporalExecutorBackend) -> None:
         self._backend = backend
@@ -102,6 +113,7 @@ class AppExecutor:
         input_data: Any,
         *,
         execution_id_prefix: str = "",
+        entry_point: str | None = None,
     ) -> Any:
         from application_sdk.app.context import AppContext
         from application_sdk.execution.retry import RetryPolicy
@@ -117,6 +129,7 @@ class AppExecutor:
             input_data,
             context=context,
             retry_policy=RetryPolicy(),
+            entry_point=entry_point,
         )
 
 
