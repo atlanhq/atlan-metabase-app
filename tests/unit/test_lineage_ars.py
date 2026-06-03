@@ -263,10 +263,10 @@ class TestBuildProcess:
             f"{_CONN_QN}/questions/{_QID}"
         )
 
-    def test_process_uses_use_fallback_action(self):
-        # The Process itself isn't looked up — this connector owns its
-        # qualifiedName. noMatchAction = use_fallback short-circuits the
-        # ARS lookup and uses the fallback QN directly.
+    def test_parent_omits_its_own_ars_identity(self):
+        # The parent Process is Case (b) in publish-app's resolver — its
+        # own arsIdentity block is NOT read (only arsNestedLookupFields +
+        # arsNoNestedMatchAction are). Emitting it would be dead weight.
         p = build_process(
             connection_qualified_name=_CONN_QN,
             connection_name=_CONN_NAME,
@@ -276,11 +276,24 @@ class TestBuildProcess:
             source_tables=[_table("testdata", "analytics", "customers")],
         )
         assert p is not None
-        ai = p["attributes"]["arsIdentity"]
-        assert ai["noMatchAction"] == "use_fallback"
-        assert ai["fallbackTypeName"] == "Process"
-        # fallbackQualifiedName is the same as the entity's own QN.
-        assert ai["fallbackQualifiedName"] == p["attributes"]["qualifiedName"]
+        assert "arsIdentity" not in p["attributes"]
+
+    def test_arsNoNestedMatchAction_is_keep(self):
+        # The default in publish-app is "drop" — the parent gets filtered
+        # from output if any declared lookup field ends up zero-length
+        # post-resolve. Process is a first-class artifact (owns its qN);
+        # it must survive enrichment misses, so we opt out explicitly.
+        # See atlan-publish-app/app/lib/partitioning/resolve/__init__.py:478.
+        p = build_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_tables=[_table("testdata", "analytics", "customers")],
+        )
+        assert p is not None
+        assert p["attributes"]["arsNoNestedMatchAction"] == "keep"
 
     def test_ars_nested_lookup_fields_lists_inputs_outputs(self):
         # Tells the resolver which fields contain nested refs that need
