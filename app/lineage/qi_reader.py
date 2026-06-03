@@ -103,44 +103,140 @@ def _coerce_table_ref(
     }
 
 
+def _build_dbobj_index(dbobjs: list[dict[str, Any]]) -> dict[Any, dict[str, Any]]:
+    """Index dbobjs by id for parentId-based relationship resolution.
+
+    QI's ``to_gudusoft_output`` (sqlparser/gudusoft 3.0.6 era) emits
+    relationships whose source/target entries reference parent tables by
+    ``parentId`` only — the table itself (database / schema / name /
+    columns) lives in ``dbobjs[]``. Reverse-lookup needs an id index.
+    """
+    return {
+        obj.get("id"): obj
+        for obj in (dbobjs or [])
+        if isinstance(obj, dict) and obj.get("id") is not None
+    }
+
+
+def _coerce_one_id_based_source(
+    src: dict[str, Any],
+    dbobj_index: dict[Any, dict[str, Any]],
+    default_vendor: str,
+) -> dict[str, str] | None:
+    """Resolve a parentId-referenced source to a flat column ref.
+
+    Mirrors ``to_gudusoft_output`` (see atlan-query-intelligence-app
+    app/pond/lorien/lineage/lineage.py:564) which emits each source as::
+
+        {"id": <col_id>, "column": <name>, "parentId": <table_id>,
+         "parentName": "<db.schema.table>"}
+
+    The parent dbobj carries the table's ``database`` / ``schema`` /
+    ``name``. Falls back to splitting ``parentName`` when the parentId
+    doesn't resolve (e.g. a partial QI output drop).
+    """
+    column_name = _unquote_ident(str(src.get("column") or src.get("name") or ""))
+    if not column_name:
+        return None
+
+    parent = dbobj_index.get(src.get("parentId"))
+    if isinstance(parent, dict):
+        database = parent.get("db") or parent.get("database") or ""
+        schema = parent.get("schema") or ""
+        table_name = parent.get("name") or parent.get("tableName") or ""
+        vendor = parent.get("vendor_name") or parent.get("vendorName") or default_vendor
+    else:
+        # ``parentName`` is ``database.schema.name`` (or shorter) on sources;
+        # on targets it's just ``name``. Best-effort split — better than
+        # dropping the ref entirely.
+        parts = str(src.get("parentName") or "").split(".")
+        if len(parts) >= 3:
+            database, schema, table_name = parts[0], parts[1], ".".join(parts[2:])
+        elif len(parts) == 2:
+            database, schema, table_name = "", parts[0], parts[1]
+        else:
+            database, schema, table_name = "", "", parts[0] if parts else ""
+        vendor = default_vendor
+
+    return {
+        "vendor_name": vendor,
+        "database": _unquote_ident(str(database)),
+        "schema": _unquote_ident(str(schema)),
+        "table_name": _unquote_ident(str(table_name)),
+        "column_name": column_name,
+    }
+
+
+def _coerce_one_inline_source(
+    end: dict[str, Any], default_vendor: str
+) -> dict[str, str] | None:
+    """Coerce a legacy ``source``/``from`` end with inline db/schema/table."""
+    column_name = _unquote_ident(str(end.get("column") or end.get("name") or ""))
+    if not column_name:
+        return None
+    return {
+        "vendor_name": end.get("vendor_name")
+        or end.get("vendorName")
+        or default_vendor,
+        "database": _unquote_ident(str(end.get("db") or end.get("database") or "")),
+        "schema": _unquote_ident(str(end.get("schema") or "")),
+        "table_name": _unquote_ident(
+            str(end.get("table") or end.get("tableName") or "")
+        ),
+        "column_name": column_name,
+    }
+
+
 def _coerce_column_refs(
-    relationships: list[dict[str, Any]], default_vendor: str = ""
+    relationships: list[dict[str, Any]],
+    dbobj_index: dict[Any, dict[str, Any]] | None = None,
+    default_vendor: str = "",
 ) -> list[dict[str, str]]:
     """Coerce QI relationship entries to ARS column-ref shape.
 
-    QI's relationships array contains pairs of source/target column refs
-    plus an edge kind (typically ``"fdd"`` = field-direct-dependency).
-    We collect distinct *source* column refs — column lineage on the
-    Process side flows source_columns → MetabaseQuestion.
+    Supports both relationship shapes:
+
+    - **Current** (Gudusoft 3.0.6 via QI's ``to_gudusoft_output``):
+      ``rel["sources"]`` is a list of refs that carry ``parentId`` /
+      ``column`` / ``parentName``; the parent table info (``database`` /
+      ``schema`` / ``name``) lives in the corresponding ``dbobjs[]``
+      entry and is resolved via ``dbobj_index``.
+    - **Legacy**: ``rel["source"]`` / ``rel["from"]`` is a single dict
+      with inline ``column`` / ``table`` / ``schema`` / ``db`` /
+      ``vendor_name`` fields.
+
+    Collects distinct *source* column refs — column lineage on the
+    Process side flows ``source_columns → MetabaseQuestion``.
     """
+    dbobj_index = dbobj_index or {}
     seen: set[tuple[str, ...]] = set()
     out: list[dict[str, str]] = []
+
+    def _record(ref: dict[str, str] | None) -> None:
+        if ref is None:
+            return
+        key = tuple(ref.values())
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(ref)
+
     for rel in relationships or []:
+        # Current shape (plural ``sources``, id-based parent ref).
+        sources_plural = rel.get("sources")
+        if isinstance(sources_plural, list):
+            for src in sources_plural:
+                if isinstance(src, dict):
+                    _record(
+                        _coerce_one_id_based_source(src, dbobj_index, default_vendor)
+                    )
+            continue  # don't double-process when both shapes coexist
+
+        # Legacy shape (singular ``source`` / ``from`` with inline fields).
         for end in (rel.get("source"), rel.get("from")):
-            if not isinstance(end, dict):
-                continue
-            raw_name = end.get("column") or end.get("name") or ""
-            column_name = _unquote_ident(str(raw_name))
-            if not column_name:
-                continue
-            ref = {
-                "vendor_name": end.get("vendor_name")
-                or end.get("vendorName")
-                or default_vendor,
-                "database": _unquote_ident(
-                    str(end.get("db") or end.get("database") or "")
-                ),
-                "schema": _unquote_ident(str(end.get("schema") or "")),
-                "table_name": _unquote_ident(
-                    str(end.get("table") or end.get("tableName") or "")
-                ),
-                "column_name": column_name,
-            }
-            key = tuple(ref.values())
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(ref)
+            if isinstance(end, dict):
+                _record(_coerce_one_inline_source(end, default_vendor))
+
     return out
 
 
@@ -246,6 +342,13 @@ def parse_qi_record(
             source_tables.append(ref)
 
     relationships = parsed.get("relationships") or []
-    source_columns = _coerce_column_refs(relationships, default_vendor=default_vendor)
+    # ``dbobj_index`` is the id-to-dbobj map ``_coerce_column_refs`` uses
+    # to resolve the ``parentId``-based source refs emitted by the
+    # current Gudusoft output. Pre-fix, this was unbuilt and every
+    # ``parentId`` lookup missed, dropping all column lineage silently.
+    dbobj_index = _build_dbobj_index(dbobjs)
+    source_columns = _coerce_column_refs(
+        relationships, dbobj_index=dbobj_index, default_vendor=default_vendor
+    )
 
     return query_id, sql, source_tables, source_columns
