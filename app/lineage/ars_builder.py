@@ -16,27 +16,41 @@ legacy-translator shim. Producers on the 1.0 contract (``arsEntityConfig``
 through ``legacy_translator.py``; this connector skips that path entirely
 by emitting 2.0 records inline.
 
-Each record carries:
+Process / ColumnProcess (parent — Case (b) in publish-app's resolver:
+``app/lib/partitioning/resolve/resolve.py::_build_edges_candidate_entities``)::
 
   attributes:
     name, qualifiedName, …scalar fields…
-    inputs:  [ <ref with arsIdentity> ]
-    outputs: [ <plain ObjectId or ref with arsIdentity> ]
-    arsIdentity:
-      components: {connectorType, databaseName, schemaName, tableName, …}
-      matchTypeNames: ["Table", "View", …]    # types eligible for lookup
-      fallbackQualifiedName: "<qn>"             # used when noMatchAction = use_fallback
-      fallbackTypeName: "Table"                 # type for PartialObject creation
-      noMatchAction: "use_fallback" | "create_partial" | "drop"
-      lookupResultHandling: "pick_first"
-      parentComponentsKeys: [...]               # for Column → Table parent lookup
-      parentMatchTypeNames: ["Table", "View"]
-      parentTypeNames: ["Table"]
-    arsNestedLookupFields: ["inputs", "outputs"]   # tells resolver which fields contain nested refs
+    inputs:  [ <nested ref with arsIdentity> ]
+    outputs: [ <plain ObjectId — clean ref, passes through unchanged> ]
+    arsNestedLookupFields: ["inputs", "outputs"]   # fields the resolver UNNESTs
+    arsNoNestedMatchAction: "keep"                  # survive enrichment misses
 
   relationshipAttributes:
-    inputs: [...]    # mirror, required by Atlas wire format
+    inputs:  [...]    # mirror — required for Atlas wire-format relationship side
     outputs: [...]
+
+The parent's own ``arsIdentity`` is intentionally omitted — Case (b)
+entities (those with a non-null qualifiedName) are looked up by their
+own qN; the resolver reads only ``arsNestedLookupFields`` and
+``arsNoNestedMatchAction`` from the parent.
+
+Nested cross-connector ref (Table or Column inside ``attributes.inputs[]``)::
+
+  typeName: "Table" | "Column"
+  attributes:
+    name, qualifiedName, …
+    arsIdentity:
+      components:            {connectorType?, databaseName, schemaName, tableName, columnName?}
+      matchTypeNames:        ["Table", "View"] | ["Column"]
+      fallbackQualifiedName: "<qn>"
+      fallbackTypeName:      "Table" | "Column"
+      noMatchAction:         "create_partial"     # synthesize PartialObject/PartialField on miss
+      lookupResultHandling:  "pick_first"
+      # Column refs only — drives PartialField synthesis with proper parent linkage:
+      parentComponentsKeys:  ["connectorType", "databaseName", "schemaName", "tableName"]
+      parentMatchTypeNames:  ["Table", "View"]
+      parentTypeNames:       ["Table"]
 
 This module is consumed by the ``extract_lineage`` @entrypoint on
 :class:`MetabaseApp`. The records returned here are written as NDJSON to
@@ -238,27 +252,20 @@ def build_process(
             "sql": sql,
             "inputs": inputs,
             "outputs": outputs,
-            # The Process itself doesn't get looked up (this connector
-            # owns its qualifiedName); use_fallback short-circuits the
-            # ARS lookup and uses ``fallbackQualifiedName`` directly.
-            "arsIdentity": {
-                "components": _components(
-                    connectorType=_CONNECTOR_NAME,
-                    connectionName=connection_name,
-                    name=process_name,
-                ),
-                "matchTypeNames": ["Process"],
-                "fallbackQualifiedName": process_qn,
-                "fallbackTypeName": "Process",
-                "noMatchAction": "use_fallback",
-                "lookupResultHandling": "pick_first",
-            },
-            # Tells the resolver which fields contain nested refs that
-            # need per-edge ARS resolution. ``outputs`` here is a plain
-            # ObjectId (MetabaseQuestion already published by us), but
-            # listing it is harmless — the resolver short-circuits refs
-            # that have no nested arsIdentity.
+            # Tells publish-app's edge resolver which fields contain
+            # nested refs to UNNEST and process. Plain ObjectIds (e.g.
+            # outputs[0] for MetabaseQuestion) pass through as "clean
+            # refs" — the resolver short-circuits those that lack an
+            # arsIdentity block.
             "arsNestedLookupFields": ["inputs", "outputs"],
+            # Process/ColumnProcess are first-class artifacts that own
+            # their qualifiedName — they must survive even when an
+            # upstream ref fails to resolve. Without this, publish-app's
+            # default ``drop`` filter would discard the entire Process
+            # when any input field ends up zero-length post-resolve.
+            # See atlan-publish-app
+            # app/lib/partitioning/resolve/__init__.py:478.
+            "arsNoNestedMatchAction": "keep",
         },
         # Atlas wire format requires inputs/outputs in relationshipAttributes
         # as well. See app/asset_mapper.py::serialize_entity for the
@@ -330,19 +337,10 @@ def build_column_process(
             "process": process_ref,
             "inputs": inputs,
             "outputs": outputs,
-            "arsIdentity": {
-                "components": _components(
-                    connectorType=_CONNECTOR_NAME,
-                    connectionName=connection_name,
-                    name=cp_name,
-                ),
-                "matchTypeNames": ["ColumnProcess"],
-                "fallbackQualifiedName": cp_qn,
-                "fallbackTypeName": "ColumnProcess",
-                "noMatchAction": "use_fallback",
-                "lookupResultHandling": "pick_first",
-            },
             "arsNestedLookupFields": ["inputs", "outputs"],
+            # See build_process — first-class artifact, opt out of the
+            # default-drop filter.
+            "arsNoNestedMatchAction": "keep",
         },
         "relationshipAttributes": {
             "inputs": inputs,
