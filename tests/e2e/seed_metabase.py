@@ -250,9 +250,7 @@ async def _register_postgres_source(
         tables = meta.get("tables") or []
         schemas = {t.get("schema") for t in tables if t.get("schema")}
         if tables and {"analytics", "reports"}.issubset(schemas):
-            _log(
-                f"  source sync: {len(tables)} tables across {sorted(schemas)}"
-            )
+            _log(f"  source sync: {len(tables)} tables across {sorted(schemas)}")
             return db_id
         await asyncio.sleep(2)
     raise TimeoutError("source schema sync timed out before tables appeared")
@@ -312,14 +310,14 @@ async def _seed_collections(
         body: dict[str, Any] = {"name": c["name"], "color": c.get("color", "#509EE3")}
         if c.get("parent") and c["parent"] in name_to_id:
             body["parent_id"] = name_to_id[c["parent"]]
-        r = await client.post(
-            f"{base_url}/api/collection", headers=headers, json=body
-        )
+        r = await client.post(f"{base_url}/api/collection", headers=headers, json=body)
         if r.status_code in (200, 201):
             name_to_id[c["name"]] = int(r.json()["id"])
         else:
             _log(f"  ⚠️ collection {c['name']}: {r.status_code} {r.text[:120]}")
-    _log(f"  collections: {len([c for c in declared if c['name'] in name_to_id])} of {len(declared)} declared")
+    _log(
+        f"  collections: {len([c for c in declared if c['name'] in name_to_id])} of {len(declared)} declared"
+    )
     return name_to_id
 
 
@@ -370,7 +368,11 @@ async def _seed_questions(
             if sample_db_id is None:
                 _log(f"  skip {q['name']}: no source DB and no sample DB available")
                 continue
-            tbl_id = next(iter(sample_table_ids.values()), None) if sample_table_ids else None
+            tbl_id = (
+                next(iter(sample_table_ids.values()), None)
+                if sample_table_ids
+                else None
+            )
             if q["type"] == "mbql":
                 tbl_id = sample_table_ids.get(q["table"], tbl_id)
             if tbl_id is None:
@@ -385,7 +387,9 @@ async def _seed_questions(
             name_to_id[q["name"]] = int(r.json()["id"])
         else:
             _log(f"  ⚠️ question {q['name']}: {r.status_code} {r.text[:120]}")
-    _log(f"  questions: {len([q for q in declared if q['name'] in name_to_id])} of {len(declared)} declared")
+    _log(
+        f"  questions: {len([q for q in declared if q['name'] in name_to_id])} of {len(declared)} declared"
+    )
     return name_to_id
 
 
@@ -415,7 +419,8 @@ async def _seed_dashboards(
                 headers=headers,
                 json={
                     "name": d["name"],
-                    "collection_id": collection_ids.get(d.get("collection", "")) or None,
+                    "collection_id": collection_ids.get(d.get("collection", ""))
+                    or None,
                 },
             )
             if r.status_code not in (200, 201):
@@ -428,7 +433,9 @@ async def _seed_dashboards(
             await client.get(f"{base_url}/api/dashboard/{dash_id}", headers=headers)
         ).json()
         existing_cards = cur.get("dashcards") or cur.get("ordered_cards") or []
-        existing_card_ids = {c.get("card_id") for c in existing_cards if c.get("card_id")}
+        existing_card_ids = {
+            c.get("card_id") for c in existing_cards if c.get("card_id")
+        }
         new_cards = list(existing_cards)
         for card_name in d.get("cards", []):
             cid = question_ids.get(card_name)
@@ -454,7 +461,9 @@ async def _seed_dashboards(
             )
             if r.status_code not in (200, 201):
                 _log(f"  ⚠️ PUT dashboard {d['name']}: {r.status_code}")
-    _log(f"  dashboards: {len([d for d in declared if d['name'] in name_to_id])} of {len(declared)} declared")
+    _log(
+        f"  dashboards: {len([d for d in declared if d['name'] in name_to_id])} of {len(declared)} declared"
+    )
 
 
 # ---------------------------------------------------------------------------
