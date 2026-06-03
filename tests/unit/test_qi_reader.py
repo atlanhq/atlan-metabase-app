@@ -13,6 +13,7 @@ shared during the metabase-app debugging session.
 from __future__ import annotations
 
 from app.lineage.qi_reader import (
+    _build_dbobj_index,
     _coerce_column_refs,
     _coerce_table_ref,
     _unquote_ident,
@@ -190,3 +191,175 @@ class TestCoerceColumnRefs:
         for r in refs:
             assert r["schema"] == "PRODUCTION"
             assert r["table_name"] == "ORDERS"
+
+
+class TestCoerceColumnRefsIdBased:
+    """Current Gudusoft shape — relationships use ``sources`` (plural)
+    with ``parentId`` referencing the parent table in ``dbobjs``.
+
+    Mirrors QI's ``to_gudusoft_output`` (atlan-query-intelligence-app
+    app/pond/lorien/lineage/lineage.py:564–706). Pre-fix, this shape
+    fell through ``_coerce_column_refs`` silently — the reader only
+    looked for ``source``/``from`` (singular) keys — and every
+    ColumnProcess publish was zero.
+    """
+
+    _DBOBJS = [
+        {
+            "type": "table",
+            "id": 1,
+            "name": "ORDERS",
+            "database": "ANALYTICS",
+            "schema": "DBT_ANALYTICS",
+            "columns": [
+                {"name": "ORDER_ID", "id": 2},
+                {"name": "CUSTOMER_ID", "id": 3},
+            ],
+        },
+        {
+            "type": "table",
+            "id": 4,
+            "name": "CUSTOMERS",
+            "database": "ANALYTICS",
+            "schema": "DBT_ANALYTICS",
+            "columns": [{"name": "CUSTOMER_ID", "id": 5}],
+        },
+    ]
+
+    def test_resolves_parentid_against_dbobjs(self):
+        relationships = [
+            {
+                "id": 100,
+                "type": "fdd",
+                "sources": [
+                    {
+                        "id": 2,
+                        "column": "ORDER_ID",
+                        "parentId": 1,
+                        "parentName": "ANALYTICS.DBT_ANALYTICS.ORDERS",
+                    }
+                ],
+                "target": {
+                    "id": 99,
+                    "column": "order_id",
+                    "parentId": 0,
+                    "parentName": "MetabaseQuestion",
+                },
+            },
+        ]
+        refs = _coerce_column_refs(
+            relationships, dbobj_index=_build_dbobj_index(self._DBOBJS)
+        )
+        assert len(refs) == 1
+        ref = refs[0]
+        assert ref["column_name"] == "ORDER_ID"
+        assert ref["table_name"] == "ORDERS"
+        assert ref["schema"] == "DBT_ANALYTICS"
+        assert ref["database"] == "ANALYTICS"
+
+    def test_multiple_sources_dedup_across_relationships(self):
+        # Real QI output has one relationship per output column —
+        # the same source column can appear multiple times across
+        # relationships and must be deduplicated.
+        relationships = [
+            {
+                "type": "fdd",
+                "sources": [
+                    {"id": 2, "column": "ORDER_ID", "parentId": 1},
+                    {"id": 5, "column": "CUSTOMER_ID", "parentId": 4},
+                ],
+            },
+            {
+                "type": "fdd",
+                "sources": [
+                    {"id": 2, "column": "ORDER_ID", "parentId": 1},  # dup
+                    {"id": 3, "column": "CUSTOMER_ID", "parentId": 1},  # diff parent
+                ],
+            },
+        ]
+        refs = _coerce_column_refs(
+            relationships, dbobj_index=_build_dbobj_index(self._DBOBJS)
+        )
+        assert len(refs) == 3
+        names_and_tables = {(r["column_name"], r["table_name"]) for r in refs}
+        assert names_and_tables == {
+            ("ORDER_ID", "ORDERS"),
+            ("CUSTOMER_ID", "ORDERS"),
+            ("CUSTOMER_ID", "CUSTOMERS"),
+        }
+
+    def test_falls_back_to_parentname_when_parentid_unknown(self):
+        # If the dbobj_index doesn't have the parentId (partial QI output
+        # drop), split parentName as a best-effort fallback.
+        relationships = [
+            {
+                "type": "fdd",
+                "sources": [
+                    {
+                        "id": 2,
+                        "column": '"order_id"',
+                        "parentId": 999,
+                        "parentName": "RAW.PUBLIC.ORDERS",
+                    },
+                ],
+            },
+        ]
+        refs = _coerce_column_refs(
+            relationships, dbobj_index=_build_dbobj_index(self._DBOBJS)
+        )
+        assert len(refs) == 1
+        assert refs[0]["column_name"] == "order_id"  # unquoted
+        assert refs[0]["database"] == "RAW"
+        assert refs[0]["schema"] == "PUBLIC"
+        assert refs[0]["table_name"] == "ORDERS"
+
+    def test_id_based_shape_takes_precedence_over_legacy_when_both_present(self):
+        # If a record has both ``sources`` (plural, new) and
+        # ``source`` (singular, legacy), the new shape wins — otherwise
+        # we'd double-count.
+        relationships = [
+            {
+                "type": "fdd",
+                "sources": [{"id": 2, "column": "ORDER_ID", "parentId": 1}],
+                "source": {  # legacy — must be ignored when sources is present
+                    "column": "SHOULD_NOT_APPEAR",
+                    "table": "x",
+                    "schema": "x",
+                    "db": "x",
+                },
+            },
+        ]
+        refs = _coerce_column_refs(
+            relationships, dbobj_index=_build_dbobj_index(self._DBOBJS)
+        )
+        assert {r["column_name"] for r in refs} == {"ORDER_ID"}
+
+    def test_parse_qi_record_end_to_end_populates_columns(self):
+        # Regression guard for the original bug — a full QI record
+        # (current shape) flowing through parse_qi_record must yield a
+        # non-empty source_columns list. Pre-fix this list was always
+        # empty and every ColumnProcess publish was zero.
+        record = {
+            "sql": 'SELECT "ORDER_ID" FROM "ANALYTICS"."DBT_ANALYTICS"."ORDERS"',
+            "gudusoft": {
+                "dbobjs": self._DBOBJS,
+                "relationships": [
+                    {
+                        "type": "fdd",
+                        "sources": [
+                            {"id": 2, "column": "ORDER_ID", "parentId": 1},
+                        ],
+                    },
+                ],
+            },
+            "extra": {
+                "attributes": {
+                    "qualifiedName": "default/metabase/1/questions/7",
+                    "name": "Order IDs",
+                },
+            },
+        }
+        _, _, _, columns = parse_qi_record(record)
+        assert len(columns) == 1
+        assert columns[0]["column_name"] == "ORDER_ID"
+        assert columns[0]["table_name"] == "ORDERS"
