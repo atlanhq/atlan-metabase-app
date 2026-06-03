@@ -26,11 +26,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from application_sdk.contracts.types import ConnectionRef
-from application_sdk.credentials.ref import CredentialRef
 
 from app.connector import MetabaseApp
 from app.contracts import MetabaseInput, MetabaseOutput
@@ -42,14 +41,6 @@ if TYPE_CHECKING:
 _CONNECTION_NAME = "test-metabase-integration"
 _CONNECTION_QN = f"default/metabase/{_CONNECTION_NAME}"
 
-# CredentialRef the conftest seeds into the MockSecretStore from the
-# Metabase testcontainer (or preconfigured external host).
-_CRED_REF = CredentialRef(
-    name="metabase",
-    credential_type="basic",
-    credential_guid="metabase",
-)
-
 _CONNECTION = ConnectionRef.model_validate(
     {
         "typeName": "Connection",
@@ -59,6 +50,21 @@ _CONNECTION = ConnectionRef.model_validate(
         },
     }
 )
+
+
+def _inline_credentials(creds: dict[str, Any]) -> list[dict[str, str]]:
+    """Pack ``{host, port, username, password}`` into the v3 ``[{key, value}]`` shape.
+
+    Using the inline path keeps the test scope on the extraction workflow
+    rather than CredentialRef → secret-store resolution (covered in
+    ``tests/unit/test_credentials.py``).
+    """
+    return [
+        {"key": "host", "value": str(creds["host"])},
+        {"key": "port", "value": str(creds["port"])},
+        {"key": "extra.username", "value": str(creds["username"])},
+        {"key": "extra.password", "value": str(creds["password"])},
+    ]
 
 
 def _read_transformed_jsonl(output_path: str, typename: str) -> list[dict]:
@@ -90,6 +96,7 @@ class TestMetabaseExtraction:
     async def extraction_result(
         self,
         metabase_executor: "AppExecutor",
+        metabase_credentials: dict[str, Any],
         tmp_dir_class: Path,
     ) -> MetabaseOutput:
         """Execute one extraction against the seeded testcontainer Metabase."""
@@ -101,7 +108,7 @@ class TestMetabaseExtraction:
                 MetabaseApp,
                 MetabaseInput(
                     workflow_id="integration-happy-path",
-                    metabase_credential=_CRED_REF,
+                    credentials=_inline_credentials(metabase_credentials),
                     connection=_CONNECTION,
                     output_path=str(output_dir),
                 ),

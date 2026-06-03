@@ -1,26 +1,31 @@
-"""Fixtures for integration tests.
+"""Fixtures for integration tests — Metabase testcontainer + embedded Temporal.
 
 Tests run entirely in-process:
   - Temporal starts as an embedded dev server via the SDK's
     ``embedded_runtime()``.
-  - Secret / state / storage infrastructure is mocked.
-  - **Metabase runs as a session-scoped Docker container** brought up via
-    testcontainers; a minimal seed (one collection + one MBQL question
-    against Metabase's built-in sample database) is applied via the
-    Metabase HTTP API before tests start.
+  - State / storage infrastructure is mocked.
+  - **Metabase runs as a session-scoped Docker testcontainer** brought up
+    via testcontainers; a minimal seed (2 collections + 2 questions + 2
+    dashboards) is applied via the Metabase HTTP API before tests start.
+    The seed shares code with the e2e compose overlay's one-shot service
+    (``tests/e2e/seed_metabase.py``) — same shape, just different counts.
 
 Pattern mirrors ``atlan-mysql-app/tests/integration/conftest.py`` which
 boots a ``MySqlContainer`` and seeds it from ``fixtures/seed.sql``. The
-Metabase docker image is pinned to the same version the full-DAG e2e
-overlay uses (``.github/e2e/e2e-full-docker-compose.yaml``) — bump them
-together.
+Metabase image is pinned to the version the full-DAG e2e overlay uses
+(``.github/e2e/e2e-full-docker-compose.yaml``) — bump them together.
+
+The workflow input passes credentials INLINE (``credentials=[...]``)
+rather than via a ``CredentialRef`` so the test bypasses secret-store
+resolution entirely — keeps the integration assertion focused on the
+extraction workflow itself, independent of credential plumbing (which is
+unit-tested in ``tests/unit/test_credentials.py``).
 
 Escape hatch: when ``E2E_METABASE_HOST`` is set, the container fixture is
-bypassed and tests run against the preconfigured external Metabase (same
-shape as mysql-app's ``MYSQL_HOST`` short-circuit). Useful for local
-debugging against a known-good tenant when Docker is unavailable.
+bypassed and tests run against the preconfigured external Metabase
+(useful for local debugging against a known-good tenant).
 
-Run tests with: uv run pytest tests/integration/ -v
+Run with: uv run pytest tests/integration/ -v
 """
 
 from __future__ import annotations
@@ -30,8 +35,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
-import orjson
 import pytest
 import pytest_asyncio
 from application_sdk.dev import embedded_runtime
@@ -58,19 +61,21 @@ AtlanObservability._deployment_store = create_memory_store()
 logger = get_logger("integration")
 
 _TASK_QUEUE = "metabase-queue"
-_CREDENTIAL_KEY = "metabase"
 
 # Pin matches .github/e2e/e2e-full-docker-compose.yaml — keep in sync.
 _METABASE_IMAGE = "metabase/metabase:v0.61.2.3"
 _METABASE_PORT = 3000
-_METABASE_BOOT_TIMEOUT_S = 240  # JVM cold-start + initial migration
-_METABASE_BOOT_POLL_S = 2
 
-# Seed admin — same convention as the e2e compose overlay so anyone
-# debugging against a running container has a single set of credentials
-# in their head.
+# Same admin convention as the e2e compose overlay.
 _ADMIN_EMAIL = "e2e@example.com"
 _ADMIN_PASSWORD = "e2etestpw123"
+
+# Integration count profile: 2 / 2 / 2. Light enough to keep boot+seed
+# under ~25 s on CI; rich enough that the connector emits ≥1 record per
+# typename and BIProcess (dashboard→question pairings).
+_INTEGRATION_N_COLLECTIONS = 2
+_INTEGRATION_N_QUESTIONS = 2
+_INTEGRATION_N_DASHBOARDS = 2
 
 
 class AppExecutor:
@@ -133,147 +138,16 @@ def _docker_available() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _wait_for_metabase_ready(base_url: str) -> None:
-    """Poll ``/api/health`` until Metabase reports ``status=ok``.
-
-    Metabase's first boot runs database migrations against the built-in H2
-    metadata DB before the API serves traffic — typically 30-60 s on
-    CI-class hardware, slower on cold runners.
-    """
-    deadline = time.monotonic() + _METABASE_BOOT_TIMEOUT_S
-    last_err: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            r = httpx.get(f"{base_url}/api/health", timeout=5.0)
-            if r.status_code == 200 and r.json().get("status") == "ok":
-                return
-        except Exception as exc:  # noqa: BLE001
-            last_err = exc
-        time.sleep(_METABASE_BOOT_POLL_S)
-    raise TimeoutError(
-        f"Metabase did not become healthy at {base_url} within "
-        f"{_METABASE_BOOT_TIMEOUT_S}s (last error: {last_err!r})"
-    )
-
-
-def _seed_metabase(base_url: str) -> None:
-    """Bootstrap admin + create the minimum content the workflow needs.
-
-    Integration tests assert workflow *shape* (extract completes, output
-    files exist, attributes present) — not asset volume. So we only need:
-
-    - 1 admin user (Metabase requires ``/api/setup`` before any other call)
-    - 1 collection (so ``METABASECOLLECTION/result-0.json`` has ≥1 record)
-    - 1 MBQL question referencing the built-in sample database (so
-      ``METABASEQUESTION`` is populated; QI input keys are unit-tested
-      separately, so an MBQL — not native-SQL — question is sufficient)
-
-    Idempotent: a second call against an already-set-up Metabase short-
-    circuits at the setup-token fetch (Metabase returns no token once
-    setup is complete) and returns cleanly. The fixture is session-
-    scoped so this only runs once per pytest invocation anyway.
-    """
-    client = httpx.Client(base_url=base_url, timeout=30.0)
-    try:
-        # /api/session/properties returns ``setup-token`` until setup runs.
-        props = client.get("/api/session/properties").json()
-        setup_token = props.get("setup-token")
-        if not setup_token:
-            logger.info("Metabase already initialized; skipping admin setup")
-            return
-
-        logger.info("Bootstrapping Metabase admin user")
-        setup_resp = client.post(
-            "/api/setup",
-            json={
-                "token": setup_token,
-                "user": {
-                    "first_name": "E2E",
-                    "last_name": "Admin",
-                    "email": _ADMIN_EMAIL,
-                    "password": _ADMIN_PASSWORD,
-                    "site_name": "Atlan Integration Tests",
-                },
-                "prefs": {
-                    "site_name": "Atlan Integration Tests",
-                    "allow_tracking": False,
-                },
-                # Don't add a real DB here — the built-in sample database
-                # is auto-loaded and is all the workflow needs.
-                "database": None,
-            },
-        )
-        setup_resp.raise_for_status()
-        session_id = setup_resp.json()["id"]
-        headers = {"X-Metabase-Session": session_id}
-
-        # Find the sample database (Metabase auto-loads one on first boot).
-        dbs = client.get("/api/database", headers=headers).json()
-        # /api/database returns either a list (older versions) or
-        # ``{"data": [...]}`` (newer versions) — handle both.
-        db_list = dbs if isinstance(dbs, list) else dbs.get("data", [])
-        sample = next(
-            (d for d in db_list if d.get("is_sample") or "sample" in d.get("name", "").lower()),
-            None,
-        )
-
-        logger.info("Creating integration-tests collection")
-        col = client.post(
-            "/api/collection",
-            headers=headers,
-            json={
-                "name": "Integration Tests",
-                "color": "#509EE3",
-                "description": "Created by tests/integration/conftest.py",
-            },
-        )
-        col.raise_for_status()
-        collection_id = col.json()["id"]
-
-        if sample:
-            # Find the first table in the sample DB to reference in a card.
-            db_id = sample["id"]
-            meta = client.get(
-                f"/api/database/{db_id}/metadata", headers=headers
-            ).json()
-            tables = meta.get("tables") or []
-            if tables:
-                table = tables[0]
-                logger.info("Creating MBQL question referencing %s", table["name"])
-                client.post(
-                    "/api/card",
-                    headers=headers,
-                    json={
-                        "name": "Integration Smoke Question",
-                        "dataset_query": {
-                            "type": "query",
-                            "database": db_id,
-                            "query": {"source-table": table["id"]},
-                        },
-                        "display": "table",
-                        "visualization_settings": {},
-                        "collection_id": collection_id,
-                    },
-                ).raise_for_status()
-        else:
-            logger.warning(
-                "No sample database found — METABASEQUESTION will be empty; "
-                "shape assertions still hold"
-            )
-    finally:
-        client.close()
-
-
 @pytest.fixture(scope="session")
 def metabase_credentials() -> dict[str, Any]:
-    """Bring up Metabase and return the credential bundle the workflow uses.
+    """Bring up Metabase and return the credential bundle.
 
     Priority:
         1. ``E2E_METABASE_HOST`` env var set → use that (preconfigured).
-        2. Docker available → start ``metabase/metabase`` testcontainer +
-           seed it.
-        3. Neither → ``pytest.skip`` the whole integration suite at
-           session-collection time (mirrors mysql-app behavior).
+        2. Docker available → start Metabase testcontainer + apply the
+           shared light seed from ``tests/e2e/seed_metabase.py`` with
+           counts 2/2/2.
+        3. Neither → skip the integration suite (mirrors mysql-app).
 
     Returns ``{host, port, username, password}`` ready for
     ``parse_metabase_credentials``. ``host`` carries the protocol prefix
@@ -297,17 +171,18 @@ def metabase_credentials() -> dict[str, Any]:
             allow_module_level=True,
         )
 
-    # Import here so the dependency only loads when actually needed —
-    # avoids a hard testcontainers requirement on unit-test-only runs
-    # that don't import this fixture.
+    # Imports gated inside the fixture so unit-only runs don't need them.
+    import asyncio
+
     from testcontainers.core.container import DockerContainer
 
+    from tests.e2e.seed_metabase import seed_metabase
+
     logger.info("Starting Metabase container (%s)", _METABASE_IMAGE)
+    boot_start = time.monotonic()
     container = (
         DockerContainer(_METABASE_IMAGE)
         .with_exposed_ports(_METABASE_PORT)
-        # Keep memory in line with the e2e compose overlay so the boot
-        # profile is reproducible.
         .with_env("JAVA_OPTS", "-Xmx1500m")
         .with_env("MB_CHECK_FOR_UPDATES", "false")
         .with_env("MB_ANON_TRACKING_ENABLED", "false")
@@ -317,10 +192,24 @@ def metabase_credentials() -> dict[str, Any]:
         ip = container.get_container_host_ip()
         mapped_port = int(container.get_exposed_port(_METABASE_PORT))
         base_url = f"http://{ip}:{mapped_port}"
-        logger.info("Waiting for Metabase at %s", base_url)
-        _wait_for_metabase_ready(base_url)
-        _seed_metabase(base_url)
-        logger.info("Metabase container ready and seeded at %s", base_url)
+        logger.info("Metabase container up; seeding at %s", base_url)
+
+        # The seed function does its own /api/health wait internally.
+        asyncio.run(
+            seed_metabase(
+                base_url,
+                admin_email=_ADMIN_EMAIL,
+                admin_password=_ADMIN_PASSWORD,
+                n_collections=_INTEGRATION_N_COLLECTIONS,
+                n_questions=_INTEGRATION_N_QUESTIONS,
+                n_dashboards=_INTEGRATION_N_DASHBOARDS,
+                source=None,  # integration uses sample DB only (no lineage)
+            )
+        )
+        logger.info(
+            "Metabase boot + seed complete in %.1fs",
+            time.monotonic() - boot_start,
+        )
         yield {
             "host": f"http://{ip}",
             "port": mapped_port,
@@ -351,21 +240,18 @@ def store_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture(scope="session")
 def infrastructure(
     store_root: Path,
-    metabase_credentials: dict[str, Any],
+    metabase_credentials: dict[str, Any],  # noqa: ARG001 — gates on container readiness
 ) -> InfrastructureContext:
     """Wire mock infrastructure for the session using a LocalStore.
 
-    Seeds MockSecretStore with the Metabase credential bundle from the
-    testcontainer (or preconfigured external host) so workflow tasks
-    resolving ``CredentialRef(name="metabase")`` see a populated
-    credential without needing a real Dapr secret store.
+    MockSecretStore is empty — tests pass credentials inline through the
+    workflow input, not via CredentialRef + secret-store lookup. Keeps
+    integration scope on the extraction workflow, not credential plumbing
+    (which has its own unit coverage).
     """
-    secrets = {
-        _CREDENTIAL_KEY: orjson.dumps(metabase_credentials).decode(),
-    }
     ctx = InfrastructureContext(
         state_store=MockStateStore(),
-        secret_store=MockSecretStore(secrets),
+        secret_store=MockSecretStore({}),
         storage=create_local_store(store_root),
     )
     set_infrastructure(ctx)
