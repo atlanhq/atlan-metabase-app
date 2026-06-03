@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -156,7 +157,7 @@ def _docker_available() -> bool:
 
 
 @pytest.fixture(scope="session")
-def metabase_credentials() -> dict[str, Any]:
+def metabase_credentials() -> Iterator[dict[str, Any]]:
     """Bring up Metabase as a testcontainer and return the credential bundle.
 
     Starts ``metabase/metabase`` via testcontainers, applies the shared
