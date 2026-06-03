@@ -120,10 +120,12 @@ workflowType = "metabase:extract-metadata"
 //   └──► extract-lineage (this app's `extract_lineage` @entrypoint —
 //                         replaces the shared LineageNode because Metabase
 //                         is a BI connector and the lineage is cross-connector;
-//                         emits ARS 2.0 Process/ColumnProcess records with
-//                         PARTIAL_OBJECT / PARTIAL_FIELD references that the
-//                         publish-app's ARS 2.0 resolver matches against
-//                         existing Atlan assets at publish time)
+//                         emits ARS 2.0 Process/ColumnProcess records whose
+//                         inputs[] carry inline ``arsIdentity`` blocks with
+//                         noMatchAction=create_partial, so publish-app's
+//                         edge resolver synthesizes PartialObject/PartialField
+//                         entities on lookup miss and wires the lineage edge
+//                         to them)
 //        │
 //        └──► lineage-publish (LineagePublishNode; publishes the ARS-staged
 //                              Process/ColumnProcess records — no `enable_ars`

@@ -459,13 +459,13 @@ class TestExtractLineage:
         assert len(p_records) == 1
         assert len(cp_records) == 1
         assert p_records[0]["typeName"] == "Process"
-        # Process input must be a PARTIAL_OBJECT Table ref.
+        # Process input must carry an ARS 2.0 arsIdentity with
+        # noMatchAction=create_partial so publish-app synthesizes a
+        # PartialObject on miss.
         first_input = p_records[0]["attributes"]["inputs"][0]
         assert (
-            first_input["attributes"]["arsEntityConfig"][
-                "publishTransformationHandling"
-            ]
-            == "PARTIAL_OBJECT"
+            first_input["attributes"]["arsIdentity"]["noMatchAction"]
+            == "create_partial"
         )
         # ColumnProcess parent must point at the Process QN.
         assert (
