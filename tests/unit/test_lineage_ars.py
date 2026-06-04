@@ -84,9 +84,10 @@ class TestPartialTableRef:
             "schemaName": "analytics",
             "tableName": "customers",
         }
-        # noMatchAction = create_partial → resolver synthesizes a PartialObject
-        # when the lookup misses.
-        assert ai["noMatchAction"] == "create_partial"
+        # noMatchAction = drop → resolver drops the edge when the
+        # upstream Table can't be resolved in Atlan's catalog. NO
+        # PartialObject synthesis (matches v2 / argo-world behaviour).
+        assert ai["noMatchAction"] == "drop"
         assert ai["lookupResultHandling"] == "pick_first"
         # Resolver matches against Table OR View — Metabase sources can
         # be either, and the source connector decides which.
@@ -149,12 +150,15 @@ class TestPartialColumnRef:
             "columnName": "customer_name",
         }
         assert ai["matchTypeNames"] == ["Column"]
-        assert ai["noMatchAction"] == "create_partial"
+        assert ai["noMatchAction"] == "drop"
 
-    def test_carries_parent_table_context(self):
-        # ARS 2.0 PartialField synthesis needs the parent Table identity
-        # so the new Column has a parent ref. parentComponentsKeys selects
-        # which components map to the parent's identity subset.
+    def test_no_partial_field_parent_context_emitted(self):
+        # PartialField synthesis is the only consumer of the
+        # ``parentComponentsKeys`` / ``parentMatchTypeNames`` /
+        # ``parentTypeNames`` fields on the resolver side. Since we
+        # switched to ``noMatchAction: "drop"`` (no PartialField
+        # creation), those fields are dead weight and intentionally
+        # omitted from the emitted ref.
         ref = build_partial_column_ref(
             vendor_name="postgres",
             database="testdata",
@@ -163,14 +167,9 @@ class TestPartialColumnRef:
             column_name="customer_name",
         )
         ai = ref["attributes"]["arsIdentity"]
-        assert ai["parentComponentsKeys"] == [
-            "connectorType",
-            "databaseName",
-            "schemaName",
-            "tableName",
-        ]
-        assert ai["parentMatchTypeNames"] == ["Table", "View"]
-        assert ai["parentTypeNames"] == ["Table"]
+        assert "parentComponentsKeys" not in ai
+        assert "parentMatchTypeNames" not in ai
+        assert "parentTypeNames" not in ai
 
     def test_no_legacy_ars_1_0_keys(self):
         ref = build_partial_column_ref(
@@ -243,7 +242,7 @@ class TestBuildProcess:
         # Each input ref must have an arsIdentity block for cross-connector
         # resolution by publish-app's edge resolver.
         ai = inputs[0]["attributes"]["arsIdentity"]
-        assert ai["noMatchAction"] == "create_partial"
+        assert ai["noMatchAction"] == "drop"
         assert ai["components"]["tableName"] == "customers"
 
     def test_output_is_metabase_question(self):
@@ -392,9 +391,7 @@ class TestBuildColumnProcess:
         assert len(inputs) == 1
         ai = inputs[0]["attributes"]["arsIdentity"]
         assert ai["components"]["columnName"] == "customer_name"
-        assert ai["noMatchAction"] == "create_partial"
-        # Parent table context for PartialField synthesis.
-        assert "tableName" in ai["parentComponentsKeys"]
+        assert ai["noMatchAction"] == "drop"
 
     def test_relationship_attributes_omitted(self):
         # Companion to TestBuildProcess.test_relationship_attributes_omitted —

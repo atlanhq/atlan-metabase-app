@@ -53,12 +53,16 @@ Nested cross-connector ref (Table or Column inside ``attributes.inputs[]``)::
       matchTypeNames:        ["Table", "View"] | ["Column"]
       fallbackQualifiedName: "<qn>"
       fallbackTypeName:      "Table" | "Column"
-      noMatchAction:         "create_partial"     # synthesize PartialObject/PartialField on miss
+      noMatchAction:         "drop"     # on miss: drop the edge, NO PartialObject synthesis
       lookupResultHandling:  "pick_first"
-      # Column refs only — drives PartialField synthesis with proper parent linkage:
-      parentComponentsKeys:  ["connectorType", "databaseName", "schemaName", "tableName"]
-      parentMatchTypeNames:  ["Table", "View"]
-      parentTypeNames:       ["Table"]
+
+Drop-on-miss policy (matches v2 / argo-world behaviour):
+  - upstream Table/Column found in Atlan's catalog  → lineage edge created
+  - upstream Table/Column not found                 → edge dropped, no Partial
+                                                       placeholder is synthesized
+The Process / ColumnProcess itself still publishes when every edge
+drops — ``arsNoNestedMatchAction: "keep"`` on the parent opts out of
+the resolver's default-drop filter.
 
 This module is consumed by the ``extract_lineage`` @entrypoint on
 :class:`MetabaseApp`. The records returned here are written as NDJSON to
@@ -113,9 +117,13 @@ def build_partial_table_ref(
     """Build a Table ref for use as a Process input.
 
     The ref carries an ``arsIdentity`` block on the ARS 2.0 contract.
-    The publish-app resolver looks the table up by components; on miss
-    (``noMatchAction = "create_partial"``) it creates a PartialObject
-    with ``fallbackQualifiedName`` and points the lineage edge at that.
+    The publish-app resolver looks the table up in Atlan's catalog by
+    components; on a match the lineage edge points at the real upstream
+    Table. On a miss the edge is **dropped** (``noMatchAction = "drop"``) —
+    we do NOT synthesize a PartialObject placeholder. This mirrors the
+    v2 / argo-world behaviour and keeps the catalog free of unresolved
+    stubs that the publish-app's impersonate user often lacks
+    ``Atlas create entity: type=PartialObject`` permission for anyway.
 
     Args:
         vendor_name: Source engine connector type (e.g. ``"snowflake"``).
@@ -140,7 +148,17 @@ def build_partial_table_ref(
                 "matchTypeNames": ["Table", "View"],
                 "fallbackQualifiedName": qn,
                 "fallbackTypeName": "Table",
-                "noMatchAction": "create_partial",
+                # Drop the edge (no lineage to this upstream) when the
+                # Table can't be resolved in Atlan's catalog — matches
+                # the v2 / argo-world behaviour. We deliberately do NOT
+                # synthesize PartialObject placeholders because (a) the
+                # impersonate user lacks Atlas ``create entity:
+                # type=PartialObject`` permission on most tenants and
+                # (b) Partials pollute the catalog with unresolved
+                # stubs. With ``arsNoNestedMatchAction: "keep"`` on
+                # the parent Process, the Process record itself
+                # survives even when every upstream edge drops.
+                "noMatchAction": "drop",
                 "lookupResultHandling": "pick_first",
             },
         },
@@ -157,9 +175,11 @@ def build_partial_column_ref(
 ) -> dict[str, Any]:
     """Build a Column ref for use as a ColumnProcess input.
 
-    Carries parent-table context via ``parentComponentsKeys`` so the
-    resolver can locate the parent Table when synthesizing a PartialField
-    on miss.
+    Same drop-on-miss policy as :func:`build_partial_table_ref` — when
+    the Column can't be resolved against Atlan's catalog the edge is
+    dropped, no PartialField synthesis. The ColumnProcess record itself
+    still publishes (via ``arsNoNestedMatchAction: "keep"`` on the
+    parent).
     """
     qn = "/".join(p for p in (database, schema, table_name, column_name) if p)
     return {
@@ -178,22 +198,13 @@ def build_partial_column_ref(
                 "matchTypeNames": ["Column"],
                 "fallbackQualifiedName": qn,
                 "fallbackTypeName": "Column",
-                "noMatchAction": "create_partial",
+                # Drop the edge (no column lineage) when the Column
+                # can't be resolved — no PartialField synthesis. Same
+                # reasoning as build_partial_table_ref above. The
+                # ColumnProcess itself still publishes via
+                # ``arsNoNestedMatchAction: "keep"`` on the parent.
+                "noMatchAction": "drop",
                 "lookupResultHandling": "pick_first",
-                # Parent table context — required for PartialField creation
-                # so the synthesized Column has a parent reference. The
-                # resolver derives the parent's qualifiedName by joining
-                # the components subset selected by parentComponentsKeys
-                # against the same fallbackQualifiedName component shape;
-                # it does not take a separate parentFallback field.
-                "parentComponentsKeys": [
-                    "connectorType",
-                    "databaseName",
-                    "schemaName",
-                    "tableName",
-                ],
-                "parentMatchTypeNames": ["Table", "View"],
-                "parentTypeNames": ["Table"],
             },
         },
     }
