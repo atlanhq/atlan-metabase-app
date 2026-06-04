@@ -102,6 +102,44 @@ class TestParseQiRecordCurrentShape:
         _, _, _, columns = parse_qi_record(CURRENT_SHAPE_RECORD)
         assert columns == []
 
+    def test_dbvendor_propagates_as_vendor_name(self):
+        # REGRESSION GUARD for the second half of the staging-diff bug.
+        # publish-app's ``build_partial_qualified_name`` returns an empty
+        # QN when ``connectorType`` is missing from the components map,
+        # which leaves the resolved PartialObject with
+        # ``qualifiedName: null`` (atlan-publish-app
+        # app/lib/partitioning/resolve/macros.py:106-128).
+        # ``dbvendor: "dbsnowflake"`` must propagate as
+        # ``vendor_name: "snowflake"`` on every Table ref so the
+        # downstream ``arsIdentity.components.connectorType`` is set.
+        _, _, tables, _ = parse_qi_record(CURRENT_SHAPE_RECORD)
+        assert tables[0]["vendor_name"] == "snowflake"
+
+    def test_dbvendor_strips_db_prefix_lowercases(self):
+        # Gudusoft emits `dbBigQuery` / `dbMSSQL` etc. — the publish-app
+        # component key is the lowercase suffix.
+        rec = {
+            **CURRENT_SHAPE_RECORD,
+            "gudusoft": {**CURRENT_SHAPE_RECORD["gudusoft"], "dbvendor": "dbBigQuery"},
+        }
+        _, _, tables, _ = parse_qi_record(rec)
+        assert tables[0]["vendor_name"] == "bigquery"
+
+    def test_default_vendor_used_when_dbvendor_missing(self):
+        # When QI didn't determine vendor (rare, but possible for
+        # generic-SQL fall-back), the caller's ``default_vendor`` is
+        # honoured.
+        rec = {
+            **CURRENT_SHAPE_RECORD,
+            "gudusoft": {
+                k: v
+                for k, v in CURRENT_SHAPE_RECORD["gudusoft"].items()
+                if k != "dbvendor"
+            },
+        }
+        _, _, tables, _ = parse_qi_record(rec, default_vendor="redshift")
+        assert tables[0]["vendor_name"] == "redshift"
+
 
 class TestParseQiRecordLegacyShape:
     """Legacy QI output: QUERY_ID / SQL / PARSED_DATA. Backward compat."""
