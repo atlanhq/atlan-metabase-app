@@ -311,13 +311,16 @@ class TestBuildProcess:
         assert p is not None
         assert p["attributes"]["arsNestedLookupFields"] == ["inputs", "outputs"]
 
-    def test_relationship_attributes_mirrors_attributes(self):
-        # Guards the structural shape that publish-app + Atlas require.
-        # Pre-fix, the record had inputs/outputs only under ``attributes``
-        # and Atlas rejected every Process with ATLAS-400-00-021
-        # (INVALID_OBJECT_ID) because the constructed relationship-side
-        # payload had no valid endpoints. ``relationshipAttributes`` must
-        # exist at the top level and mirror the ``attributes`` content.
+    def test_relationship_attributes_omitted(self):
+        # REGRESSION GUARD for the staging-diff bug found in devex
+        # run 019e9183. publish-app's Step-0 resolver patches
+        # attributes.inputs[] in place (via field_patch). It does NOT
+        # touch relationshipAttributes. If we mirror the ARS-bearing
+        # Table refs into relationshipAttributes.inputs, Atlas reads
+        # from there (wire-format relationship side), finds entity-
+        # payload-style refs without uniqueAttributes, and rejects with
+        # ATLAS-400-00-021 (INVALID_OBJECT_ID) on every Process publish.
+        # See ars_builder.py module docstring for full context.
         tables = [_table("testdata", "analytics", "orders")]
         p = build_process(
             connection_qualified_name=_CONN_QN,
@@ -328,13 +331,11 @@ class TestBuildProcess:
             source_tables=tables,
         )
         assert p is not None
-        assert "relationshipAttributes" in p, (
-            "Process record must carry a top-level relationshipAttributes "
-            "key — Atlas reads relationship-side ObjectIds from there"
+        assert "relationshipAttributes" not in p, (
+            "Emitting relationshipAttributes mirrors the unresolved "
+            "ARS refs past Step-0's field_patch — that's the bug PR #47 "
+            "is closing. Let publish-app own the wire-format side."
         )
-        rel = p["relationshipAttributes"]
-        assert rel["inputs"] == p["attributes"]["inputs"]
-        assert rel["outputs"] == p["attributes"]["outputs"]
 
 
 # ---------------------------------------------------------------------------
@@ -395,9 +396,9 @@ class TestBuildColumnProcess:
         # Parent table context for PartialField synthesis.
         assert "tableName" in ai["parentComponentsKeys"]
 
-    def test_relationship_attributes_mirrors_attributes(self):
-        # Companion to TestBuildProcess.test_relationship_attributes_mirrors_attributes
-        # — same structural requirement applies to ColumnProcess.
+    def test_relationship_attributes_omitted(self):
+        # Companion to TestBuildProcess.test_relationship_attributes_omitted —
+        # same Step-0 / field_patch contract applies to ColumnProcess.
         h = process_hash(_QID, _SQL)
         cp = build_column_process(
             connection_qualified_name=_CONN_QN,
@@ -411,11 +412,7 @@ class TestBuildColumnProcess:
             parent_process_hash=h,
         )
         assert cp is not None
-        assert "relationshipAttributes" in cp
-        rel = cp["relationshipAttributes"]
-        assert rel["inputs"] == cp["attributes"]["inputs"]
-        assert rel["outputs"] == cp["attributes"]["outputs"]
-        assert rel["process"] == cp["attributes"]["process"]
+        assert "relationshipAttributes" not in cp
 
 
 # ---------------------------------------------------------------------------
