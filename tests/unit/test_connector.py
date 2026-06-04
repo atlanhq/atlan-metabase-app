@@ -442,8 +442,11 @@ class TestExtractLineage:
         assert out.process_count == 1
         assert out.column_process_count == 1
 
-        # NDJSON files written under output_path/lineage-stage/{PROCESS,COLUMNPROCESS}/
-        stage = tmp_path / "out" / "lineage-stage"
+        # ARS 2.0 producer-split: records carrying arsIdentity must land
+        # under ``lineage-stage/resolvable/`` for publish-app's Step 0
+        # resolver to pick them up. Files outside ``resolvable/`` are
+        # skipped by the resolver and flow through as plain entities.
+        stage = tmp_path / "out" / "lineage-stage" / "resolvable"
         p_records = [
             json.loads(line)
             for line in (stage / "PROCESS" / "result-0.json").read_text().splitlines()
@@ -459,14 +462,11 @@ class TestExtractLineage:
         assert len(p_records) == 1
         assert len(cp_records) == 1
         assert p_records[0]["typeName"] == "Process"
-        # Process input must be a PARTIAL_OBJECT Table ref.
+        # Process input must carry an ARS 2.0 arsIdentity with
+        # noMatchAction=drop so publish-app skips the edge when the
+        # upstream Table isn't in the catalog (no Partial synthesis).
         first_input = p_records[0]["attributes"]["inputs"][0]
-        assert (
-            first_input["attributes"]["arsEntityConfig"][
-                "publishTransformationHandling"
-            ]
-            == "PARTIAL_OBJECT"
-        )
+        assert first_input["attributes"]["arsIdentity"]["noMatchAction"] == "drop"
         # ColumnProcess parent must point at the Process QN.
         assert (
             cp_records[0]["attributes"]["process"]["uniqueAttributes"]["qualifiedName"]

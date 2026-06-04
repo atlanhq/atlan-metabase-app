@@ -2,8 +2,11 @@
 
 Feeds canonical QueryIntelligence-shaped NDJSON records into the reader,
 runs them through the ARS builder, and asserts the resulting
-Process / ColumnProcess records carry the right PARTIAL_OBJECT /
-PARTIAL_FIELD configs for cross-connector resolution by the publish app.
+Process / ColumnProcess records carry the right ARS 2.0 ``arsIdentity``
+blocks for cross-connector resolution by the publish app.
+
+ARS 2.0 schema is defined in atlan-publish-app
+``app/lib/partitioning/duckdb_sql.py::ARS_IDENTITY_STRUCT_SCHEMA``.
 """
 
 from __future__ import annotations
@@ -61,64 +64,76 @@ def _column(
 
 
 # ---------------------------------------------------------------------------
-# PARTIAL_OBJECT / PARTIAL_FIELD shape
+# ARS 2.0 nested-ref shape (Table / Column refs in inputs[])
 # ---------------------------------------------------------------------------
 
 
 class TestPartialTableRef:
-    def test_includes_partial_object_handling(self):
+    def test_carries_ars_2_0_identity(self):
         ref = build_partial_table_ref(
             vendor_name="postgres",
             database="testdata",
             schema="analytics",
             table_name="customers",
         )
-        cfg = ref["attributes"]["arsEntityConfig"]
-        assert cfg["publishTransformationHandling"] == "PARTIAL_OBJECT"
-        assert cfg["isRelationship"] is True
-        assert cfg["skipLookup"] is False
-        assert cfg["isTableViewAgnostic"] is True
+        ai = ref["attributes"]["arsIdentity"]
+        # Components are a MAP(VARCHAR, VARCHAR) — only populated keys.
+        assert ai["components"] == {
+            "connectorType": "postgres",
+            "databaseName": "testdata",
+            "schemaName": "analytics",
+            "tableName": "customers",
+        }
+        # noMatchAction = drop → resolver drops the edge when the
+        # upstream Table can't be resolved in Atlan's catalog. NO
+        # PartialObject synthesis (matches v2 / argo-world behaviour).
+        assert ai["noMatchAction"] == "drop"
+        assert ai["lookupResultHandling"] == "pick_first"
+        # Resolver matches against Table OR View — Metabase sources can
+        # be either, and the source connector decides which.
+        assert ai["matchTypeNames"] == ["Table", "View"]
 
-    def test_identity_format(self):
+    def test_no_legacy_ars_1_0_keys(self):
+        # ARS 1.0 keys are not emitted — those went through legacy_translator
+        # before reaching the resolver, which is unwired in our contract.
+        # Emitting them now would be misleading dead weight.
         ref = build_partial_table_ref(
             vendor_name="postgres",
             database="testdata",
             schema="analytics",
             table_name="customers",
         )
-        ars = ref["attributes"]["arsAttributes"]
-        # connectorName|connectionName|databaseName|schemaName|tableName
-        # connectionName is wildcard (ARS resolves any matching connection).
-        assert ars["identity"] == "postgres|*|testdata|analytics|customers"
-        assert ars["identityPattern"] == (
-            "connectorName|connectionName|databaseName|schemaName|tableName"
-        )
+        attrs = ref["attributes"]
+        assert "arsEntityConfig" not in attrs
+        assert "arsAttributes" not in attrs
 
-    def test_wildcards_for_missing_components(self):
+    def test_drops_empty_component_keys(self):
+        # The ARS resolver filters empty component values at JOIN time
+        # (see legacy_translator._legacy_pipe_components_json). Emit only
+        # populated keys so the resolver matches what it expects.
         ref = build_partial_table_ref(
             vendor_name="",
             database="",
             schema="",
             table_name="orders",
         )
-        ars = ref["attributes"]["arsAttributes"]
-        assert ars["identity"] == "*|*|*|*|orders"
+        ai = ref["attributes"]["arsIdentity"]
+        assert ai["components"] == {"tableName": "orders"}
 
-    def test_fallback_qn_built_from_known_parts(self):
+    def test_fallback_qn_from_known_parts(self):
         ref = build_partial_table_ref(
             vendor_name="postgres",
             database="db1",
             schema="sch1",
             table_name="t1",
         )
-        assert (
-            ref["attributes"]["arsAttributes"]["fallbackQualifiedName"] == "db1/sch1/t1"
-        )
-        assert ref["attributes"]["arsAttributes"]["fallbackTypeName"] == "Table"
+        ai = ref["attributes"]["arsIdentity"]
+        assert ai["fallbackQualifiedName"] == "db1/sch1/t1"
+        assert ai["fallbackTypeName"] == "Table"
 
 
 class TestPartialColumnRef:
-    def test_includes_partial_field_handling(self):
+    def test_carries_ars_2_0_identity_with_column(self):
         ref = build_partial_column_ref(
             vendor_name="postgres",
             database="testdata",
@@ -126,13 +141,24 @@ class TestPartialColumnRef:
             table_name="customers",
             column_name="customer_name",
         )
-        cfg = ref["attributes"]["arsEntityConfig"]
-        parent_cfg = ref["attributes"]["arsParentEntityConfig"]
-        assert cfg["publishTransformationHandling"] == "PARTIAL_FIELD"
-        assert parent_cfg["publishTransformationHandling"] == "PARTIAL_OBJECT"
-        assert parent_cfg["isTableViewAgnostic"] is True
+        ai = ref["attributes"]["arsIdentity"]
+        assert ai["components"] == {
+            "connectorType": "postgres",
+            "databaseName": "testdata",
+            "schemaName": "analytics",
+            "tableName": "customers",
+            "columnName": "customer_name",
+        }
+        assert ai["matchTypeNames"] == ["Column"]
+        assert ai["noMatchAction"] == "drop"
 
-    def test_identity_includes_column(self):
+    def test_no_partial_field_parent_context_emitted(self):
+        # PartialField synthesis is the only consumer of the
+        # ``parentComponentsKeys`` / ``parentMatchTypeNames`` /
+        # ``parentTypeNames`` fields on the resolver side. Since we
+        # switched to ``noMatchAction: "drop"`` (no PartialField
+        # creation), those fields are dead weight and intentionally
+        # omitted from the emitted ref.
         ref = build_partial_column_ref(
             vendor_name="postgres",
             database="testdata",
@@ -140,10 +166,24 @@ class TestPartialColumnRef:
             table_name="customers",
             column_name="customer_name",
         )
-        ars = ref["attributes"]["arsAttributes"]
-        assert (
-            ars["identity"] == "postgres|*|testdata|analytics|customers|customer_name"
+        ai = ref["attributes"]["arsIdentity"]
+        assert "parentComponentsKeys" not in ai
+        assert "parentMatchTypeNames" not in ai
+        assert "parentTypeNames" not in ai
+
+    def test_no_legacy_ars_1_0_keys(self):
+        ref = build_partial_column_ref(
+            vendor_name="postgres",
+            database="testdata",
+            schema="analytics",
+            table_name="customers",
+            column_name="customer_name",
         )
+        attrs = ref["attributes"]
+        assert "arsEntityConfig" not in attrs
+        assert "arsAttributes" not in attrs
+        assert "arsParentEntityConfig" not in attrs
+        assert "arsParentAttributes" not in attrs
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +226,7 @@ class TestBuildProcess:
         # QN ends with /question_tables/<id>/<hash>
         assert attrs["qualifiedName"].startswith(f"{_CONN_QN}/question_tables/{_QID}/")
 
-    def test_inputs_are_partial_objects(self):
+    def test_inputs_carry_ars_2_0_identity(self):
         tables = [_table("testdata", "analytics", "customers")]
         p = build_process(
             connection_qualified_name=_CONN_QN,
@@ -199,10 +239,11 @@ class TestBuildProcess:
         assert p is not None
         inputs = p["attributes"]["inputs"]
         assert len(inputs) == 1
-        assert (
-            inputs[0]["attributes"]["arsEntityConfig"]["publishTransformationHandling"]
-            == "PARTIAL_OBJECT"
-        )
+        # Each input ref must have an arsIdentity block for cross-connector
+        # resolution by publish-app's edge resolver.
+        ai = inputs[0]["attributes"]["arsIdentity"]
+        assert ai["noMatchAction"] == "drop"
+        assert ai["components"]["tableName"] == "customers"
 
     def test_output_is_metabase_question(self):
         p = build_process(
@@ -221,7 +262,10 @@ class TestBuildProcess:
             f"{_CONN_QN}/questions/{_QID}"
         )
 
-    def test_lineage_asset_config_on_process(self):
+    def test_parent_omits_its_own_ars_identity(self):
+        # The parent Process is Case (b) in publish-app's resolver — its
+        # own arsIdentity block is NOT read (only arsNestedLookupFields +
+        # arsNoNestedMatchAction are). Emitting it would be dead weight.
         p = build_process(
             connection_qualified_name=_CONN_QN,
             connection_name=_CONN_NAME,
@@ -231,9 +275,66 @@ class TestBuildProcess:
             source_tables=[_table("testdata", "analytics", "customers")],
         )
         assert p is not None
-        cfg = p["attributes"]["arsEntityConfig"]
-        assert cfg["publishTransformationHandling"] == "LINEAGE_ASSET"
-        assert cfg["skipLookup"] is True
+        assert "arsIdentity" not in p["attributes"]
+
+    def test_arsNoNestedMatchAction_is_keep(self):
+        # The default in publish-app is "drop" — the parent gets filtered
+        # from output if any declared lookup field ends up zero-length
+        # post-resolve. Process is a first-class artifact (owns its qN);
+        # it must survive enrichment misses, so we opt out explicitly.
+        # See atlan-publish-app/app/lib/partitioning/resolve/__init__.py:478.
+        p = build_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_tables=[_table("testdata", "analytics", "customers")],
+        )
+        assert p is not None
+        assert p["attributes"]["arsNoNestedMatchAction"] == "keep"
+
+    def test_ars_nested_lookup_fields_lists_inputs_outputs(self):
+        # Tells the resolver which fields contain nested refs that need
+        # per-edge ARS resolution. Without this, the resolver won't UNNEST
+        # inputs[]/outputs[] and the cross-connector refs never get
+        # processed (the original symptom of the publish failure).
+        p = build_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_tables=[_table("testdata", "analytics", "customers")],
+        )
+        assert p is not None
+        assert p["attributes"]["arsNestedLookupFields"] == ["inputs", "outputs"]
+
+    def test_relationship_attributes_omitted(self):
+        # REGRESSION GUARD for the staging-diff bug found in devex
+        # run 019e9183. publish-app's Step-0 resolver patches
+        # attributes.inputs[] in place (via field_patch). It does NOT
+        # touch relationshipAttributes. If we mirror the ARS-bearing
+        # Table refs into relationshipAttributes.inputs, Atlas reads
+        # from there (wire-format relationship side), finds entity-
+        # payload-style refs without uniqueAttributes, and rejects with
+        # ATLAS-400-00-021 (INVALID_OBJECT_ID) on every Process publish.
+        # See ars_builder.py module docstring for full context.
+        tables = [_table("testdata", "analytics", "orders")]
+        p = build_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_tables=tables,
+        )
+        assert p is not None
+        assert "relationshipAttributes" not in p, (
+            "Emitting relationshipAttributes mirrors the unresolved "
+            "ARS refs past Step-0's field_patch — that's the bug PR #47 "
+            "is closing. Let publish-app own the wire-format side."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +373,7 @@ class TestBuildColumnProcess:
         # Must match what build_process() would have built with the same h
         assert parent_qn == f"{_CONN_QN}/question_tables/{_QID}/{h}"
 
-    def test_inputs_are_partial_fields(self):
+    def test_inputs_carry_ars_2_0_identity_with_column(self):
         h = process_hash(_QID, _SQL)
         cp = build_column_process(
             connection_qualified_name=_CONN_QN,
@@ -288,10 +389,27 @@ class TestBuildColumnProcess:
         assert cp is not None
         inputs = cp["attributes"]["inputs"]
         assert len(inputs) == 1
-        assert (
-            inputs[0]["attributes"]["arsEntityConfig"]["publishTransformationHandling"]
-            == "PARTIAL_FIELD"
+        ai = inputs[0]["attributes"]["arsIdentity"]
+        assert ai["components"]["columnName"] == "customer_name"
+        assert ai["noMatchAction"] == "drop"
+
+    def test_relationship_attributes_omitted(self):
+        # Companion to TestBuildProcess.test_relationship_attributes_omitted —
+        # same Step-0 / field_patch contract applies to ColumnProcess.
+        h = process_hash(_QID, _SQL)
+        cp = build_column_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_columns=[
+                _column("testdata", "analytics", "customers", "customer_name")
+            ],
+            parent_process_hash=h,
         )
+        assert cp is not None
+        assert "relationshipAttributes" not in cp
 
 
 # ---------------------------------------------------------------------------

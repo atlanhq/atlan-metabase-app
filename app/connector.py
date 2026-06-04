@@ -736,10 +736,10 @@ class MetabaseApp(App):
     ) -> BuildLineageOutput:
         """Read QI parsed-SQL output and stage Process + ColumnProcess NDJSON.
 
-        QI NDJSON shape: {QUERY_ID, SQL, PARSED_DATA{dbobjs, relationships}, OUTPUT_FLAGS}
-        See app/lineage/qi_reader.py for format coercion and
-        app/lineage/ars_builder.py for the PARTIAL_OBJECT / PARTIAL_FIELD
-        record construction.
+        QI NDJSON shape: ``{sql, gudusoft: {dbobjs, relationships}, extra: {…}}``
+        (current Gudusoft 3.x output) — see app/lineage/qi_reader.py for the
+        format coercion and app/lineage/ars_builder.py for the ARS 2.0
+        ``arsIdentity``-bearing record construction.
         """
         processes: list[dict[str, Any]] = []
         column_processes: list[dict[str, Any]] = []
@@ -780,12 +780,25 @@ class MetabaseApp(App):
             if cp is not None:
                 column_processes.append(cp)
 
+        # ARS 2.0 producer-split convention: records carrying arsIdentity
+        # MUST land under a ``resolvable/`` subdirectory of the transformed
+        # data prefix. publish-app's Step 0 ARS resolver globs
+        # ``{transformed_data_prefix}/resolvable/**/*.json`` — files outside
+        # that subdir are treated as plain entities and the arsIdentity
+        # block is ignored. See atlan-publish-app
+        # ``app/lib/partitioning/resolve/orchestrator.py:104`` (resolvable_glob)
+        # and ``app/lib/partitioning/duckdb_partitioner.py:535`` (Step 0
+        # call site). Skipping this subdir is what was causing every
+        # Process publish to land ATLAS-400-00-021 — the resolver never
+        # saw our records, the arsIdentity refs never got UNNESTed, and
+        # publish-app posted malformed ObjectIds to Atlas.
         stage_dir = os.path.join(input.output_path, "lineage-stage")
-        os.makedirs(os.path.join(stage_dir, "PROCESS"), exist_ok=True)
-        os.makedirs(os.path.join(stage_dir, "COLUMNPROCESS"), exist_ok=True)
-        write_jsonl(os.path.join(stage_dir, "PROCESS", "result-0.json"), processes)
+        resolvable_dir = os.path.join(stage_dir, "resolvable")
+        os.makedirs(os.path.join(resolvable_dir, "PROCESS"), exist_ok=True)
+        os.makedirs(os.path.join(resolvable_dir, "COLUMNPROCESS"), exist_ok=True)
+        write_jsonl(os.path.join(resolvable_dir, "PROCESS", "result-0.json"), processes)
         write_jsonl(
-            os.path.join(stage_dir, "COLUMNPROCESS", "result-0.json"),
+            os.path.join(resolvable_dir, "COLUMNPROCESS", "result-0.json"),
             column_processes,
         )
 

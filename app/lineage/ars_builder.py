@@ -1,15 +1,68 @@
-"""Build ARS-compatible Process + ColumnProcess records for Metabase BI lineage.
+"""Build ARS 2.0 Process + ColumnProcess records for Metabase BI lineage.
 
 Metabase is a BI connector and its lineage is *cross-connector* — a
 MetabaseQuestion's native SQL references tables in another connector's
 connection (Postgres / Snowflake / BigQuery / …). The Atlan publish app's
 Asset Resolution Service (ARS) resolves these cross-connector refs at
-publish time via PARTIAL_OBJECT / PARTIAL_FIELD entity configs.
+publish time.
 
-Pattern mirrors ``atlan-qlik-sense-app/app/lineage/ars_builder.py``;
-identity construction follows the canonical
-``connectorName|connectionName|databaseName|schemaName|tableName`` shape
-documented in the qlik-sense ARS-patterns reference.
+This module emits records on the **ARS 2.0 contract** (modern). The
+``arsIdentity`` schema is defined in publish-app's
+``app/lib/partitioning/duckdb_sql.py::ARS_IDENTITY_STRUCT_SCHEMA`` —
+publish-app's edge resolver consumes ``attributes.arsIdentity`` and
+``attributes.arsNestedLookupFields`` directly without going through the
+legacy-translator shim. Producers on the 1.0 contract (``arsEntityConfig``
++ ``arsAttributes`` + ``publishTransformationHandling``) were funnelled
+through ``legacy_translator.py``; this connector skips that path entirely
+by emitting 2.0 records inline.
+
+Process / ColumnProcess (parent — Case (b) in publish-app's resolver:
+``app/lib/partitioning/resolve/resolve.py::_build_edges_candidate_entities``)::
+
+  attributes:
+    name, qualifiedName, …scalar fields…
+    inputs:  [ <nested ref with arsIdentity> ]
+    outputs: [ <plain ObjectId — clean ref, passes through unchanged> ]
+    arsNestedLookupFields: ["inputs", "outputs"]   # fields the resolver UNNESTs
+    arsNoNestedMatchAction: "keep"                  # survive enrichment misses
+
+NO ``relationshipAttributes`` is emitted. publish-app's Step-0 resolver
+patches ``attributes.inputs[]`` in place via ``field_patch`` (see
+``resolve.py::_build_resolved_grouped_output_for_partition_sql``); it
+does NOT touch ``relationshipAttributes``. Mirroring our ARS-bearing
+Table refs into ``relationshipAttributes.inputs`` leaks the
+unresolved entity-payload shape past the resolver — Atlas reads that
+location for the wire-format relationship side, finds no
+``uniqueAttributes`` on the refs, and rejects 16/16 with
+ATLAS-400-00-021. Confirmed empirically from the staging/diff
+parquet on devex run 019e9183 (commit history: PR #44 introduced
+the mirror, PR #47 removes it).
+
+The parent's own ``arsIdentity`` is intentionally omitted — Case (b)
+entities (those with a non-null qualifiedName) are looked up by their
+own qN; the resolver reads only ``arsNestedLookupFields`` and
+``arsNoNestedMatchAction`` from the parent.
+
+Nested cross-connector ref (Table or Column inside ``attributes.inputs[]``)::
+
+  typeName: "Table" | "Column"
+  attributes:
+    name, qualifiedName, …
+    arsIdentity:
+      components:            {connectorType?, databaseName, schemaName, tableName, columnName?}
+      matchTypeNames:        ["Table", "View"] | ["Column"]
+      fallbackQualifiedName: "<qn>"
+      fallbackTypeName:      "Table" | "Column"
+      noMatchAction:         "drop"     # on miss: drop the edge, NO PartialObject synthesis
+      lookupResultHandling:  "pick_first"
+
+Drop-on-miss policy (matches v2 / argo-world behaviour):
+  - upstream Table/Column found in Atlan's catalog  → lineage edge created
+  - upstream Table/Column not found                 → edge dropped, no Partial
+                                                       placeholder is synthesized
+The Process / ColumnProcess itself still publishes when every edge
+drops — ``arsNoNestedMatchAction: "keep"`` on the parent opts out of
+the resolver's default-drop filter.
 
 This module is consumed by the ``extract_lineage`` @entrypoint on
 :class:`MetabaseApp`. The records returned here are written as NDJSON to
@@ -27,7 +80,6 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 _NAME_MAX_LEN = 10000
-_WILDCARD = "*"
 _CONNECTOR_NAME = "metabase"
 
 
@@ -39,13 +91,19 @@ def _hash(*parts: str) -> str:
     return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
-def _identity(*parts: str) -> str:
-    """Build an ARS identity string with wildcards for unknown components."""
-    return "|".join(p or _WILDCARD for p in parts)
+def _components(**kwargs: str) -> dict[str, str]:
+    """Build an arsIdentity.components map, dropping empty values.
+
+    The ARS resolver filters out empty/null component values at JOIN time
+    (see ``legacy_translator.py::_legacy_pipe_components_json`` — only
+    pairs with non-empty value survive). Emit only populated keys so the
+    component set matches what the resolver expects.
+    """
+    return {k: v for k, v in kwargs.items() if v}
 
 
 # ---------------------------------------------------------------------------
-# PARTIAL_OBJECT — external Table reference
+# Cross-connector Table reference (Process.inputs[])
 # ---------------------------------------------------------------------------
 
 
@@ -56,18 +114,23 @@ def build_partial_table_ref(
     schema: str,
     table_name: str,
 ) -> dict[str, Any]:
-    """Build a PARTIAL_OBJECT Table reference for use as a Process input.
+    """Build a Table ref for use as a Process input.
 
-    ARS resolves this against any connection matching the identity pattern;
-    when no match is found it creates a stub PartialObject so the lineage
-    edge survives.
+    The ref carries an ``arsIdentity`` block on the ARS 2.0 contract.
+    The publish-app resolver looks the table up in Atlan's catalog by
+    components; on a match the lineage edge points at the real upstream
+    Table. On a miss the edge is **dropped** (``noMatchAction = "drop"``) —
+    we do NOT synthesize a PartialObject placeholder. This mirrors the
+    v2 / argo-world behaviour and keeps the catalog free of unresolved
+    stubs that the publish-app's impersonate user often lacks
+    ``Atlas create entity: type=PartialObject`` permission for anyway.
 
     Args:
-        vendor_name: Source engine (e.g. ``"postgres"``). Pass ``""`` if
-            unknown — ARS treats it as a wildcard.
-        database, schema, table_name: The 3-part source identifier parsed
-            out of the question's native SQL (e.g. ``"testdata"``,
-            ``"analytics"``, ``"customers"``).
+        vendor_name: Source engine connector type (e.g. ``"snowflake"``).
+            Omitted from the components map when empty so the resolver
+            doesn't filter by connectorType.
+        database, schema, table_name: 3-part source identifier parsed
+            from the question's native SQL.
     """
     qn = "/".join(p for p in (database, schema, table_name) if p)
     return {
@@ -75,21 +138,28 @@ def build_partial_table_ref(
         "attributes": {
             "name": table_name,
             "qualifiedName": qn,
-            "arsEntityConfig": {
-                "publishTransformationHandling": "PARTIAL_OBJECT",
-                "lookupResultHandling": "PICK_FIRST",
-                "isRelationship": True,
-                "skipLookup": False,
-                "isTableViewAgnostic": True,
-            },
-            "arsAttributes": {
-                "identity": _identity(vendor_name, "", database, schema, table_name),
-                "identityPattern": (
-                    "connectorName|connectionName|databaseName|schemaName|tableName"
+            "arsIdentity": {
+                "components": _components(
+                    connectorType=vendor_name,
+                    databaseName=database,
+                    schemaName=schema,
+                    tableName=table_name,
                 ),
-                "identityDelimiter": "|",
+                "matchTypeNames": ["Table", "View"],
                 "fallbackQualifiedName": qn,
                 "fallbackTypeName": "Table",
+                # Drop the edge (no lineage to this upstream) when the
+                # Table can't be resolved in Atlan's catalog — matches
+                # the v2 / argo-world behaviour. We deliberately do NOT
+                # synthesize PartialObject placeholders because (a) the
+                # impersonate user lacks Atlas ``create entity:
+                # type=PartialObject`` permission on most tenants and
+                # (b) Partials pollute the catalog with unresolved
+                # stubs. With ``arsNoNestedMatchAction: "keep"`` on
+                # the parent Process, the Process record itself
+                # survives even when every upstream edge drops.
+                "noMatchAction": "drop",
+                "lookupResultHandling": "pick_first",
             },
         },
     }
@@ -103,46 +173,38 @@ def build_partial_column_ref(
     table_name: str,
     column_name: str,
 ) -> dict[str, Any]:
-    """Build a PARTIAL_FIELD Column reference for use as a ColumnProcess input."""
+    """Build a Column ref for use as a ColumnProcess input.
+
+    Same drop-on-miss policy as :func:`build_partial_table_ref` — when
+    the Column can't be resolved against Atlan's catalog the edge is
+    dropped, no PartialField synthesis. The ColumnProcess record itself
+    still publishes (via ``arsNoNestedMatchAction: "keep"`` on the
+    parent).
+    """
     qn = "/".join(p for p in (database, schema, table_name, column_name) if p)
-    parent_qn = "/".join(p for p in (database, schema, table_name) if p)
     return {
         "typeName": "Column",
         "attributes": {
             "name": column_name,
             "qualifiedName": qn,
-            "arsEntityConfig": {
-                "publishTransformationHandling": "PARTIAL_FIELD",
-                "lookupResultHandling": "PICK_FIRST",
-                "isRelationship": True,
-                "skipLookup": False,
-            },
-            "arsAttributes": {
-                "identity": _identity(
-                    vendor_name, "", database, schema, table_name, column_name
+            "arsIdentity": {
+                "components": _components(
+                    connectorType=vendor_name,
+                    databaseName=database,
+                    schemaName=schema,
+                    tableName=table_name,
+                    columnName=column_name,
                 ),
-                "identityPattern": (
-                    "connectorName|connectionName|databaseName|schemaName"
-                    "|tableName|columnName"
-                ),
-                "identityDelimiter": "|",
+                "matchTypeNames": ["Column"],
                 "fallbackQualifiedName": qn,
-            },
-            "arsParentEntityConfig": {
-                "publishTransformationHandling": "PARTIAL_OBJECT",
-                "lookupResultHandling": "PICK_FIRST",
-                "isRelationship": True,
-                "skipLookup": False,
-                "isTableViewAgnostic": True,
-            },
-            "arsParentAttributes": {
-                "identity": _identity(vendor_name, "", database, schema, table_name),
-                "identityPattern": (
-                    "connectorName|connectionName|databaseName|schemaName|tableName"
-                ),
-                "identityDelimiter": "|",
-                "fallbackQualifiedName": parent_qn,
-                "fallbackTypeName": "Table",
+                "fallbackTypeName": "Column",
+                # Drop the edge (no column lineage) when the Column
+                # can't be resolved — no PartialField synthesis. Same
+                # reasoning as build_partial_table_ref above. The
+                # ColumnProcess itself still publishes via
+                # ``arsNoNestedMatchAction: "keep"`` on the parent.
+                "noMatchAction": "drop",
+                "lookupResultHandling": "pick_first",
             },
         },
     }
@@ -163,12 +225,12 @@ def build_process(
     source_tables: list[dict[str, str]],
     tenant_id: str = "default",
 ) -> dict[str, Any] | None:
-    """Build a Process ARS record: source_tables → MetabaseQuestion.
+    """Build a Process ARS 2.0 record: source_tables → MetabaseQuestion.
 
     Args:
         connection_qualified_name: ``default/metabase/<conn-id>`` — the
             Metabase connection's qualified name.
-        connection_name: User-visible connection name (used in ARS identity).
+        connection_name: User-visible connection name (used in identity).
         question_id: Metabase question id.
         question_name: Question name (used as Process display name).
         sql: The captured native SQL (rendered into the Process ``sql``
@@ -184,11 +246,17 @@ def build_process(
         return None
 
     question_qn = f"{connection_qualified_name}/questions/{question_id}"
-    process_hash = _hash(str(question_id), sql)
-    process_qn = (
-        f"{connection_qualified_name}/question_tables/{question_id}/{process_hash}"
-    )
+    p_hash = _hash(str(question_id), sql)
+    process_qn = f"{connection_qualified_name}/question_tables/{question_id}/{p_hash}"
     process_name = _truncate(question_name or f"Question {question_id}")
+
+    inputs = [build_partial_table_ref(**t) for t in source_tables]
+    outputs = [
+        {
+            "typeName": "MetabaseQuestion",
+            "uniqueAttributes": {"qualifiedName": question_qn},
+        }
+    ]
 
     return {
         "typeName": "Process",
@@ -201,27 +269,34 @@ def build_process(
             "connectionQualifiedName": connection_qualified_name,
             "tenantId": tenant_id,
             "sql": sql,
-            "inputs": [build_partial_table_ref(**t) for t in source_tables],
-            "outputs": [
-                {
-                    "typeName": "MetabaseQuestion",
-                    "uniqueAttributes": {"qualifiedName": question_qn},
-                }
-            ],
-            "arsEntityConfig": {
-                "publishTransformationHandling": "LINEAGE_ASSET",
-                "lookupResultHandling": "PICK_FIRST",
-                "isRelationship": False,
-                "skipLookup": True,
-            },
-            "arsAttributes": {
-                "identity": _identity(_CONNECTOR_NAME, connection_name, process_name),
-                "identityPattern": "connectorName|connectionName|name",
-                "identityDelimiter": "|",
-                "fallbackQualifiedName": process_qn,
-                "fallbackQualifiedNameDelimiter": "/",
-            },
+            "inputs": inputs,
+            "outputs": outputs,
+            # Tells publish-app's edge resolver which fields contain
+            # nested refs to UNNEST and process. Plain ObjectIds (e.g.
+            # outputs[0] for MetabaseQuestion) pass through as "clean
+            # refs" — the resolver short-circuits those that lack an
+            # arsIdentity block.
+            "arsNestedLookupFields": ["inputs", "outputs"],
+            # Process/ColumnProcess are first-class artifacts that own
+            # their qualifiedName — they must survive even when an
+            # upstream ref fails to resolve. Without this, publish-app's
+            # default ``drop`` filter would discard the entire Process
+            # when any input field ends up zero-length post-resolve.
+            # See atlan-publish-app
+            # app/lib/partitioning/resolve/__init__.py:478.
+            "arsNoNestedMatchAction": "keep",
         },
+        # DO NOT emit ``relationshipAttributes`` here. publish-app's
+        # Step-0 ARS resolver rewrites ``attributes.inputs[]`` in place
+        # (PartialObject/PartialField substitution via field_patch — see
+        # atlan-publish-app/app/lib/partitioning/resolve/resolve.py:557-625)
+        # but leaves ``relationshipAttributes`` untouched. If we mirror
+        # the unresolved ARS-shape Table refs into ``relationshipAttributes
+        # .inputs``, Atlas reads from there for the wire-format
+        # relationship endpoints, finds entity-payload-style refs without
+        # ``uniqueAttributes``, and rejects 16/16 with
+        # ATLAS-400-00-021 (INVALID_OBJECT_ID). Verified empirically
+        # from the staging/diff parquet on devex run 019e9183.
     }
 
 
@@ -241,15 +316,11 @@ def build_column_process(
     parent_process_hash: str,
     tenant_id: str = "default",
 ) -> dict[str, Any] | None:
-    """Build a ColumnProcess ARS record: source_columns → MetabaseQuestion.
+    """Build a ColumnProcess ARS 2.0 record.
 
     ``parent_process_hash`` must match the hash used in the corresponding
     :func:`build_process` call so the publish app can wire the column-level
     process under its parent table-level Process.
-
-    Args:
-        source_columns: List of dicts with keys ``vendor_name``, ``database``,
-            ``schema``, ``table_name``, ``column_name``. Empty list → no record.
     """
     if not source_columns:
         return None
@@ -263,6 +334,18 @@ def build_column_process(
     cp_qn = f"{connection_qualified_name}/question_columns/{question_id}/{cp_hash}"
     cp_name = _truncate(question_name or f"Question {question_id} columns")
 
+    inputs = [build_partial_column_ref(**c) for c in source_columns]
+    outputs = [
+        {
+            "typeName": "MetabaseQuestion",
+            "uniqueAttributes": {"qualifiedName": question_qn},
+        }
+    ]
+    process_ref = {
+        "typeName": "Process",
+        "uniqueAttributes": {"qualifiedName": parent_process_qn},
+    }
+
     return {
         "typeName": "ColumnProcess",
         "status": "ACTIVE",
@@ -274,31 +357,17 @@ def build_column_process(
             "connectionQualifiedName": connection_qualified_name,
             "tenantId": tenant_id,
             "sql": sql,
-            "process": {
-                "typeName": "Process",
-                "uniqueAttributes": {"qualifiedName": parent_process_qn},
-            },
-            "inputs": [build_partial_column_ref(**c) for c in source_columns],
-            "outputs": [
-                {
-                    "typeName": "MetabaseQuestion",
-                    "uniqueAttributes": {"qualifiedName": question_qn},
-                }
-            ],
-            "arsEntityConfig": {
-                "publishTransformationHandling": "LINEAGE_ASSET",
-                "lookupResultHandling": "PICK_FIRST",
-                "isRelationship": False,
-                "skipLookup": True,
-            },
-            "arsAttributes": {
-                "identity": _identity(_CONNECTOR_NAME, connection_name, cp_name),
-                "identityPattern": "connectorName|connectionName|name",
-                "identityDelimiter": "|",
-                "fallbackQualifiedName": cp_qn,
-                "fallbackQualifiedNameDelimiter": "/",
-            },
+            "process": process_ref,
+            "inputs": inputs,
+            "outputs": outputs,
+            "arsNestedLookupFields": ["inputs", "outputs"],
+            # See build_process — first-class artifact, opt out of the
+            # default-drop filter.
+            "arsNoNestedMatchAction": "keep",
         },
+        # No ``relationshipAttributes`` — see build_process for the
+        # detailed rationale (resolver patches attributes.inputs in
+        # place, mirroring breaks the wire-format relationship side).
     }
 
 
