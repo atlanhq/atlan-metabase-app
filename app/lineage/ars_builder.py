@@ -26,9 +26,17 @@ Process / ColumnProcess (parent — Case (b) in publish-app's resolver:
     arsNestedLookupFields: ["inputs", "outputs"]   # fields the resolver UNNESTs
     arsNoNestedMatchAction: "keep"                  # survive enrichment misses
 
-  relationshipAttributes:
-    inputs:  [...]    # mirror — required for Atlas wire-format relationship side
-    outputs: [...]
+NO ``relationshipAttributes`` is emitted. publish-app's Step-0 resolver
+patches ``attributes.inputs[]`` in place via ``field_patch`` (see
+``resolve.py::_build_resolved_grouped_output_for_partition_sql``); it
+does NOT touch ``relationshipAttributes``. Mirroring our ARS-bearing
+Table refs into ``relationshipAttributes.inputs`` leaks the
+unresolved entity-payload shape past the resolver — Atlas reads that
+location for the wire-format relationship side, finds no
+``uniqueAttributes`` on the refs, and rejects 16/16 with
+ATLAS-400-00-021. Confirmed empirically from the staging/diff
+parquet on devex run 019e9183 (commit history: PR #44 introduced
+the mirror, PR #47 removes it).
 
 The parent's own ``arsIdentity`` is intentionally omitted — Case (b)
 entities (those with a non-null qualifiedName) are looked up by their
@@ -267,13 +275,17 @@ def build_process(
             # app/lib/partitioning/resolve/__init__.py:478.
             "arsNoNestedMatchAction": "keep",
         },
-        # Atlas wire format requires inputs/outputs in relationshipAttributes
-        # as well. See app/asset_mapper.py::serialize_entity for the
-        # equivalent hoist pattern used for BIProcess.
-        "relationshipAttributes": {
-            "inputs": inputs,
-            "outputs": outputs,
-        },
+        # DO NOT emit ``relationshipAttributes`` here. publish-app's
+        # Step-0 ARS resolver rewrites ``attributes.inputs[]`` in place
+        # (PartialObject/PartialField substitution via field_patch — see
+        # atlan-publish-app/app/lib/partitioning/resolve/resolve.py:557-625)
+        # but leaves ``relationshipAttributes`` untouched. If we mirror
+        # the unresolved ARS-shape Table refs into ``relationshipAttributes
+        # .inputs``, Atlas reads from there for the wire-format
+        # relationship endpoints, finds entity-payload-style refs without
+        # ``uniqueAttributes``, and rejects 16/16 with
+        # ATLAS-400-00-021 (INVALID_OBJECT_ID). Verified empirically
+        # from the staging/diff parquet on devex run 019e9183.
     }
 
 
@@ -342,11 +354,9 @@ def build_column_process(
             # default-drop filter.
             "arsNoNestedMatchAction": "keep",
         },
-        "relationshipAttributes": {
-            "inputs": inputs,
-            "outputs": outputs,
-            "process": process_ref,
-        },
+        # No ``relationshipAttributes`` — see build_process for the
+        # detailed rationale (resolver patches attributes.inputs in
+        # place, mirroring breaks the wire-format relationship side).
     }
 
 
