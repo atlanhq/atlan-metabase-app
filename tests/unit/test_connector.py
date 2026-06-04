@@ -463,13 +463,10 @@ class TestExtractLineage:
         assert len(cp_records) == 1
         assert p_records[0]["typeName"] == "Process"
         # Process input must carry an ARS 2.0 arsIdentity with
-        # noMatchAction=create_partial so publish-app synthesizes a
-        # PartialObject on miss.
+        # noMatchAction=drop so publish-app skips the edge when the
+        # upstream Table isn't in the catalog (no Partial synthesis).
         first_input = p_records[0]["attributes"]["inputs"][0]
-        assert (
-            first_input["attributes"]["arsIdentity"]["noMatchAction"]
-            == "create_partial"
-        )
+        assert first_input["attributes"]["arsIdentity"]["noMatchAction"] == "drop"
         # ColumnProcess parent must point at the Process QN.
         assert (
             cp_records[0]["attributes"]["process"]["uniqueAttributes"]["qualifiedName"]
