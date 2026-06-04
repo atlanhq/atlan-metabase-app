@@ -315,7 +315,11 @@ def parse_qi_record(
 
     ``default_vendor`` is applied to dbobjs entries that don't carry a
     ``vendor_name`` of their own — typically the catalog metadata QI was
-    initialised with for the scope.
+    initialised with for the scope. When QI's per-record ``dbvendor``
+    (e.g. ``dbsnowflake``, ``dbbigquery``) is present it overrides
+    ``default_vendor`` — that value reflects the SQL dialect Gudusoft
+    actually parsed against, which is the most accurate connectorType
+    for the upstream Tables.
     """
     query_id = _question_qn(record)
     # `sql` is the current key; `SQL` is the legacy fallback.
@@ -332,12 +336,27 @@ def parse_qi_record(
     if not isinstance(parsed, dict):
         parsed = {}
 
+    # QI emits ``dbvendor`` like ``dbsnowflake``, ``dbbigquery``,
+    # ``dbpostgresql``, ``dbmssql`` (Gudusoft's vendor-prefixed enum).
+    # Strip the ``db`` prefix so the value matches the Atlan connector
+    # type token used in publish-app's component key (e.g. ``snowflake``).
+    # This becomes the ``connectorType`` in the arsIdentity components
+    # map for every Table/Column ref produced from this record.
+    # Without it, publish-app's ``build_partial_qualified_name`` returns
+    # an empty QN (atlan-publish-app/app/lib/partitioning/resolve/macros.py:106),
+    # the resolved PartialObject lands with ``qualifiedName: null``,
+    # and Atlas rejects with INVALID_OBJECT_ID.
+    raw_vendor = str(parsed.get("dbvendor") or "")
+    if raw_vendor.lower().startswith("db"):
+        raw_vendor = raw_vendor[2:]
+    effective_vendor = raw_vendor.lower() or default_vendor
+
     dbobjs = parsed.get("dbobjs") or []
     source_tables: list[dict[str, str]] = []
     for obj in dbobjs:
         if not isinstance(obj, dict):
             continue
-        ref = _coerce_table_ref(obj, default_vendor=default_vendor)
+        ref = _coerce_table_ref(obj, default_vendor=effective_vendor)
         if ref is not None:
             source_tables.append(ref)
 
@@ -348,7 +367,7 @@ def parse_qi_record(
     # ``parentId`` lookup missed, dropping all column lineage silently.
     dbobj_index = _build_dbobj_index(dbobjs)
     source_columns = _coerce_column_refs(
-        relationships, dbobj_index=dbobj_index, default_vendor=default_vendor
+        relationships, dbobj_index=dbobj_index, default_vendor=effective_vendor
     )
 
     return query_id, sql, source_tables, source_columns
