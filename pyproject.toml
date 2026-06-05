@@ -130,7 +130,18 @@ python_functions = ["test_*"]
 # embedded_runtime / Metabase HTTP — without this, a hang eats the full
 # 60-min CI job budget with no diagnostic. ``thread`` method dumps a
 # stack trace on timeout so we can see what was stuck.
-timeout = 300
+#
+# Sized to comfortably bound the full e2e DAG: the test class sets
+# ``ae_poll_timeout_seconds=1800`` (extract→qi→publish→extract-lineage
+# →lineage-publish on the tenant) + ``atlas_poll_timeout_seconds=900``
+# (Atlas asset assertions afterward) + ~300s of bootstrap headroom
+# (Atlan client init, AE workflow create, seed-version publish, AE
+# submit). 3000s total — well under the e2e-full reusable workflow's
+# 120-min job timeout-minutes ceiling. The previous 300s killed the
+# test mid-extract before the AE poll budget was even close to
+# exhausted; unit/integration tests still finish in seconds so the
+# bump is a no-op for those.
+timeout = 3000
 timeout_method = "thread"
 markers = [
     "e2e: tenant-hitting end-to-end test (requires ATLAN_BASE_URL + ATLAN_API_KEY)",

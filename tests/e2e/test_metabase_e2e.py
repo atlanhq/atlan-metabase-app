@@ -38,6 +38,7 @@ try:
         AgentSpec,
         DatabaseSpec,
         build_ae_payload,
+        build_agent_json,
     )
 
     from app.generated._e2e_base import MetabaseGeneratedE2EBase  # noqa: E402
@@ -110,22 +111,62 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         # orchestrator to skip credential creation and leave
         # {{credentialGuid}} unsubstituted, which produced the empty
         # credential_guid in the previous metabase e2e submit.
+        #
+        # The trailing ``GITHUB_RUN_ATTEMPT`` suffix guards against the
+        # `credentials_name_key` Postgres unique-constraint collision when
+        # the same GitHub Actions run is re-attempted: ``self.run_id`` is
+        # the stable ``GITHUB_RUN_ID``, so without the attempt suffix every
+        # re-run on a previously-attempted CI run would POST a credential
+        # name that already exists in the tenant DB and fail with HTTP 400
+        # (``ERROR #23505 duplicate key value violates unique constraint``).
+        # Falls back to ``1`` for local invocations where the env var is
+        # unset.
+        attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
         return MetabaseCredentialBody(
-            name=f"default-{self.connector_short_name}-{self.run_id}-0",
+            name=f"default-{self.connector_short_name}-{self.run_id}-{attempt}",
         )
 
     def _mustache_substitutions(self) -> MetabaseMustacheSubstitutions:
+        # Two the platform routing signals get set here, mirroring how
+        # SQLAppE2ETest._mustache_substitutions() builds them for
+        # atlan-mysql-app:
+        #
+        #   * extraction-method = self.mode.value — "agent" (RunMode.AGENT)
+        #     or "direct" (RunMode.DIRECT). the platform' native-flow-engine
+        #     reads this to pick the SDR/agent dispatch path vs. the
+        #     static atlan-metabase-production path. Without it the
+        #     workflow lands on the prod queue regardless of any agent
+        #     identity we send (that's exactly what produced the stuck
+        #     Pending workflow on atlan-metabase-production earlier).
+        #
+        #   * agent-json = single JSON blob built by build_agent_json() —
+        #     the Argo template parses it via
+        #     `sprig.fromJson(inputs.parameters['agent-json'])['agent-name']`
+        #     and derives the child workflow queue as
+        #     atlan-metabase-<agent-name> (matches the worker queue the
+        #     compose overlay registers on via ATLAN_DEPLOYMENT_NAME).
+        #
         # Round-trip through the alias-keyed dict instead of constructing
         # by field name — SDK 3.14's MustacheSubstitutions declares
         # `connection` / `credential` with mustache-literal aliases
         # (`{{connection}}`, `{{credential}}`) that pyright's pydantic
         # synthesis treats as the only accepted kwargs, even though
-        # `populate_by_name=True`. Connector-specific fields fall back
-        # to their defaults — include every non-personal collection,
-        # no excludes, extraction_method "direct".
+        # `populate_by_name=True`. Other connector-specific fields
+        # (include_collections, exclude_collections, preflight_check)
+        # fall through to their defaults.
         base = super()._mustache_substitutions()
+        agent = self.agent_spec()
+        agent_json: dict | None = (
+            build_agent_json(self.database_spec(), agent, self.connector_short_name)
+            if agent is not None
+            else None
+        )
+        overrides = {
+            "{{extraction-method}}": self.mode.value,
+            "{{agent-json}}": agent_json,
+        }
         return MetabaseMustacheSubstitutions.model_validate(
-            base.model_dump(by_alias=True)
+            {**base.model_dump(by_alias=True), **overrides}
         )
 
     def _build_ae_payload(self, slug: str) -> dict:
