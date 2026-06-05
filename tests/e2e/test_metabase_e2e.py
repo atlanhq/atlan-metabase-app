@@ -84,11 +84,15 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         return AgentSpec(agent_name=f"metabase-e2e-full-ci-{self.run_id}")
 
     def _mustache_substitutions(self) -> MetabaseMustacheSubstitutions:
+        # Round-trip through the alias-keyed dict instead of constructing
+        # by field name — SDK 3.14's MustacheSubstitutions declares
+        # `connection` / `credential` with mustache-literal aliases
+        # (`{{connection}}`, `{{credential}}`) that pyright's pydantic
+        # synthesis treats as the only accepted kwargs, even though
+        # `populate_by_name=True`. Connector-specific fields fall back
+        # to their defaults — include every non-personal collection,
+        # no excludes, extraction_method "direct".
         base = super()._mustache_substitutions()
-        return MetabaseMustacheSubstitutions(
-            connection=base.connection,
-            credential=base.credential,
-            # Defaults — include every non-personal collection, no excludes,
-            # extraction_method "direct". The seed produces ~50 non-personal
-            # collections so the connector exercises full breadth.
+        return MetabaseMustacheSubstitutions.model_validate(
+            base.model_dump(by_alias=True)
         )
