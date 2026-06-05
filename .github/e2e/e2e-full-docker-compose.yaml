@@ -32,37 +32,21 @@ services:
       seed-metabase:
         condition: service_completed_successfully
 
-  # Metabase's own metadata DB.
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: metabase
-      POSTGRES_PASSWORD: metabase
-      POSTGRES_DB: metabase_app_db
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "metabase"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   # The Metabase server the connector crawls. Pin matches the docker e2e job
-  # in tests.yaml and tests/e2e/conftest.py — bump together (see
-  # tests/e2e/README.md image-bump policy).
+  # in tests.yaml and tests/integration/conftest.py — bump together.
+  #
+  # Uses Metabase's built-in H2 database for its own metadata (admin user,
+  # collections, sessions, settings). H2 is single-process and in-container,
+  # but that's fine for ephemeral e2e — the stack is torn down at end of
+  # run. Same pattern the integration testcontainer in
+  # tests/integration/conftest.py uses, and it boots ~10s faster than the
+  # previous postgres-backed config.
   metabase:
     image: metabase/metabase:v0.61.2.3
     environment:
-      MB_DB_TYPE: postgres
-      MB_DB_HOST: postgres
-      MB_DB_PORT: "5432"
-      MB_DB_DBNAME: metabase_app_db
-      MB_DB_USER: metabase
-      MB_DB_PASS: metabase
       MB_CHECK_FOR_UPDATES: "false"
       MB_ANON_TRACKING_ENABLED: "false"
       JAVA_OPTS: "-Xmx1500m"
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
       interval: 10s
@@ -70,25 +54,36 @@ services:
       retries: 60
       start_period: 30s
 
-  # Source postgres registered with Metabase as a data source. The seed
+  # Source MySQL registered with Metabase as a data source. The seed
   # script (tests/e2e/seed_metabase.py) registers this as a Metabase
   # database, runs a sync, then creates native-SQL questions referencing
-  # its tables — that gives QI real lineage edges to validate.
-  # seed_source.sql is auto-loaded by the postgres image's
+  # its tables — that gives QI real lineage edges (Process / ColumnProcess
+  # records) to validate against Atlas via the full DAG.
+  #
+  # MySQL (not Postgres) for two reasons: (1) it's the same source-DB
+  # engine atlan-mysql-app's e2e uses, so both connector e2es exercise
+  # the same dialect — fewer parser surprises across the suite, and
+  # (2) MySQL "databases" map cleanly to JDBC "schemas" so a single
+  # connection-level db (``analytics``) gives Metabase all four tables
+  # without cross-database GRANT plumbing.
+  #
+  # seed_source.sql is auto-loaded by the mysql image's
   # /docker-entrypoint-initdb.d/ mechanism on first boot.
   mb-source:
-    image: postgres:15
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
     environment:
-      POSTGRES_USER: source
-      POSTGRES_PASSWORD: source
-      POSTGRES_DB: testdata
+      MYSQL_ROOT_PASSWORD: source
+      MYSQL_USER: source
+      MYSQL_PASSWORD: source
+      MYSQL_DATABASE: analytics
     volumes:
       - ${GITHUB_WORKSPACE}/tests/e2e/fixtures/seed_source.sql:/docker-entrypoint-initdb.d/seed_source.sql:ro
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "source"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-psource"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
   # One-shot seeder. Brings up an admin user, registers mb-source as a
   # Metabase database, triggers sync, then applies the lightweight
@@ -109,11 +104,12 @@ services:
       MB_URL: http://metabase:3000
       MB_ADMIN_EMAIL: e2e@atlan.com
       MB_ADMIN_PASSWORD: AtlanMetabaseE2E!1
+      MB_SOURCE_ENGINE: mysql
       MB_SOURCE_HOST: mb-source
-      MB_SOURCE_PORT: "5432"
+      MB_SOURCE_PORT: "3306"
       MB_SOURCE_USER: source
       MB_SOURCE_PASSWORD: source
-      MB_SOURCE_DB: testdata
+      MB_SOURCE_DB: analytics
       MB_SEED_COLLECTIONS: "4"
       MB_SEED_QUESTIONS: "5"
       MB_SEED_DASHBOARDS: "3"
