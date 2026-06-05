@@ -111,8 +111,19 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         # orchestrator to skip credential creation and leave
         # {{credentialGuid}} unsubstituted, which produced the empty
         # credential_guid in the previous metabase e2e submit.
+        #
+        # The trailing ``GITHUB_RUN_ATTEMPT`` suffix guards against the
+        # `credentials_name_key` Postgres unique-constraint collision when
+        # the same GitHub Actions run is re-attempted: ``self.run_id`` is
+        # the stable ``GITHUB_RUN_ID``, so without the attempt suffix every
+        # re-run on a previously-attempted CI run would POST a credential
+        # name that already exists in the tenant DB and fail with HTTP 400
+        # (``ERROR #23505 duplicate key value violates unique constraint``).
+        # Falls back to ``1`` for local invocations where the env var is
+        # unset.
+        attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
         return MetabaseCredentialBody(
-            name=f"default-{self.connector_short_name}-{self.run_id}-0",
+            name=f"default-{self.connector_short_name}-{self.run_id}-{attempt}",
         )
 
     def _mustache_substitutions(self) -> MetabaseMustacheSubstitutions:
