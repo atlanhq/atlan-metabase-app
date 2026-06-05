@@ -34,9 +34,14 @@ if not os.environ.get("ATLAN_BASE_URL") or not os.environ.get("ATLAN_API_KEY"):
 # pyright: reportAttributeAccessIssue=false, reportMissingImports=false
 try:
     from application_sdk.testing.e2e import RunMode  # noqa: E402
-    from application_sdk.testing.e2e.payload import AgentSpec  # noqa: E402
+    from application_sdk.testing.e2e.payload import (  # noqa: E402
+        AgentSpec,
+        DatabaseSpec,
+        build_ae_payload,
+    )
 
     from app.generated._e2e_base import MetabaseGeneratedE2EBase  # noqa: E402
+    from app.generated._e2e_credential import MetabaseCredentialBody  # noqa: E402
     from app.generated._e2e_substitutions import (  # noqa: E402
         MetabaseMustacheSubstitutions,
     )
@@ -83,6 +88,32 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
     def agent_spec(self) -> AgentSpec:
         return AgentSpec(agent_name=f"metabase-e2e-full-ci-{self.run_id}")
 
+    def database_spec(self) -> DatabaseSpec:
+        # ``host=metabase`` resolves over the compose default network to
+        # the sibling Metabase container the e2e-full overlay brings up.
+        # username/password match seed_metabase.py's POST /api/setup
+        # bootstrap user. ``connector_config_name`` matches the credential
+        # configmap name emitted by the toolkit (see
+        # ``app/generated/atlan-connectors-metabase.json``).
+        return DatabaseSpec(
+            host="http://metabase",
+            port=3000,
+            username="e2e@example.com",
+            password="e2etestpw123",
+            connector_config_name="atlan-connectors-metabase",
+        )
+
+    def _credential_body(self) -> MetabaseCredentialBody:
+        # AGENT mode: lightweight body — no host/username/password. Those
+        # live in the Dapr secret store and are resolved at runtime via
+        # agent-json ref keys. Sending the DIRECT-mode shape causes the
+        # orchestrator to skip credential creation and leave
+        # {{credentialGuid}} unsubstituted, which produced the empty
+        # credential_guid in the previous metabase e2e submit.
+        return MetabaseCredentialBody(
+            name=f"default-{self.connector_short_name}-{self.run_id}-0",
+        )
+
     def _mustache_substitutions(self) -> MetabaseMustacheSubstitutions:
         # Round-trip through the alias-keyed dict instead of constructing
         # by field name — SDK 3.14's MustacheSubstitutions declares
@@ -96,3 +127,64 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         return MetabaseMustacheSubstitutions.model_validate(
             base.model_dump(by_alias=True)
         )
+
+    def _build_ae_payload(self, slug: str) -> dict:
+        # SDK 3.14's build_ae_payload emits only the {{...}} mustache params
+        # and connection.* attrs. The Argo cluster template additionally reads
+        # flat credential-guid.* and agent-json.* params that the SDR worker
+        # resolves at runtime — inject them here so the template sees the
+        # same shape it expects. Mirrors atlan-mysql-app's _build_ae_payload.
+        payload = build_ae_payload(
+            run_id=self.run_id,
+            mode=self.mode,
+            connector_short_name=self.connector_short_name,
+            argo_package_name=self.argo_package_name,
+            argo_template_name=self.argo_template_name,
+            app_service_url=self.app_service_url,
+            connection=self.connection_spec(),
+            mustache_subs=self._mustache_substitutions(),
+            credential_body=self._credential_body(),
+            ae_workflow_slug=slug,
+        )
+        db = self.database_spec()
+        agent = self.agent_spec()
+        extra_params: list[dict] = [
+            {
+                "name": "credential-guid.credential-type",
+                "value": db.connector_config_name
+                or f"atlan-connectors-{self.connector_short_name}",
+            },
+            {"name": "credential-guid.port", "value": db.port},
+            {"name": "credential-guid.auth-type", "value": db.auth_type},
+        ]
+        if agent is not None:
+            extra_params.extend(
+                [
+                    {"name": "agent-json.host", "value": db.host},
+                    {"name": "agent-json.port", "value": db.port},
+                    {"name": "agent-json.auth-type", "value": db.auth_type},
+                    {"name": "agent-json.agent-name", "value": agent.agent_name},
+                    {"name": "agent-json.agent-type", "value": agent.agent_type},
+                    {"name": "agent-json.key-type", "value": agent.key_type},
+                    {
+                        "name": "agent-json.aws-auth-method",
+                        "value": agent.aws_auth_method,
+                    },
+                    {
+                        "name": "agent-json.azure-auth-method",
+                        "value": agent.azure_auth_method,
+                    },
+                    {
+                        "name": "agent-json.basic.username",
+                        "value": f"SDR_{self.connector_short_name.upper()}_USERNAME",
+                    },
+                    {
+                        "name": "agent-json.basic.password",
+                        "value": f"SDR_{self.connector_short_name.upper()}_PASSWORD",
+                    },
+                ]
+            )
+        payload["spec"]["templates"][0]["dag"]["tasks"][0]["arguments"][
+            "parameters"
+        ].extend(extra_params)
+        return payload
