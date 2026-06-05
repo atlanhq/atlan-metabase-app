@@ -1,11 +1,6 @@
 # syntax=docker/dockerfile:1
 FROM registry.atlan.com/public/app-runtime-base:3
 
-# git is required for uv to fetch git-sourced dependencies (atlan-application-sdk)
-USER root
-RUN apk add --no-cache git
-USER appuser
-
 WORKDIR /app
 
 # Copy lock files first for dependency caching
