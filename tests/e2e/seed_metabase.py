@@ -29,9 +29,12 @@ Env vars when used as a script:
   MB_URL                      Metabase base URL (default http://localhost:3000)
   MB_ADMIN_EMAIL              admin email to create or log in as (required)
   MB_ADMIN_PASSWORD           admin password (required)
-  MB_SOURCE_HOST              optional postgres source for native-SQL lineage;
-                              when set, the seeder registers it as a Metabase
-                              database and routes native questions against it
+  MB_SOURCE_HOST              optional source DB for native-SQL lineage; when
+                              set, the seeder registers it as a Metabase data
+                              source and routes native questions against it
+  MB_SOURCE_ENGINE            source engine type: ``mysql`` (default) or
+                              ``postgres``. The Metabase /api/database body
+                              is shaped per engine
   MB_SOURCE_PORT/USER/PASSWORD/DB    source connection details
   MB_SEED_COLLECTIONS         override declared collection count (default 4)
   MB_SEED_QUESTIONS           override declared question count    (default 5)
@@ -91,7 +94,11 @@ _DECLARED_QUESTIONS: list[dict[str, Any]] = [
         "name": "Daily Revenue",
         "type": "native",
         "collection": "E2E Finance",
-        "sql": "SELECT day, revenue FROM reports.daily_summary ORDER BY day DESC",
+        # All tables live in the ``analytics`` database — mysql databases
+        # ARE schemas, and seed_source.sql puts daily_summary alongside
+        # customers/orders/campaigns. Keeps the connection-level
+        # ``dbname=analytics`` simple (no cross-db GRANT plumbing).
+        "sql": "SELECT day, revenue FROM analytics.daily_summary ORDER BY day DESC",
     },
     {
         "name": "All Customers",
@@ -199,13 +206,20 @@ async def _setup_or_login(
     return r.json()["id"]
 
 
-async def _register_postgres_source(
+async def _register_source(
     client: httpx.AsyncClient,
     base_url: str,
     session_id: str,
     source: dict[str, Any],
 ) -> int:
-    """Register the source postgres + trigger schema sync. Returns Metabase database id."""
+    """Register the source DB + trigger schema sync. Returns Metabase database id.
+
+    Supports both ``mysql`` (default — what the e2e compose overlay uses)
+    and ``postgres`` engines via ``source["engine"]``. The Metabase
+    /api/database body shape is identical between the two — only the
+    ``engine`` string differs.
+    """
+    engine = source.get("engine", "mysql")
     headers = {"X-Metabase-Session": session_id}
     existing = (await client.get(f"{base_url}/api/database", headers=headers)).json()
     candidates = (
@@ -214,7 +228,7 @@ async def _register_postgres_source(
     for db in candidates or []:
         details = db.get("details") or {}
         if (
-            db.get("engine") == "postgres"
+            db.get("engine") == engine
             and details.get("host") == source["host"]
             and str(details.get("port")) == str(source["port"])
             and details.get("dbname") == source["db"]
@@ -223,7 +237,7 @@ async def _register_postgres_source(
 
     body = {
         "name": "e2e-source",
-        "engine": "postgres",
+        "engine": engine,
         "details": {
             "host": source["host"],
             "port": int(source["port"]),
@@ -248,8 +262,12 @@ async def _register_postgres_source(
             )
         ).json()
         tables = meta.get("tables") or []
-        schemas = {t.get("schema") for t in tables if t.get("schema")}
-        if tables and {"analytics", "reports"}.issubset(schemas):
+        # MySQL exposes the connection-level db as the "schema" name in
+        # Metabase's /api/database/{id}/metadata. For our single-db layout
+        # (``analytics``) we just need tables to materialize — no
+        # multi-schema requirement.
+        if tables:
+            schemas = {t.get("schema") for t in tables if t.get("schema")}
             _log(f"  source sync: {len(tables)} tables across {sorted(schemas)}")
             return db_id
         await asyncio.sleep(2)
@@ -494,6 +512,8 @@ async def seed_metabase(
         source: when provided, register this postgres as a Metabase
             database and route native-SQL questions against it (enables
             QI lineage). Required keys: host, port, user, password, db.
+            Optional key ``engine`` selects ``mysql`` (default) or
+            ``postgres``.
             Pass ``None`` to skip — questions fall back to MBQL against
             the built-in sample DB.
         wait_for_health: skip the health poll if the caller has already
@@ -512,7 +532,7 @@ async def seed_metabase(
         source_db_id: int | None = None
         if source:
             with _timed("register source postgres + sync"):
-                source_db_id = await _register_postgres_source(
+                source_db_id = await _register_source(
                     client, base_url, session_id, source
                 )
 
@@ -561,12 +581,15 @@ async def _main() -> int:
 
     source: dict[str, Any] | None = None
     if os.environ.get("MB_SOURCE_HOST"):
+        engine = os.environ.get("MB_SOURCE_ENGINE", "mysql").lower()
+        default_port = "3306" if engine == "mysql" else "5432"
         source = {
+            "engine": engine,
             "host": os.environ["MB_SOURCE_HOST"],
-            "port": int(os.environ.get("MB_SOURCE_PORT", "5432")),
+            "port": int(os.environ.get("MB_SOURCE_PORT", default_port)),
             "user": os.environ.get("MB_SOURCE_USER", "source"),
             "password": os.environ.get("MB_SOURCE_PASSWORD", "source"),
-            "db": os.environ.get("MB_SOURCE_DB", "testdata"),
+            "db": os.environ.get("MB_SOURCE_DB", "analytics"),
         }
 
     n_collections = int(os.environ.get("MB_SEED_COLLECTIONS", "4"))
