@@ -23,6 +23,7 @@ from typing import Annotated, Any
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -117,7 +118,17 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
     workflow_id: str = ""
     credential_guid: str = ""
     extraction_method: str = "direct"
-    agent_json: str = ""
+    # Typed envelope for agent-shape credential payloads (host, port,
+    # agent-name, basic.username, basic.password, ...). Previously
+    # declared as ``str = ""`` which silently swallowed agent-mode
+    # credentials on the worker side — ``build_credential_ref()`` had no
+    # branch for it, so AGENT-mode workflows fell through to inline=={}
+    # and ``_build_client`` raised ``no credential_ref or inline_credentials``.
+    # Typing it as :class:`AgentCredentialSpec` makes ``MetabaseInput``
+    # satisfy the SDK's ``CredentialResolvable`` protocol so
+    # :meth:`CredentialRef.resolve` routes both direct + agent without
+    # custom code in this repo.
+    agent_json: AgentCredentialSpec | None = None
 
     metabase_credential: CredentialRef | None = None
     credentials: list[dict[str, Any]] | dict[str, Any] = Field(default_factory=list)
