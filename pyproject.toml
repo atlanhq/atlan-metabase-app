@@ -36,7 +36,7 @@ test = [
 
 [tool.poe.tasks]
 # Regenerate contract artifacts from contract/app.pkl into app/generated/.
-generate = "bash -c 'cd contract && pkl eval -m generated app.pkl && mkdir -p ../app/generated && cp generated/*.json generated/_input.py ../app/generated/ && rm -rf generated'"
+generate = "bash -c 'cd contract && pkl eval -m generated app.pkl && cp -R generated/. .. && rm -rf generated'"
 
 # Dapr + Temporal local-dev tasks required by `atlan app run`.
 start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --dapr-http-port 3500 --dapr-grpc-port 50001 --resources-path components"
