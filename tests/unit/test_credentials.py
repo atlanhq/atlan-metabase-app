@@ -28,7 +28,13 @@ class TestBuildCredentialRef:
         out_ref, inline = build_credential_ref(inp)
         assert out_ref is not None
         assert out_ref.name == "guid-123"
-        assert out_ref.credential_type == "basic"
+        # SDK's CredentialRef.resolve() sets credential_type="unknown" —
+        # the actual auth scheme is determined at resolution time from
+        # the credential row's contents (so the SDK can support multiple
+        # auth-types without hard-coding here). The previous custom
+        # build_credential_ref() hardcoded "basic"; this assertion was
+        # updated when we switched to the SDK helper for AGENT-mode parity.
+        assert out_ref.credential_type == "unknown"
         assert out_ref.credential_guid == "guid-123"
         assert inline == {}
 

@@ -16,6 +16,7 @@
           "credential_guid": "{{credential-guid}}",
           "connection": "{{connection}}",
           "extraction_method": "{{extraction-method}}",
+          "agent_json": "{{agent-json}}",
           "include_collections": "{{include-collections}}",
           "exclude_collections": "{{exclude-collections}}",
           "preflight_check": "{{preflight-check}}"
