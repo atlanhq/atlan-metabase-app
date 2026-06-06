@@ -8,9 +8,10 @@ secret store). Three primitives:
 - :class:`MetabaseCredential` — the typed model the API client consumes.
 - :func:`parse_metabase_credentials` — normalize any inbound shape (list of
   pairs, nested dict with ``extra``, already-typed credential) into the model.
-- :func:`build_credential_ref` — route ``MetabaseInput``'s three credential
-  channels (PKL ``CredentialRef``, legacy GUID, inline payload) into the
-  ``(ref, inline_dict)`` shape that downstream ``@task`` inputs carry.
+- :func:`build_credential_ref` — thin wrapper over
+  :meth:`CredentialRef.resolve` from the SDK, which handles both direct
+  (``credential_guid``) and agent (``agent_json``) routing natively. Falls
+  back to inline credentials when neither is present, for local-dev runs.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from application_sdk.credentials.errors import CredentialRoutingError
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
 from application_sdk.errors import InvalidInputError
@@ -119,26 +121,36 @@ def parse_metabase_credentials(
 def build_credential_ref(
     input: MetabaseInput,
 ) -> tuple[CredentialRef | None, dict[str, Any]]:
-    """Route ``MetabaseInput``'s three credential channels into (ref, inline).
+    """Route ``MetabaseInput``'s credential channels into (ref, inline).
 
     Exactly one of the returned values is populated:
 
-    - ``credential_ref`` — from ``input.metabase_credential`` (PKL contract)
-      or constructed from ``input.credential_guid`` (legacy GUID).
+    - ``credential_ref`` — built by :meth:`CredentialRef.resolve` from the
+      SDK, which inspects ``input.extraction_method`` + ``input.agent_json``
+      + ``input.credential_guid`` and returns the right ref for either
+      direct or agent mode. Mysql gets this same routing for free via its
+      SDK base class (:meth:`SQLAppE2ETest._resolve_credential_ref`);
+      metabase wires it in explicitly here because the REST connector has
+      no equivalent SDK base. Also handles the PKL-contract path
+      (``input.metabase_credential``) for backward compat.
     - ``inline_credentials`` — from ``input.credentials`` (list[{key,value}]
-      from the HTTP service layer, or a flat dict for local dev).
+      from the HTTP service layer, or a flat dict for local dev). Used
+      when neither direct nor agent routing applies (e.g. unit tests).
 
     Tasks read ``credential_ref`` first; if absent they fall back to inline.
     """
+    # PKL-contract path — explicit ref already constructed upstream.
     if input.metabase_credential is not None:
         return input.metabase_credential, {}
-    if input.credential_guid:
-        ref = CredentialRef(
-            name=input.credential_guid,
-            credential_type="basic",
-            credential_guid=input.credential_guid,
-        )
-        return ref, {}
+
+    # SDK-canonical routing — covers direct (credential_guid) AND agent
+    # (agent_json) modes via the CredentialResolvable protocol. Raises
+    # CredentialRoutingError when neither field is set, which means we
+    # should fall through to inline.
+    try:
+        return CredentialRef.resolve(input), {}
+    except CredentialRoutingError:
+        pass
 
     inline: dict[str, Any] = {}
     creds = input.credentials

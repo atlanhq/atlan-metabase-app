@@ -275,6 +275,56 @@ credentialAuthOptions {
   }
 }
 
+// ---- Agent (SDR) credential config -----------------------------------
+//
+// Drives the SDR credential collection path so the same connector can run
+// either via the Atlan tenant's direct credential store (``extraction-method
+// = direct``) OR via a self-deployed agent that fetches creds from the
+// customer's own secret store (``extraction-method = agent``).
+//
+// Mirrors atlan-mysql-app's pattern but stripped to basic-auth only —
+// Metabase's REST API has no IAM / role-arn auth surface, so the iam_user /
+// iam_role blocks mysql carries don't apply. The ``Store Credential Path``
+// placeholders signal to the agent UI that the operator should paste a vault
+// path (not a literal credential) into each field; the agent later resolves
+// each path against its own secret store at extract time.
+//
+// Without this block (and the AgentSelector widget below), the toolkit
+// doesn't emit ``agent_json`` into the generated manifest's extract args,
+// so AGENT-mode workflows arrive at the worker with ``input.agent_json ==
+// None`` and ``CredentialRef.resolve(input)`` falls all the way through to
+// ``_build_client: no credential_ref or inline_credentials``.
+
+local agentConfig: Listing = new {
+  new Listing {
+    "atlan-connectors-metabase"
+    new Mapping {
+      ["properties"] = new Mapping {
+        ["auth-type"] = new Mapping {
+          ["enum"] = new Listing { "basic" }
+          ["enumNames"] = new Listing { "Basic" }
+        }
+        ["basic"] = new Mapping {
+          ["properties"] = new Mapping {
+            ["username"] = new Mapping {
+              ["default"] = ""
+              ["ui"] = new Mapping { ["placeholder"] = "Store Credential Path" }
+            }
+            ["password"] = new Mapping {
+              ["default"] = ""
+              ["ui"] = new Mapping {
+                ["widget"] = ""
+                ["placeholder"] = "Store Credential Path"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  new Listing { "atlan-connectors-agent" }
+}
+
 // ---- Workflow config (UI form) ----
 
 uiConfig {
@@ -282,14 +332,50 @@ uiConfig {
     ["Credential"] {
       description = "Credential Details"
       inputs {
-        ["extraction-method"] = new Widgets.TextInput {
+        // Conditional radio gated behind the ``SECURE_AGENT_EXTRACTION``
+        // lab flag — defaults to a single "direct" option so the
+        // production UI is unchanged unless the tenant opts into the
+        // agent path. When the flag is on, ``overrideEnum`` exposes the
+        // "agent" option alongside "direct" and ``AgentSelector`` below
+        // becomes the right-hand widget. Matches the shape mysql ships.
+        ["extraction-method"] = new Widgets.ConditionalInput {
           title = "Extraction method"
-          defaultValue = "direct"
-          hide = true
+          helpText = "Determines how the package extracts metadata. 'Direct' connects to Metabase from Atlan's tenant. 'Self-Deployed Runtime' fetches metadata via the Atlan secure agent installed by the customer."
+          placeholderText = "Direct"
+          baseWidgetType = "radio"
+          baseEnum { "direct" }
+          baseEnumNames { "Direct" }
+          default = "direct"
+          required = true
+          conditions {
+            new Widgets.Condition {
+              property = "labFlag"
+              value = "SECURE_AGENT_EXTRACTION"
+              overrideEnum { "direct"; "agent" }
+              overrideEnumNames { "Direct"; "Self-Deployed Runtime" }
+            }
+          }
+          validationRules {
+            new Widgets.ValidationRule {
+              required = true
+              message = "Please select a valid metadata extraction strategy"
+            }
+          }
         }
         ["credential-guid"] = new Widgets.CredentialInput {
           title = ""
           credType = "atlan-connectors-metabase"
+        }
+        // The agent-mode counterpart of ``credential-guid``. When
+        // ``extraction-method = agent`` the UIRule at the bottom of this
+        // block requires ``agent-json`` instead of ``credential-guid``;
+        // the toolkit emits ``"agent_json": "{{agent-json}}"`` into
+        // ``app/generated/manifest.json``'s ``dag.extract.inputs.args``
+        // as long as this widget is declared.
+        ["agent-json"] = new Widgets.AgentSelector {
+          title = ""
+          placeholderText = "Agent JSON"
+          agentConfigEntries = agentConfig
         }
       }
     }
@@ -344,6 +430,21 @@ uiConfig {
           }
         }
       }
+    }
+  }
+  // Required-field routing across extraction modes. Direct mode needs the
+  // credential-guid (the Atlan tenant resolves it from its secret store);
+  // agent mode needs the AgentSelector payload (the customer-side agent
+  // resolves each Store Credential Path against its own secret store).
+  // Mirrors atlan-mysql-app's UIRule pair.
+  rules {
+    new Widgets.UIRule {
+      whenInputs { ["extraction-method"] = "direct" }
+      required { "credential-guid"; "include-collections"; "preflight-check" }
+    }
+    new Widgets.UIRule {
+      whenInputs { ["extraction-method"] = "agent" }
+      required { "agent-json"; "include-collections" }
     }
   }
 }
