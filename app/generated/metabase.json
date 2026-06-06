@@ -5,17 +5,43 @@
   "config": {
     "properties": {
       "extraction-method": {
-        "type": "string",
-        "required": false,
+        "type": "conditional",
+        "required": true,
         "ui": {
-          "widget": "input",
+          "widget": "radio",
           "label": "Extraction method",
-          "hidden": true,
-          "help": "",
-          "placeholder": "",
-          "grid": 8
+          "hidden": false,
+          "help": "Determines how the package extracts metadata. 'Direct' connects to Metabase from Atlan's tenant. 'Self-Deployed Runtime' fetches metadata via the Atlan secure agent installed by the customer.",
+          "placeholder": "Direct",
+          "grid": 8,
+          "rules": [
+            {
+              "required": true,
+              "message": "Please select a valid metadata extraction strategy"
+            }
+          ]
         },
-        "default": "direct"
+        "default": "direct",
+        "conditions": [
+          {
+            "property": "labFlag",
+            "value": "SECURE_AGENT_EXTRACTION",
+            "enum": [
+              "direct",
+              "agent"
+            ],
+            "enumNames": [
+              "Direct",
+              "Self-Deployed Runtime"
+            ]
+          }
+        ],
+        "enum": [
+          "direct"
+        ],
+        "enumNames": [
+          "Direct"
+        ]
       },
       "credential-guid": {
         "type": "string",
@@ -28,6 +54,55 @@
           "grid": 8,
           "credentialType": "atlan-connectors-metabase",
           "isTestAuthenticationDisabled": false
+        }
+      },
+      "agent-json": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "agent",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Agent JSON",
+          "grid": 8,
+          "agentConfigs": [
+            [
+              "atlan-connectors-metabase",
+              {
+                "properties": {
+                  "auth-type": {
+                    "enum": [
+                      "basic"
+                    ],
+                    "enumNames": [
+                      "Basic"
+                    ]
+                  },
+                  "basic": {
+                    "properties": {
+                      "username": {
+                        "default": "",
+                        "ui": {
+                          "placeholder": "Store Credential Path"
+                        }
+                      },
+                      "password": {
+                        "default": "",
+                        "ui": {
+                          "widget": "",
+                          "placeholder": "Store Credential Path"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            [
+              "atlan-connectors-agent"
+            ]
+          ]
         }
       },
       "connection": {
@@ -115,6 +190,31 @@
         }
       }
     },
+    "anyOf": [
+      {
+        "properties": {
+          "extraction-method": {
+            "const": "direct"
+          }
+        },
+        "required": [
+          "credential-guid",
+          "include-collections",
+          "preflight-check"
+        ]
+      },
+      {
+        "properties": {
+          "extraction-method": {
+            "const": "agent"
+          }
+        },
+        "required": [
+          "agent-json",
+          "include-collections"
+        ]
+      }
+    ],
     "steps": [
       {
         "title": "Credential",
@@ -122,7 +222,8 @@
         "id": "credential",
         "properties": [
           "extraction-method",
-          "credential-guid"
+          "credential-guid",
+          "agent-json"
         ]
       },
       {
