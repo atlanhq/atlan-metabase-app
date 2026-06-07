@@ -184,6 +184,16 @@ extraNodes {
       ["connection"] = "{{connection}}"
       ["connection_qualified_name"] = "$.extract.outputs.connection_qualified_name"
       ["view_lineage_input_prefix"] = "$.extract.outputs.view_lineage_output_prefix"
+      // Heracles routes child workflows to the SDR queue
+      // (``atlan-metabase-<agent-name>``) only when ``agent_json`` is
+      // present in the args and ``extraction_method == "agent"``. Without
+      // these two, ``{deployment_name}`` substitutes to ``"production"``
+      // and the child lands on ``atlan-metabase-production`` — exactly
+      // the symptom we hit on workflow 5966e4b7-…-extract-lineage:
+      // ``Task Queue: atlan-metabase-production`` with no worker polling.
+      // Mirrors the ``extract`` node's args (manifest line 18-19).
+      ["extraction_method"] = "{{extraction-method}}"
+      ["agent_json"] = "{{agent-json}}"
     }
     dependsOn = null
     dependsOnCondition = new DependencyCondition {
