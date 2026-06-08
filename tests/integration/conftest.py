@@ -79,9 +79,10 @@ _TASK_QUEUE = "metabase-queue"
 _METABASE_IMAGE = "metabase/metabase:v0.61.2.3"
 _METABASE_PORT = 3000
 
-# Same admin convention as the e2e compose overlay.
-_ADMIN_EMAIL = "e2e@example.com"
-_ADMIN_PASSWORD = "e2etestpw123"
+# Same admin convention as the e2e compose overlay. Overridable via
+# MB_E2E_USERNAME / MB_E2E_PASSWORD so CI can inject from secrets.
+_ADMIN_EMAIL = os.environ.get("MB_E2E_USERNAME", "e2e@example.com")
+_ADMIN_PASSWORD = os.environ.get("MB_E2E_PASSWORD", "e2etestpw123")
 
 # Integration count profile: 2 / 2 / 2. Light enough to keep boot+seed
 # under ~25 s on CI; rich enough that the connector emits ≥1 record per

@@ -14,20 +14,21 @@ class MetabaseMustacheSubstitutions(MustacheSubstitutions):
     contributes the connection / credential / workflow-id substitutions; the
     fields here cover the connector-specific extraction options.
 
-    ``extraction_method`` and ``agent_json`` are the two mustache params the platform'
-    native-flow-engine reads to decide whether to route the workflow via the
-    SDR/agent path (queue ``atlan-metabase-<agent-name>``) or the static prod
-    path (queue ``atlan-metabase-production``). When AE submits with
-    ``extraction-method == "agent"`` and a populated ``agent-json`` JSON blob,
-    the engine derives the queue from ``sprig.fromJson(agent-json)['agent-name']``;
-    otherwise it defaults to ``atlan-metabase-production``. The base
-    ``MustacheSubstitutions`` ships the same two fields aliased to
-    ``{{extraction-method}}`` / ``{{agent-json}}`` — we re-declare them here
-    purely to keep all metabase substitutions co-located + give the platform' field
-    sniffer the explicit ``agent`` enum value via override at the test layer
+    ``extraction_method`` and ``agent_json`` are the two mustache params the
+    platform's native-flow-engine reads to decide whether to route the
+    workflow via the agent path (queue ``atlan-metabase-<agent-name>``) or
+    the static prod path (queue ``atlan-metabase-production``). When AE
+    submits with ``extraction-method == "agent"`` and a populated
+    ``agent-json`` JSON blob, the engine derives the queue from
+    ``sprig.fromJson(agent-json)['agent-name']``; otherwise it defaults to
+    ``atlan-metabase-production``. The base ``MustacheSubstitutions`` ships
+    the same two fields aliased to ``{{extraction-method}}`` /
+    ``{{agent-json}}`` — we re-declare them here purely to keep all
+    metabase substitutions co-located + give the platform's field sniffer
+    the explicit ``agent`` enum value via override at the test layer
     (``_mustache_substitutions()`` flips it to ``self.mode.value`` for AGENT
     mode runs). Mirrors how ``SQLAppE2ETest._mustache_substitutions()`` wires
-    these for atlan-mysql-app.
+    these for the MySQL connector.
     """
 
     extraction_method: str = Field(default="direct", alias="{{extraction-method}}")

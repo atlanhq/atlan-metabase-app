@@ -19,4 +19,4 @@
 <!-- for any cautionary notes, use https://github.com/orgs/community/discussions/16925 -->
 
 
-<!-- for any questions, reach out to #REDACTED-CHANNEL or apps@atlan.com -->
+<!-- for questions, open an issue on this repository -->
