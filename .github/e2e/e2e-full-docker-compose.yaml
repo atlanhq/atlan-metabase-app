@@ -102,8 +102,11 @@ services:
       - ${GITHUB_WORKSPACE}:/workspace:ro
     environment:
       MB_URL: http://metabase:3000
-      MB_ADMIN_EMAIL: e2e@example.com
-      MB_ADMIN_PASSWORD: e2etestpw123
+      # Pulled from the MB_E2E_USERNAME / MB_E2E_PASSWORD repo secrets in CI.
+      # Falls back to generic placeholders for local-dev invocations where
+      # the env vars aren't set. Don't hardcode admin creds here.
+      MB_ADMIN_EMAIL: ${MB_E2E_USERNAME:-e2e@example.com}
+      MB_ADMIN_PASSWORD: ${MB_E2E_PASSWORD:-e2etestpw123}
       MB_SOURCE_ENGINE: mysql
       MB_SOURCE_HOST: mb-source
       MB_SOURCE_PORT: "3306"
