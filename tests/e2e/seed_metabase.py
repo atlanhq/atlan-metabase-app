@@ -206,6 +206,50 @@ async def _setup_or_login(
     return r.json()["id"]
 
 
+async def _disable_xrays(
+    client: httpx.AsyncClient, base_url: str, session_id: str
+) -> None:
+    """Turn off Metabase's instance-level X-Rays / Automatic Insights.
+
+    By default, Metabase auto-generates dozens of "Try X" questions plus an
+    "Automatic Insights" collection per table whenever a database is synced.
+    For our 4-table ``mb-source`` MySQL, that ballooned the connector crawl
+    to ~82 questions + ~44 collections + ~7 dashboards in Atlas (the run-
+    27118238755 cleanup purged 112 child assets) — none of which the
+    e2e test asserts on.
+
+    Disabling at instance level here, BEFORE ``_register_source`` triggers
+    the sync, keeps the post-sync footprint to roughly our explicit
+    declared seed (4 collections + 5 questions + 3 dashboards plus
+    Metabase's built-in Sample DB).
+
+    Metabase exposes this via ``PUT /api/setting/enable-xrays`` with body
+    ``{"value": false}``. Authenticated via the Metabase session cookie.
+    Safe to call repeatedly — Metabase no-ops when the value is already
+    set. Best-effort: a non-2xx response is logged and swallowed so the
+    seed flow continues (a stricter check would force-fail the seed on
+    Metabase versions that renamed/removed the setting, which is a worse
+    failure mode than allowing some x-ray noise).
+    """
+    headers = {"X-Metabase-Session": session_id}
+    try:
+        r = await client.put(
+            f"{base_url}/api/setting/enable-xrays",
+            headers=headers,
+            json={"value": False},
+            timeout=10,
+        )
+        if r.is_success:
+            _log("disabled enable-xrays at Metabase instance level")
+        else:
+            _log(
+                f"WARN: enable-xrays toggle returned HTTP {r.status_code}; "
+                f"x-rays may still be generated on source sync"
+            )
+    except Exception as exc:
+        _log(f"WARN: enable-xrays toggle failed ({exc!r}); proceeding")
+
+
 async def _register_source(
     client: httpx.AsyncClient,
     base_url: str,
@@ -528,6 +572,14 @@ async def seed_metabase(
             session_id = await _setup_or_login(
                 client, base_url, admin_email, admin_password
             )
+
+        # Disable x-rays BEFORE registering the source DB. Source-DB
+        # registration triggers a schema sync, and Metabase generates
+        # automatic-insight questions / collections per discovered table
+        # at sync time if x-rays are enabled. Toggling after the sync is
+        # too late.
+        with _timed("disable instance-level x-rays"):
+            await _disable_xrays(client, base_url, session_id)
 
         source_db_id: int | None = None
         if source:
