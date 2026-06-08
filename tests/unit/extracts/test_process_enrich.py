@@ -113,7 +113,7 @@ class TestGenerateQuestionsQueryMap:
         assert result[20]["params"] == ["p"]
 
     def test_non_string_query_coerced_to_empty(self):
-        """INTERNAL-TICKET: structured MBQL queries (dicts) must be coerced to ""."""
+        """Structured MBQL queries (dicts) must be coerced to ""."""
         records = [{"question_id": 1, "query": {"complex": "mbql"}}]
         result = generate_questions_query_map(records)
         assert result[1]["query"] == ""

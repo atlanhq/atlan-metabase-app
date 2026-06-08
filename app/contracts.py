@@ -5,9 +5,8 @@ the per-``@task`` contracts.
 
 Architecture mirrors ``atlan-openapi-app``: one App class with a single
 ``run()`` override that orchestrates ``@task`` methods sequentially. The
-platform (platform-packages) dispatches Metabase as **one** Argo workflow
-instance with extract→publish as nested DAG nodes, so a single entrypoint
-matches the platform shape exactly.
+platform dispatches Metabase as **one** workflow instance with extract→publish
+as nested DAG nodes, so a single entrypoint matches the platform shape exactly.
 
 Every field has a typed shape. ``connection`` uses :class:`ConnectionRef`
 from the SDK; filter payloads are typed ``dict`` shapes from the apitree
@@ -41,8 +40,7 @@ def _coerce_collection_filter(value: Any) -> Any:
     through ``String(value)`` in the manifest substitution layer instead of
     ``JSON.stringify(value)``. The two filters have *identical* contract
     shape (same APITree widget, same ``default: {}``, same wiring), so this
-    is value-side, not contract-side — see the diagnostic on workflow run
-    ``REDACTED-UUID``.
+    is value-side, not contract-side.
 
     Coerce the known-bad sentinel and JSON-encoded variants back to a dict
     so the workflow doesn't fail validation on an upstream defect. Anything

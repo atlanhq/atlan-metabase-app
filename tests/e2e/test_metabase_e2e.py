@@ -99,8 +99,8 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         return DatabaseSpec(
             host="http://metabase",
             port=3000,
-            username="e2e@example.com",
-            password="e2etestpw123",
+            username=os.environ.get("MB_E2E_USERNAME", "e2e@example.com"),
+            password=os.environ.get("MB_E2E_PASSWORD", "e2etestpw123"),
             connector_config_name="atlan-connectors-metabase",
         )
 
@@ -127,17 +127,15 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         )
 
     def _mustache_substitutions(self) -> MetabaseMustacheSubstitutions:
-        # Two the platform routing signals get set here, mirroring how
-        # SQLAppE2ETest._mustache_substitutions() builds them for
-        # atlan-mysql-app:
+        # Two routing signals get set here, mirroring how
+        # SQLAppE2ETest._mustache_substitutions() builds them for the
+        # MySQL connector:
         #
         #   * extraction-method = self.mode.value — "agent" (RunMode.AGENT)
-        #     or "direct" (RunMode.DIRECT). the platform' native-flow-engine
-        #     reads this to pick the SDR/agent dispatch path vs. the
-        #     static atlan-metabase-production path. Without it the
-        #     workflow lands on the prod queue regardless of any agent
-        #     identity we send (that's exactly what produced the stuck
-        #     Pending workflow on atlan-metabase-production earlier).
+        #     or "direct" (RunMode.DIRECT). The platform's native-flow-engine
+        #     reads this to pick the agent dispatch path vs. the static
+        #     production queue. Without it the workflow lands on the
+        #     production queue regardless of any agent identity we send.
         #
         #   * agent-json = single JSON blob built by build_agent_json() —
         #     the Argo template parses it via

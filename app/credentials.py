@@ -61,8 +61,8 @@ def parse_metabase_credentials(
 
     Accepts:
     - ``list[HandlerCredential]`` — v3 normalized ``[{key, value}]`` pairs
-      from the HTTP layer (frontend / the platform). Keys prefixed with
-      ``extra.`` are flattened (``extra.username`` → ``username``).
+      from the HTTP layer. Keys prefixed with ``extra.`` are flattened
+      (``extra.username`` → ``username``).
     - ``dict[str, Any]`` — legacy v2 nested shape ``{host, port, extra:
       {username, password}}`` OR the flat shape ``{host, port, username,
       password}``. ``extra`` may also arrive as a JSON-encoded string.

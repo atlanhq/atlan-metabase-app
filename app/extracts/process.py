@@ -146,7 +146,6 @@ def generate_questions_query_map(
     - If the ``query`` value is not a plain string (e.g. it is a dict because the
       Metabase API returned a structured object), replaces it with ``""`` so that
       the downstream SQL parser does not break.
-      See ticket INTERNAL-TICKET comment in the legacy code.
     - Returns a dict keyed by ``question_id``.
 
     Args:
@@ -162,7 +161,7 @@ def generate_questions_query_map(
         question_id = record["question_id"]
         raw_query = record.get("query", "")
         # If query is not a string (e.g. a dict), the downstream SQL parser breaks.
-        # Coerce to empty string — mirrors INTERNAL-TICKET fix in main.py.
+        # Coerce to empty string.
         query_str: str = raw_query if isinstance(raw_query, str) else ""
         questions_query_map[question_id] = {
             "query": query_str,

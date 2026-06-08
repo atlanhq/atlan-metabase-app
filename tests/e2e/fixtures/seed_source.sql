@@ -57,10 +57,10 @@ CREATE TABLE IF NOT EXISTS daily_summary (
 
 -- Minimal data so the source is non-empty and the Metabase sync finds rows.
 INSERT INTO customers (customer_name, email, country, segment) VALUES
-    ('Acme Corp',     'ops@acme.com',     'US', 'enterprise'),
-    ('Beta LLC',      'admin@beta.com',   'UK', 'midmarket'),
-    ('Gamma Holdings','info@gamma.io',    'IN', 'enterprise'),
-    ('Delta Co',      'team@delta.com',   'US', 'smb');
+    ('Customer A',    'ops@example.com',     'US', 'enterprise'),
+    ('Customer B',    'admin@example.com',   'UK', 'midmarket'),
+    ('Customer C',    'info@example.org',    'IN', 'enterprise'),
+    ('Customer D',    'team@example.net',    'US', 'smb');
 
 INSERT INTO orders (customer_id, order_total, status) VALUES
     (1, 1000.00, 'shipped'),
