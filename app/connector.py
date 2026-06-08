@@ -3,10 +3,9 @@
 Architecture mirrors ``atlan-openapi-app``: one ``App`` subclass with one
 ``async def run()`` override and a flat fan-out of ``@task`` methods.
 
-The platform (platform-packages) dispatches Metabase as **one** Argo
-workflow instance with extract→publish as nested DAG nodes (not two
-separate workflow submissions), so a single entrypoint matches the platform
-shape exactly. The previous two-``@entrypoint`` shape (extract_metadata,
+The platform dispatches Metabase as **one** workflow instance with
+extract→publish as nested DAG nodes (not two separate workflow submissions),
+so a single entrypoint matches the platform shape exactly. The previous two-``@entrypoint`` shape (extract_metadata,
 transform_metadata) is replaced by inline orchestration inside ``run()``.
 
 The ``MetabaseHandler`` (imported below to register it for the SDK)

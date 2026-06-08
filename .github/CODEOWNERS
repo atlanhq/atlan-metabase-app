@@ -1,8 +1,3 @@
-# Owners inferred from top git contributors (active in last 90 days).
-# Please edit — adjust scope, add path-specific rules, or remove ex-members.
-#
-# References:
-#   - About code owners: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
-#   - Rollout context: atlanhq/INTERNAL-REPO INTERNAL-TICKET (connector repo health audit)
-
-* @vaibhavatlan @cmgrote
+# Default owners for every file in this repo.
+# Replace with the actual GitHub team that maintains the connector.
+*       @vaibhavatlan
