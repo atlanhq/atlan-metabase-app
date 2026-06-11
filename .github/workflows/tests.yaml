@@ -96,59 +96,17 @@ jobs:
         if: github.event.inputs.distinct_id != ''
         run: echo "Dispatched; SDK ref=${{ github.event.inputs.application_sdk_ref }}"
 
-      # Explicit checkout so the SDK pin step can modify uv.lock on disk
-      # before setup-deps runs its uv sync.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-
-      - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
-
-      - name: Pin application-sdk to dispatched ref
-        if: github.event.inputs.application_sdk_ref != ''
-        run: |
-          sdk_ref=${{ github.event.inputs.application_sdk_ref }}
-          uv add git+https://github.com/atlanhq/application-sdk --rev "$sdk_ref"
-
-      # We deliberately do NOT use the SDK's
-      # ``atlanhq/application-sdk/.github/actions/connector-integration-tests``
-      # composite here. That action's "Start app server" step always runs
-      # ``uv run python main.py &`` and waits for :8000 (regardless of the
-      # SDK >= 3.13 embedded-runtime detection that gates its Dapr/Temporal
-      # install). Our integration tests use ``application_sdk.dev.embedded_runtime``
-      # in conftest.py to boot Temporal in-process; we never bind :8000.
-      # Running main.py in parallel risks port/Temporal-namespace contention
-      # and adds 30-60s of dead wait. Just run pytest directly.
       - name: Run unit + integration tests
         id: tests
-        shell: bash
-        env:
-          ATLAN_LOCAL_DEVELOPMENT: "true"
-          ATLAN_APPLICATION_NAME: metabase
-        run: |
-          mkdir -p results
-          set +e
-          # ``--dist=loadfile`` pins each test file to a single xdist worker.
-          # tests/integration/test_metabase_workflow.py has one class-scoped
-          # fixture that boots Metabase + runs ONE workflow; loadfile keeps
-          # that fixture running ONCE total while unit tests fan out across
-          # the remaining workers in parallel. Matches atlan-mysql-app.
-          uv run --with pytest-xdist --with pytest-cov --with pytest-timeout pytest tests/unit/ tests/integration/ \
-            -n auto --dist=loadfile --tb=short \
-            --cov=app --cov-report=xml --cov-report=html --cov-report=term \
-            --cov-fail-under=0 \
-            --junitxml=results/junit.xml \
-            2>&1 | tee results/output.txt
-          exit_code=${PIPESTATUS[0]}
-          summary=$(grep -E '^=+ .* in [0-9.]+s' results/output.txt | tail -1 || echo "no summary")
-          echo "summary=${summary}" >> "$GITHUB_OUTPUT"
-          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
-          exit $exit_code
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
         with:
-          name: integration-test-results
-          path: results/
+          app-name: metabase
+          test-paths: "tests/unit/ tests/integration/"
+          pytest-args: >-
+            -n auto --dist=loadfile --tb=short
+            --cov=app --cov-report=xml --cov-report=html --cov-report=term
+            --cov-fail-under=0
+          application-sdk-ref: ${{ github.event.inputs.application_sdk_ref }}
 
   # ── Full-DAG e2e (system apps — extract→qi→publish→lineage-publish) ──
   # Submits a real AE workflow to a test tenant, lets the system apps run
