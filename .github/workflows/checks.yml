@@ -8,6 +8,7 @@ on:
     branches:
       - main
       - develop
+  merge_group:
 
 jobs:
   pre-commit:
