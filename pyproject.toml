@@ -17,6 +17,7 @@ dev = [
     "requests",
     "pyright>=1.1.403",
     "ruff>=0.12.7",
+    "atlan-application-sdk-conformance<=1.0.0",
 ]
 test = [
     "pytest>=8.3.3",
