@@ -190,7 +190,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.17.2"
+version = "3.17.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -212,9 +212,9 @@ dependencies = [
     { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/93/30/1a5ea93e8e5c37398fd4ccc733595dd239c1542dd78d854e8df3ced8bf52/atlan_application_sdk-3.17.2.tar.gz", hash = "sha256:cd9c66d96bd8d10e1ab24f6a7cf2b4cf0dd8f4a8ac3ee6904bb669248abe5869", size = 3347546, upload-time = "2026-06-15T23:19:13.282Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/99/d9/f910145a89159487330346ef14fbf19aa2dc3bfe3916803b802a40aa80e5/atlan_application_sdk-3.17.3.tar.gz", hash = "sha256:0e98d54c091592a8a4deaae0d634151c42a2c029f471c8a475b4fa0a0368880d", size = 3380358, upload-time = "2026-06-17T16:03:02.168Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/64/41dc455b6472754c4f84207b5218feef328676b7346b1a5275d9b745e614/atlan_application_sdk-3.17.2-py3-none-any.whl", hash = "sha256:8b1f805e3b2def925d45cd20b18b24047bd8074c3c06b336187d5e9323a86c13", size = 842223, upload-time = "2026-06-15T23:19:11.767Z" },
+    { url = "https://files.pythonhosted.org/packages/16/92/f68e1b01f3aa968a8197fa207fc1ece047ee990e89d667042a73bec8272d/atlan_application_sdk-3.17.3-py3-none-any.whl", hash = "sha256:4d4072e03ad1a3ef94d89ee9dd5c7f4340a9e44556be55dbc47d1cd5f2d5e202", size = 847967, upload-time = "2026-06-17T16:03:04.755Z" },
 ]
 
 [package.optional-dependencies]
@@ -417,11 +417,11 @@ wheels = [
 
 [[package]]
 name = "certifi"
-version = "2026.5.20"
+version = "2026.6.17"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f3/ce/ee2ecad540810a79593028e88299baeae54d346cc7a0d94b6199988b89b1/certifi-2026.5.20.tar.gz", hash = "sha256:69dea482ab64caa7b9f6aba1c6bf48bb6a5448d1c0f1b17ab42ad8c763a5344d", size = 135422, upload-time = "2026-05-20T11:46:50.073Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/c7/424b75da314c1045981bd9777432fad05a9e0c69daa4ed7e308bbaffe405/certifi-2026.6.17.tar.gz", hash = "sha256:024c88eeec92ca068db80f02b8b07c9cef7b9fe261d1d535abfd5abd6f6af432", size = 134594, upload-time = "2026-06-17T10:31:07.894Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/8c/57e832b7af6d7c5abe66eb3fbe3a3a32f4d11ea23a1aa7131371035be991/certifi-2026.5.20-py3-none-any.whl", hash = "sha256:3c52e209ba0a4ad7aebe60436a4ab349c39e1e602e8c134221e546902ad25897", size = 134134, upload-time = "2026-05-20T11:46:48.578Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/2f/c5464532e965badff2f4c4c1a3a83f5697f0d7c407ed0cda44aaa99bb451/certifi-2026.6.17-py3-none-any.whl", hash = "sha256:2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db", size = 133289, upload-time = "2026-06-17T10:31:06.348Z" },
 ]
 
 [[package]]
