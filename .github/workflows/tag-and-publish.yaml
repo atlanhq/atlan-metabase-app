@@ -1,11 +1,5 @@
 name: Release and Publish
 
-# Triggered when an auto-generated bump-version PR (label: `release`) is
-# merged. Delegates to the SDK's tag-and-release.yaml reusable workflow
-# which creates the git tag (e.g. v1.0.1) and the GitHub Release. The
-# Release published event then triggers build-and-publish.yaml which
-# pushes the new image to the marketplace.
-
 on:
   pull_request:
     types: [closed]
