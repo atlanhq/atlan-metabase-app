@@ -96,6 +96,7 @@ CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]
 # ---------------------------------------------------------------------------
 
 
+# conformance: ignore[P001] AE-side payload has nested connection.attributes.* dicts and variable inclusion/exclusion filters that cannot be statically bounded.
 class MetabaseInput(Input, allow_unbounded_fields=True):
     """Input for the ``extract_metadata`` @entrypoint.
 
@@ -183,6 +184,7 @@ class MetabaseOutput(Output):
 # ---------------------------------------------------------------------------
 
 
+# conformance: ignore[P001] connection field carries nested AE-side attributes threaded via JSONPath; shape is deployment-specific and cannot be statically bounded.
 class MetabaseLineageInput(Input, allow_unbounded_fields=True):
     """Input for the ``extract_lineage`` @entrypoint.
 
@@ -231,6 +233,7 @@ class MetabaseLineageOutput(Output):
 # ---------------------------------------------------------------------------
 
 
+# conformance: ignore[P001] inline_credentials carries arbitrary secret-store key-value pairs; shape is connector-configuration-specific and cannot be statically bounded.
 class FetchInput(Input, allow_unbounded_fields=True):
     """Input shared by all simple extract @tasks.
 
@@ -253,6 +256,7 @@ class FetchOutput(Output):
     output_file: FileReference | None = None
 
 
+# conformance: ignore[P001] inline_credentials carries arbitrary secret-store key-value pairs; shape is connector-configuration-specific and cannot be statically bounded.
 class FilterInput(Input, allow_unbounded_fields=True):
     """Input for the filter @task.
 
@@ -287,6 +291,7 @@ class FilterOutput(Output):
     total_records: int = 0
 
 
+# conformance: ignore[P001] inline_credentials carries arbitrary secret-store key-value pairs; shape is connector-configuration-specific and cannot be statically bounded.
 class FetchDetailInput(Input, allow_unbounded_fields=True):
     """Input for tasks that fetch per-entity detail from a filtered file."""
 
@@ -296,6 +301,7 @@ class FetchDetailInput(Input, allow_unbounded_fields=True):
     inline_credentials: dict[str, Any] = Field(default_factory=dict)
 
 
+# conformance: ignore[P001] inline_credentials carries arbitrary secret-store key-value pairs; shape is connector-configuration-specific and cannot be statically bounded.
 class ProcessInput(Input, allow_unbounded_fields=True):
     """Input for the ``process_metabaseprocess`` @task.
 

@@ -20,11 +20,11 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from application_sdk.credentials.errors import CredentialRoutingError
-from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
 from application_sdk.errors import InvalidInputError
 from application_sdk.handler.contracts import HandlerCredential
+from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import ConfigDict
 
 if TYPE_CHECKING:
@@ -153,7 +153,10 @@ def build_credential_ref(
     try:
         return CredentialRef.resolve(input), {}
     except CredentialRoutingError as e:
-        logger.debug("No credential routing fields set, falling through to inline credentials: %s", e)
+        logger.debug(
+            "No credential routing fields set, falling through to inline credentials: %s",
+            e,
+        )
 
     inline: dict[str, Any] = {}
     creds = input.credentials
