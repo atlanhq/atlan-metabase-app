@@ -853,14 +853,21 @@ class MetabaseApp(App):
 
         # Download QI parsed-SQL output from the object store. The Pkl
         # contract threads ``view_lineage_input_prefix`` as a storage key
-        # (``$.extract.outputs.view_lineage_output_prefix``); iter_qi_records
-        # needs a local path. download() handles a missing prefix gracefully
-        # (returns an empty local dir, file_count=0).
+        # (``$.extract.outputs.view_lineage_output_prefix``) — the *bare*
+        # prefix that the QueryIntelligence node receives as its
+        # ``output_prefix``. In JSON output mode QI does NOT write to that
+        # bare prefix: it writes per-file ``<uuid>.json`` under a sibling
+        # ``<output_prefix>_staging/`` folder, and no longer consolidates
+        # them onto the bare prefix (QI dropped its postprocess merge step
+        # in atlan-query-intelligence-app@2db7c83, 2026-06-16). So read the
+        # ``_staging`` sibling — reading the bare prefix yields a 404.
+        # ``iter_qi_records`` rglobs ``*.json``, and download() handles a
+        # missing prefix gracefully (empty local dir, file_count=0) — QI may
+        # legitimately emit no output when there is no view-derived lineage.
         qi_local_path = ""
         if input.view_lineage_input_prefix:
-            dl = await self.download(
-                DownloadInput(storage_path=input.view_lineage_input_prefix)
-            )
+            staging_prefix = f"{input.view_lineage_input_prefix.rstrip('/')}_staging"
+            dl = await self.download(DownloadInput(storage_path=staging_prefix))
             qi_local_path = dl.ref.local_path or ""
 
         # File I/O (read QI NDJSON, write Process/ColumnProcess staging) is
