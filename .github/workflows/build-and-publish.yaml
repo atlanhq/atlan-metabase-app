@@ -1,24 +1,5 @@
 name: Build & Publish
 
-# CI/CD-managed via Global Marketplace.
-#
-# Marketplace publish is release-gated (matches atlan-mysql-app):
-#   - push to main:    builds the image but does NOT publish
-#   - release publish: builds the image AND publishes to marketplace,
-#                      tagged with the release name (e.g. v1.0.1)
-#   - workflow_dispatch: publishes only when `publish: true` is explicit
-#
-# The release-publish event is created by tag-and-publish.yaml after an
-# auto-bump-version PR (label `release`) is merged. release-gate.yaml
-# blocks that merge until a reviewer adds the `e2e` label, which fires
-# the full DAG e2e via the SDK's e2e-full-reusable workflow. Net effect:
-# nothing reaches the marketplace until the gated tests + reviewer
-# approval flow completes.
-#
-# All logic lives in the shared reusable workflow at
-# atlanhq/application-sdk/.github/workflows/build-and-publish-app.yaml@main —
-# this file only forwards inputs.
-
 on:
   push:
     branches: [main]
@@ -56,8 +37,5 @@ jobs:
       channel: ${{ inputs.channel || 'all' }}
       tenants: ${{ inputs.tenants || '' }}
       release_tag: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
-      # Block publish unless tests.yaml has passed on the publish SHA.
-      # If no successful run exists, the shared workflow dispatches it
-      # on the publish ref and waits before spending build minutes.
-      unit_tests_workflow_file: tests.yaml
+      unit_tests_workflow_file: "tests.yaml"
     secrets: inherit

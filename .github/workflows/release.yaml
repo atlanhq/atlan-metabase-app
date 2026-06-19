@@ -1,19 +1,5 @@
 name: Release Version Bump
 
-# After every merge to main (except auto-generated bump-version PRs),
-# delegates to the SDK's release-version-bump.yaml reusable workflow.
-# That workflow opens an automated PR which bumps `pyproject.toml`
-# version and appends a CHANGELOG.md entry generated from conventional
-# commit messages (feat: / fix: / chore: / etc.).
-#
-# The auto-bump PR is labeled `release`. Merging it triggers
-# tag-and-publish.yaml which creates the git tag + GitHub Release and
-# (downstream) the marketplace publish via build-and-publish.yaml.
-#
-# Branch protection should require:
-#   - "Tests / tests-passed" (unit + integration; e2e on label)
-#   - "Release Gate / Release Gate" (blocks release PRs missing `e2e` label)
-
 on:
   pull_request:
     types: [closed]

@@ -24,10 +24,13 @@ from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
 from application_sdk.errors import InvalidInputError
 from application_sdk.handler.contracts import HandlerCredential
+from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import ConfigDict
 
 if TYPE_CHECKING:
     from app.contracts import MetabaseInput
+
+logger = get_logger(__name__)
 
 
 class MetabaseCredential(BasicCredential, frozen=True):
@@ -149,8 +152,11 @@ def build_credential_ref(
     # should fall through to inline.
     try:
         return CredentialRef.resolve(input), {}
-    except CredentialRoutingError:
-        pass
+    except CredentialRoutingError as e:
+        logger.debug(
+            "No credential routing fields set, falling through to inline credentials: %s",
+            e,
+        )
 
     inline: dict[str, Any] = {}
     creds = input.credentials
