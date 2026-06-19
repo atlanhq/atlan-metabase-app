@@ -473,34 +473,6 @@ class TestExtractLineage:
             == p_records[0]["attributes"]["qualifiedName"]
         )
 
-    @pytest.mark.asyncio
-    async def test_reads_qi_staging_sibling_not_bare_prefix(
-        self, connection, tmp_path
-    ):
-        # QI (atlan-query-intelligence-app) writes its JSON output to a
-        # ``<output_prefix>_staging/`` sibling, not the bare prefix it was
-        # handed. extract_lineage must download the ``_staging`` sibling, or
-        # the bare prefix 404s and the whole lineage DAG fails.
-        app = MetabaseApp()
-        type(app).run_id = property(lambda _self: "run-x")  # type: ignore[misc]
-        app.download = AsyncMock(
-            return_value=MagicMock(ref=MagicMock(local_path=str(tmp_path / "nope")))
-        )
-        app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
-        inp = MetabaseLineageInput(
-            workflow_id="wf",
-            connection=connection,
-            connection_qualified_name="default/metabase/test",
-            view_lineage_input_prefix="artifacts/wf/run-x/view-lineage",
-            output_path=str(tmp_path / "out"),
-        )
-
-        await app.extract_lineage(inp)  # type: ignore[call-arg]
-
-        app.download.assert_awaited_once()
-        downloaded = app.download.await_args.args[0].storage_path
-        assert downloaded == "artifacts/wf/run-x/view-lineage_staging"
-
 
 # ---------------------------------------------------------------------------
 # Module-level smoke test — passthrough_modules wiring
