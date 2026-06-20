@@ -124,6 +124,7 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
         return MetabaseCredentialBody(
             name=f"default-{self.connector_short_name}-{self.run_id}-{attempt}",
+            host="",  # AGENT mode: host resolved from secret store at runtime
         )
 
     def _mustache_substitutions(self) -> MetabaseMustacheSubstitutions:
