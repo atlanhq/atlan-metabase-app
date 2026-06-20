@@ -145,14 +145,11 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         #     atlan-metabase-<agent-name> (matches the worker queue the
         #     compose overlay registers on via ATLAN_DEPLOYMENT_NAME).
         #
-        # Round-trip through the alias-keyed dict instead of constructing
-        # by field name — SDK 3.14's MustacheSubstitutions declares
-        # `connection` / `credential` with mustache-literal aliases
-        # (`{{connection}}`, `{{credential}}`) that pyright's pydantic
-        # synthesis treats as the only accepted kwargs, even though
-        # `populate_by_name=True`. Other connector-specific fields
-        # (include_collections, exclude_collections, preflight_check)
-        # fall through to their defaults.
+        # Round-trip through the alias-keyed dict for agent-json so the base
+        # class MustacheSubstitutions fields (connection, credential, etc.)
+        # are preserved. extraction-method is applied via model_copy after
+        # validation because the generated class types it as Literal["direct"]
+        # — model_copy skips re-validation, allowing "agent" through.
         base = super()._mustache_substitutions()
         agent = self.agent_spec()
         agent_json: dict | None = (
@@ -160,13 +157,12 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
             if agent is not None
             else None
         )
-        overrides = {
-            "{{extraction-method}}": self.mode.value,
-            "{{agent-json}}": agent_json,
-        }
-        return MetabaseMustacheSubstitutions.model_validate(
-            {**base.model_dump(by_alias=True), **overrides}
+        subs = MetabaseMustacheSubstitutions.model_validate(
+            {**base.model_dump(by_alias=True), "{{agent-json}}": agent_json}
         )
+        # model_copy skips re-validation — needed because the generated
+        # extraction_method is Literal["direct"] but AGENT mode sends "agent"
+        return subs.model_copy(update={"extraction_method": self.mode.value})
 
     def _build_ae_payload(self, slug: str) -> dict:
         # SDK 3.14's build_ae_payload emits only the {{...}} mustache params
