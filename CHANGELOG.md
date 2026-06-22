@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.1 (June 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.0.0...v2.0.1
+
+### Bug Fixes
+
+- read QI output from _staging sibling prefix (#113) (by @vaibhavatlan in [f80f8b8](https://github.com/atlanhq/atlan-metabase-app/commit/f80f8b8))
+
+
 ## v2.0.0 (June 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v1.0.0...v2.0.0
