@@ -38,7 +38,7 @@ credentialConnectorType = "rest"
 appId = "019e3a59-89d2-7310-acea-e8eae494483f"
 visibility = "public"
 buildTag = "v1"
-selfDeployedRuntime = false
+selfDeployedRuntime = true
 
 // Extra atlan.yaml keys the typed App.pkl doesn't model yet (dockerfile
 // path, argo_package_names). Deep-merged on top of the generated atlan.yaml.
