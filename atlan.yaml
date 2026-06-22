@@ -8,7 +8,7 @@ execution_mode: native
 icon_url: https://assets.atlan.com/assets/metabase.svg
 visibility: public
 build_tag: v1
-self_deployed_runtime: false
+self_deployed_runtime: true
 deploy:
   execution_mode: native
   splitDeploymentEnabled: false
