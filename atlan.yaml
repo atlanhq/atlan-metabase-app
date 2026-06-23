@@ -11,7 +11,7 @@ build_tag: v1
 self_deployed_runtime: true
 deploy:
   execution_mode: native
-  splitDeploymentEnabled: false
+  splitDeploymentEnabled: true
   replicaCount: 1
   dapr:
     objectstore: true
