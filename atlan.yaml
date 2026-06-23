@@ -22,7 +22,10 @@ deploy:
     configurationstore: false
     lock: false
   keda:
-    enabled: false
+    enabled: true
+    minReplicaCount: 0
+    temporal:
+      targetQueueSize: 5
   resources:
     requests:
       cpu: 100m
