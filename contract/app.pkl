@@ -52,13 +52,16 @@ deploy {
   executionMode = "native"
   replicaCount = 1
 
-  // Toolkit 0.10.4 defaults flipped both of these to true. Pin them
-  // off explicitly so the bump is a no-op for deploy behaviour — KEDA
-  // scale-to-zero is a separate decision and splitDeployment changes
-  // the worker/HTTP container topology.
+  // splitDeployment pinned off explicitly — it changes the worker/HTTP
+  // container topology and is a separate decision from KEDA. (Toolkit
+  // 0.10.4 flipped its default to true; keep the bump a no-op here.)
   splitDeployment = false
+
+  // KEDA scale-to-zero enabled, matching the other connector apps
+  // (snowflake, dbt, postgres, redshift, …). Chart defaults handle the
+  // rest: minReplicaCount 0, maxReplicaCount 10, targetQueueSize 5.
   keda {
-    enabled = false
+    enabled = true
   }
 
   // Dapr sidecars enabled. secretstore is needed for credential
