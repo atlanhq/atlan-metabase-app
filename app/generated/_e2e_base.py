@@ -10,8 +10,9 @@ class MetabaseGeneratedE2EBase(BaseE2ETest):
     connector_short_name = "metabase"
     # Metabase connections live under default/metabase/ in the Atlan catalog.
     connection_type = AtlanConnectorType.METABASE.value
-    # Atlas connection category for BI-type connectors.
-    connection_category = "BI"
+    # Atlas connection category for BI-type connectors — must match
+    # pyatlan.model.enums.AtlanConnectionCategory.BI.value ("bi", lowercase).
+    connection_category = "bi"
     argo_package_name = "@atlan/metabase"
     argo_template_name = "atlan-metabase"
     app_service_url = "http://metabase.metabase-app.svc.cluster.local"
