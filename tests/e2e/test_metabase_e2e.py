@@ -42,7 +42,7 @@ try:
     )
 
     from app.generated._e2e_base import MetabaseGeneratedE2EBase  # noqa: E402
-    from app.generated._e2e_credential import MetabaseCredentialBody  # noqa: E402
+    from app.generated._e2e_credential import MetabaseAgentCredentialBody  # noqa: E402
     from app.generated._e2e_substitutions import (  # noqa: E402
         MetabaseMustacheSubstitutions,
     )
@@ -104,7 +104,7 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
             connector_config_name="atlan-connectors-metabase",
         )
 
-    def _credential_body(self) -> MetabaseCredentialBody:
+    def _credential_body(self) -> MetabaseAgentCredentialBody:
         # AGENT mode: lightweight body — no host/username/password. Those
         # live in the Dapr secret store and are resolved at runtime via
         # agent-json ref keys. Sending the DIRECT-mode shape causes the
@@ -122,7 +122,7 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         # Falls back to ``1`` for local invocations where the env var is
         # unset.
         attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
-        return MetabaseCredentialBody(
+        return MetabaseAgentCredentialBody(
             name=f"default-{self.connector_short_name}-{self.run_id}-{attempt}",
         )
 
@@ -162,6 +162,10 @@ class TestMetabaseE2E(MetabaseGeneratedE2EBase):
         overrides = {
             "{{extraction-method}}": self.mode.value,
             "{{agent-json}}": agent_json,
+            # APITree substitution default is None; send {} so the worker's
+            # non-optional include/exclude dict inputs validate (avoid JSON null).
+            "{{include-collections}}": {},
+            "{{exclude-collections}}": {},
         }
         return MetabaseMustacheSubstitutions.model_validate(
             {**base.model_dump(by_alias=True), **overrides}
