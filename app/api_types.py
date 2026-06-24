@@ -1,4 +1,4 @@
-"""Typed intermediate records bridging raw Metabase API dicts and pyatlan assets.
+"""Typed intermediate records bridging raw Metabase API dicts and pyatlan assets. 
 
 The extract/process layer hands the transform layer dictionaries directly
 loaded from Metabase API responses (plus a few enrichment fields appended
