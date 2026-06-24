@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.1.0 (June 24, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.0.1...v2.1.0
+
+### Features
+
+- enable KEDA scale-to-zero for metabase worker (via contract) (#129) (by @vaibhavatlan in [e35a9ca](https://github.com/atlanhq/atlan-metabase-app/commit/e35a9ca))
+
+
 ## v2.0.1 (June 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.0.0...v2.0.1
