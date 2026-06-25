@@ -190,7 +190,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.19.0"
+version = "3.20.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -212,9 +212,9 @@ dependencies = [
     { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/67/3c/81c8c6d3666ccc1731677edbd14b00c808f6fdb0380f4444a560653e8f8f/atlan_application_sdk-3.19.0.tar.gz", hash = "sha256:7fa7caa1e09679b1d045c51edad00f4e81361e9cfcae1d4ab743332673e362af", size = 3610654, upload-time = "2026-06-22T18:19:02.057Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/95/85/e7210d70421741878ef0e05ef168959357f6024705f010f10b0bf9b34e3f/atlan_application_sdk-3.20.0.tar.gz", hash = "sha256:311cba51b17d984ddb469a691ca5f32e41ae805f0f2511a2ff8fa669295c858f", size = 3679970, upload-time = "2026-06-25T01:10:08.707Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/6b/c7344f66f5f88f7e4aad32039f8ff66153b7892947c15006637226dfbf22/atlan_application_sdk-3.19.0-py3-none-any.whl", hash = "sha256:6daba8f1e16ed786af10bffd38653bdd642c271fed4a3e69fade5b37a0fd7d28", size = 858438, upload-time = "2026-06-22T18:19:00.21Z" },
+    { url = "https://files.pythonhosted.org/packages/46/e5/1303ad64bad6f7ac7bb82cff5b334faf7da26307337b101b5d89d6ae0766/atlan_application_sdk-3.20.0-py3-none-any.whl", hash = "sha256:005f01d1464e87238c152aed3dfcbb5c90b2e5cca51833bd8cb6b22666490eef", size = 855160, upload-time = "2026-06-25T01:10:06.987Z" },
 ]
 
 [package.optional-dependencies]
@@ -237,16 +237,16 @@ workflows = [
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.6.0"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jinja2" },
     { name = "jsonschema" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/b5/15f23d6751fe2b648b6dae7574a920aa0f1100e8c8ab1cf75e829c7ef161/atlan_application_sdk_conformance-0.6.0.tar.gz", hash = "sha256:a5820bdf2b85510749631d219ea20ec04e65d8089126d14c7e34675590addcb6", size = 501643, upload-time = "2026-06-22T16:33:21.615Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/45/b1/a5ab7fe5b0aab0a213803015c2c95e9bd1b9289adaa963bbb09a251f1d0f/atlan_application_sdk_conformance-0.7.0.tar.gz", hash = "sha256:044b3ad392c447ad5965841c2110c219d402a2052efc27077255b918fad1691d", size = 541422, upload-time = "2026-06-25T00:49:16.454Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/bc/2fbb61838f1aa32120d70908c2fcc8c1d8d14d7b9d55fa13168c94fd3830/atlan_application_sdk_conformance-0.6.0-py3-none-any.whl", hash = "sha256:ebbb25635890b6391d520c42533e0ed9a8de793c32ea8c36250b1783576a5128", size = 330638, upload-time = "2026-06-22T16:33:20.215Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/2f/6d0d7e3f40206fdb1668054545cfb978b4ba5d456079bb8524a9bf272289/atlan_application_sdk_conformance-0.7.0-py3-none-any.whl", hash = "sha256:734c3240ac4fc50befe8e2063c730dc4b725eacf58a87d330adb8d75a2b66612", size = 366894, upload-time = "2026-06-25T00:49:15.045Z" },
 ]
 
 [[package]]
@@ -2624,15 +2624,15 @@ crypto = [
 
 [[package]]
 name = "pyright"
-version = "1.1.410"
+version = "1.1.411"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "nodeenv" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/10/53/e4d8ea1391bd4355231be6f91bf239479aa0014260ed3fb5526eeb12a1f2/pyright-1.1.410.tar.gz", hash = "sha256:07a073b8ba6749826773c1269773efa11b93440d9a6aa60419d9a3172d6dc488", size = 4062013, upload-time = "2026-06-01T17:35:48.894Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/ab/265f7dc69d28113ebba19092e57b075f41543b2ed048429c5f56e2b88eac/pyright-1.1.411.tar.gz", hash = "sha256:d885a0551f2e763b089a02702174e7f4ba77548cddabc972ab86d1f7f1b0f998", size = 4112861, upload-time = "2026-06-25T02:14:06.37Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/33/288b5868fa00846dacf249633719d747893e54aebd196b9968ac1878a5d3/pyright-1.1.410-py3-none-any.whl", hash = "sha256:5e961bed37cacf96b3f7cd7b1da39b350a9239aa2e69138d0e88f728cfaf296c", size = 6082448, upload-time = "2026-06-01T17:35:46.387Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/49/385be530a6a5b78d1cbcd5c2e38debc8959a2fc6bdb716f4e581002979fc/pyright-1.1.411-py3-none-any.whl", hash = "sha256:dc7c72a8e2700c55baa127554040e067041ea53ccfd50bf96308cc4291c7d5d9", size = 6181526, upload-time = "2026-06-25T02:14:04.691Z" },
 ]
 
 [[package]]
