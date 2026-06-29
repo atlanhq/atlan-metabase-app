@@ -55,10 +55,11 @@ table_name}`` shape the ARS builder consumes.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+
+import orjson
 
 
 def _unquote_ident(value: str) -> str:
@@ -258,8 +259,8 @@ def iter_qi_records(input_path: str | Path) -> Iterator[dict[str, Any]]:
             if not line:
                 continue
             try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
+                yield orjson.loads(line)
+            except orjson.JSONDecodeError:
                 continue
 
 
@@ -330,8 +331,8 @@ def parse_qi_record(
     parsed = record.get("gudusoft") or record.get("PARSED_DATA") or {}
     if isinstance(parsed, str):
         try:
-            parsed = json.loads(parsed)
-        except json.JSONDecodeError:
+            parsed = orjson.loads(parsed)
+        except orjson.JSONDecodeError:
             parsed = {}
     if not isinstance(parsed, dict):
         parsed = {}

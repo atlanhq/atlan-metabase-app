@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import html
-import json
 import os
 import re
 from datetime import datetime, timezone
 from typing import Any
+
+import orjson
 
 
 def strip_html_tags(text: str | None) -> str | None:
@@ -48,7 +49,7 @@ def serialize_complex_columns(record: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in record.items():
         if isinstance(value, (dict, list)):
-            result[key] = json.dumps(value)
+            result[key] = orjson.dumps(value).decode()
         else:
             result[key] = value
     return result
@@ -64,7 +65,7 @@ def write_jsonl(local_path: str, records: list[dict[str, Any]]) -> None:
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
     with open(local_path, "w", encoding="utf-8") as fh:
         for record in records:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            fh.write(orjson.dumps(record).decode() + "\n")
 
 
 def read_jsonl(local_path: str | None) -> list[dict[str, Any]]:
@@ -83,7 +84,7 @@ def read_jsonl(local_path: str | None) -> list[dict[str, Any]]:
             if not line:
                 continue
             try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
+                records.append(orjson.loads(line))
+            except orjson.JSONDecodeError:
                 continue
     return records

@@ -16,9 +16,9 @@ shape the v2 transformer produced, so this is a drop-in swap.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
+import orjson
 from pyatlan_v9.model.assets import (
     BIProcess,
     MetabaseCollection,
@@ -339,7 +339,7 @@ def serialize_entity(
     (e.g. Atlan custom attributes not modelled in pyatlan_v9) are merged
     into ``attributes``.
     """
-    nested = json.loads(asset.to_nested_bytes().decode("utf-8"))
+    nested = orjson.loads(asset.to_nested_bytes())
     attrs = dict(nested.get("attributes") or {})
     if extra_attributes:
         attrs.update(extra_attributes)

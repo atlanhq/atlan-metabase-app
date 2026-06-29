@@ -15,11 +15,11 @@ serves the platform endpoints: ``/workflows/v1/auth``,
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from typing import Any
 
+import orjson
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -530,7 +530,7 @@ class MetabaseApp(App):
                 entity = _map_one_record(typename, raw, ctx)
                 if entity is None:
                     continue
-                fh.write(json.dumps(entity, ensure_ascii=False) + "\n")
+                fh.write(orjson.dumps(entity).decode() + "\n")
                 count += 1
 
         logger.info("transform_data complete: typename=%s, records=%d", typename, count)

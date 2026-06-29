@@ -16,9 +16,9 @@ secret store). Three primitives:
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
+import orjson
 from application_sdk.credentials.errors import CredentialRoutingError
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
@@ -100,8 +100,8 @@ def parse_metabase_credentials(
     extra = raw.get("extra") or {}
     if isinstance(extra, str):
         try:
-            extra = json.loads(extra) or {}
-        except (json.JSONDecodeError, ValueError):
+            extra = orjson.loads(extra) or {}
+        except (orjson.JSONDecodeError, ValueError):
             extra = {}
     if isinstance(extra, dict):
         for k, v in extra.items():

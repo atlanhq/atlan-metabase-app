@@ -9,9 +9,9 @@ Legacy reference:
     marketplace_scripts/marketplace_scripts/metabase/filter.py
 """
 
-import json
 from typing import Any, Dict, List, Set
 
+import orjson
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -34,8 +34,8 @@ def parse_filter_arg(value: Any) -> Dict:
         return value
     if isinstance(value, str):
         try:
-            return json.loads(value)
-        except (json.JSONDecodeError, ValueError):
+            return orjson.loads(value)
+        except (orjson.JSONDecodeError, ValueError):
             return {}
     return {}
 

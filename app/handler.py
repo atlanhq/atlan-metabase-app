@@ -11,9 +11,9 @@ The SDK auto-serves ``/workflows/v1/configmap/<id>`` from ``app/generated/``
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
+import orjson
 from application_sdk.errors import DependencyUnavailableError, InvalidInputError
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
@@ -228,8 +228,8 @@ class MetabaseHandler(Handler):
                 return value
             if isinstance(value, str):
                 try:
-                    parsed = json.loads(value)
-                except (json.JSONDecodeError, ValueError):
+                    parsed = orjson.loads(value)
+                except (orjson.JSONDecodeError, ValueError):
                     return {}
                 return parsed if isinstance(parsed, dict) else {}
             return {}
