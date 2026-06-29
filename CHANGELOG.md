@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.1.1 (June 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.1.0...v2.1.1
+
+### Bug Fixes
+
+- adopt toolkit 0.16.0 e2e codegen — generate everything, drop hand-written overrides (#138) (by @vaibhavatlan in [58b4eab](https://github.com/atlanhq/atlan-metabase-app/commit/58b4eab))
+
+
 ## v2.1.0 (June 24, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.0.1...v2.1.0
