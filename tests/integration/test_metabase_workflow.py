@@ -90,6 +90,12 @@ def _read_transformed_jsonl(output_path: str, typename: str) -> list[dict]:
     return [json.loads(line) for line in f.read_text().splitlines() if line.strip()]
 
 
+# Every test in this module drives the full workflow through embedded Temporal +
+# a Metabase testcontainer, so the whole file is integration-only — deselected
+# from the unit job and selected by the integration job (conformance T001).
+pytestmark = pytest.mark.integration
+
+
 class TestMetabaseExtraction:
     """Full ``extract_metadata`` workflow via embedded Temporal + testcontainer.
 

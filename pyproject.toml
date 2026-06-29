@@ -95,6 +95,7 @@ build-backend = "hatchling.build"
 # get_logger() adapter bridges %-style to loguru via _format_printf_args,
 # making %-style the *correct* pattern in this repo.
 select = [
+    "G001",   # logging-string-format (logging stmt uses str.format) — conformance L021
     "G004",   # logging-f-string
     "G003",   # logging-string-concat
     "T201",   # print statement
@@ -146,6 +147,7 @@ timeout = 3000
 timeout_method = "thread"
 markers = [
     "e2e: tenant-hitting end-to-end test (requires ATLAN_BASE_URL + ATLAN_API_KEY)",
+    "integration: workflow-through-embedded-Temporal test (deselected from the unit job)",
 ]
 
 [tool.coverage.run]
