@@ -811,7 +811,7 @@ class MetabaseApp(App):
     # extract_lineage — second @entrypoint
     # ------------------------------------------------------------------
 
-    @entrypoint
+    @entrypoint  # conformance: ignore[P016] extract_lineage is being declared as an explicit contract entrypoint in PR #143 (BLDX-1342); the single→multi entrypoint contract restructure is tracked there.
     async def extract_lineage(
         self, input: MetabaseLineageInput
     ) -> MetabaseLineageOutput:
