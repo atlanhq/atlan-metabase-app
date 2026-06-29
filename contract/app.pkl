@@ -11,23 +11,6 @@ import "@app-contract-toolkit/Widgets.pkl"
 
 emitAppYaml = true
 
-// Suppress the auto-generated `entrypoints:` block in atlan.yaml.
-//
-// We have two @entrypoint methods on MetabaseApp (extract_metadata +
-// extract_lineage) but the marketplace treats this as ONE connector card
-// (single setup form, single workflow type the user invokes from the UI;
-// extract_lineage is invoked downstream by the QI/lineage-publish nodes
-// in the DAG, not directly by the user).
-//
-// Hightouch follows the same shape — 2 @entrypoint methods in code but
-// no `entrypoints:` block in atlan.yaml. That's what makes
-// local-marketplace register it as single-entrypoint and the frontend
-// build URLs WITHOUT `?entrypoint=`, which keeps the platform in its
-// URL-derivation branch (serves `app/generated/<name>.json`) instead of
-// the multi-entrypoint branch (which forwards as `<name>-<entrypoint>.json`
-// and 404s on us today).
-emitEntrypoints = false
-
 // ---- App identity ----
 
 name = "metabase"
@@ -40,12 +23,35 @@ appId = "019e3a59-89d2-7310-acea-e8eae494483f"
 visibility = "public"
 buildTag = "v1"
 selfDeployedRuntime = true
+emitDeploy = true
 
 // Extra atlan.yaml keys the typed App.pkl doesn't model yet (dockerfile
 // path, argo_package_names). Deep-merged on top of the generated atlan.yaml.
 atlanYamlOverrides {
   ["dockerfile"] = "./Dockerfile"
   ["argo_package_names"] = new Listing { "@atlan/metabase" }
+}
+
+// ---- Entrypoints ----
+//
+// Metabase has two @entrypoint methods, but only one is a user-facing card.
+// extract_metadata is the setup-form entrypoint (marketplace card + configmap).
+// extract_lineage is dispatched by the DAG downstream; it is routable via
+// ?entrypoint= but must NOT appear as a second marketplace card.
+entrypoints {
+  new Entrypoint {
+    name = "metabase"
+    displayName = "Metabase Assets"
+    iconUrl = "https://assets.atlan.com/assets/metabase.svg"
+    type = "connector"
+    source = "metabase"
+    marketplaceCard = true
+  }
+  new Entrypoint {
+    name = "extract-lineage"
+    displayName = "Extract Lineage"
+    marketplaceCard = false
+  }
 }
 
 // ---- Deployment config (rendered into atlan.yaml's deploy: block) -----
