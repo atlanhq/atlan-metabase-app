@@ -1,14 +1,15 @@
 // Toolkit 0.10.0 consolidated NativeApp.pkl → App.pkl. Widgets are now
 // re-exported under `Widgets.*` (no separate Config import needed). App.pkl
 // also emits `atlan.yaml` from the typed `deploy { ... }` block, so the
-// repo-root atlan.yaml is contract-generated. `app.yaml` is disabled
-// (matches hightouch's pattern — it's a toolkit shim with no consumers).
+// repo-root atlan.yaml is contract-generated. `app.yaml` is also
+// contract-generated (app_name / app_image / app_port) so it stays in sync
+// with the toolkit instead of being a hand-committed orphan.
 amends "@app-contract-toolkit/App.pkl"
 
 import "@app-contract-toolkit/Connectors.pkl"
 import "@app-contract-toolkit/Widgets.pkl"
 
-emitAppYaml = false
+emitAppYaml = true
 
 // Suppress the auto-generated `entrypoints:` block in atlan.yaml.
 //
