@@ -90,6 +90,8 @@ def read_jsonl(local_path: str | None) -> list[dict[str, Any]]:
             try:
                 records.append(orjson.loads(line))
             except orjson.JSONDecodeError:
-                logger.debug("Skipping unparseable JSONL line in %s", local_path)
+                logger.warning(
+                    "Skipping unparseable JSONL line in %s", local_path, exc_info=True
+                )
                 continue
     return records

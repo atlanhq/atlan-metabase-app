@@ -264,7 +264,7 @@ def iter_qi_records(input_path: str | Path) -> Iterator[dict[str, Any]]:
             try:
                 yield orjson.loads(line)
             except orjson.JSONDecodeError:
-                logger.debug("Skipping unparseable QI line in %s", f, exc_info=True)
+                logger.warning("Skipping unparseable QI line in %s", f, exc_info=True)
                 continue
 
 
