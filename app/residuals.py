@@ -22,7 +22,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import orjson
-
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -31,9 +30,7 @@ RESIDUAL_DIR = "residual"
 RESIDUAL_FAILURES_FILE = "failures.jsonl"
 
 
-def record_residual_failure(
-    output_path: str, category: str, **detail: Any
-) -> None:
+def record_residual_failure(output_path: str, category: str, **detail: Any) -> None:
     """Append one JSONL record describing a tolerated (non-fatal) failure.
 
     Best-effort: a failure to write the residual record must never itself
