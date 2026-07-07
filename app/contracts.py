@@ -16,9 +16,9 @@ accepts.
 
 from __future__ import annotations
 
-import json
 from typing import Annotated, Any
 
+import orjson
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
@@ -59,8 +59,13 @@ def _coerce_collection_filter(value: Any) -> Any:
             )
             return {}
         try:
-            parsed = json.loads(stripped)
-        except json.JSONDecodeError:
+            parsed = orjson.loads(stripped)
+        except orjson.JSONDecodeError:
+            _logger.warning(
+                "Collection filter %r is not valid JSON; passing through as-is",
+                value,
+                exc_info=True,
+            )
             return value
         if isinstance(parsed, dict):
             return parsed
@@ -92,11 +97,25 @@ CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]
 
 
 # ---------------------------------------------------------------------------
+# Bounded credential-bag shapes — inline/local-dev credential channels carry
+# a handful of scalar key-value pairs (host, port, username, password, …),
+# never hundreds+.  500 keys / 50 list entries is comfortably above any real
+# credential shape while still satisfying the SDK payload-safety validator
+# (a bare ``dict[str, Any]`` is unconditionally forbidden — ``Any`` itself is
+# rejected regardless of MaxItems — so the value type is narrowed to the
+# scalar types a credential field actually holds).
+# ---------------------------------------------------------------------------
+CredentialValue = str | int | bool | None
+BoundedCredentialDict = Annotated[dict[str, CredentialValue], MaxItems(500)]
+BoundedCredentialList = Annotated[list[BoundedCredentialDict], MaxItems(50)]
+
+
+# ---------------------------------------------------------------------------
 # App-level: single run() entrypoint
 # ---------------------------------------------------------------------------
 
 
-# conformance: ignore[P001] AE-side payload has nested connection.attributes.* dicts and variable inclusion/exclusion filters that cannot be statically bounded.
+# conformance: ignore[P001] 'credentials' is an entrypoint field (B005-guarded) — narrowing its dict value type away from Any to satisfy payload-safety bounding would be a breaking contract-type change; see BoundedCredentialDict's docstring note.
 class MetabaseInput(Input, allow_unbounded_fields=True):
     """Input for the ``extract_metadata`` @entrypoint.
 
@@ -109,9 +128,15 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
     is re-run against a pre-existing ``processed/`` tree (e.g. for
     debugging); when empty it defaults to ``output_path``.
 
-    ``allow_unbounded_fields`` is required because the AE-side payload
-    contains nested dicts (connection.attributes.*, include-collections.*)
-    that the payload-safety validator can't bound.
+    ``allow_unbounded_fields`` is required for ``credentials: list[dict[str,
+    Any]] | dict[str, Any]`` — this is an ``@entrypoint`` contract, so B005
+    (NonAdditiveContractChange) blocks narrowing an existing field's value
+    type away from ``Any`` even just to satisfy payload-safety bounding
+    (``Any`` is unconditionally forbidden regardless of ``MaxItems``). Unlike
+    the ``@task``-only ``inline_credentials`` fields elsewhere in this module
+    (safe to bound — task contracts aren't B005-guarded), this field cannot
+    be narrowed in place; only a new, additively-added field could carry a
+    bounded type.
     """
 
     workflow_id: str = ""
@@ -184,8 +209,7 @@ class MetabaseOutput(Output):
 # ---------------------------------------------------------------------------
 
 
-# conformance: ignore[P001] connection field carries nested AE-side attributes threaded via JSONPath; shape is deployment-specific and cannot be statically bounded.
-class MetabaseLineageInput(Input, allow_unbounded_fields=True):
+class MetabaseLineageInput(Input):
     """Input for the ``extract_lineage`` @entrypoint.
 
     Reads the QueryIntelligence app's parsed-SQL output (NDJSON or parquet)
@@ -233,8 +257,7 @@ class MetabaseLineageOutput(Output):
 # ---------------------------------------------------------------------------
 
 
-# conformance: ignore[P001] inline_credentials carries arbitrary secret-store key-value pairs; shape is connector-configuration-specific and cannot be statically bounded.
-class FetchInput(Input, allow_unbounded_fields=True):
+class FetchInput(Input):
     """Input shared by all simple extract @tasks.
 
     Carries the credential ref (or inline credentials) so the task can
@@ -245,7 +268,7 @@ class FetchInput(Input, allow_unbounded_fields=True):
 
     output_path: str = ""
     credential_ref: CredentialRef | None = None
-    inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
 
 
 class FetchOutput(Output):
@@ -256,8 +279,7 @@ class FetchOutput(Output):
     output_file: FileReference | None = None
 
 
-# conformance: ignore[P001] inline_credentials carries arbitrary secret-store key-value pairs; shape is connector-configuration-specific and cannot be statically bounded.
-class FilterInput(Input, allow_unbounded_fields=True):
+class FilterInput(Input):
     """Input for the filter @task.
 
     Receives ``FileReference``s for each of the four raw entity files and
@@ -278,7 +300,7 @@ class FilterInput(Input, allow_unbounded_fields=True):
     questions_file: FileReference | None = None
     databases_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
 
 
 class FilterOutput(Output):
@@ -291,18 +313,16 @@ class FilterOutput(Output):
     total_records: int = 0
 
 
-# conformance: ignore[P001] inline_credentials carries arbitrary secret-store key-value pairs; shape is connector-configuration-specific and cannot be statically bounded.
-class FetchDetailInput(Input, allow_unbounded_fields=True):
+class FetchDetailInput(Input):
     """Input for tasks that fetch per-entity detail from a filtered file."""
 
     output_path: str = ""
     source_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
 
 
-# conformance: ignore[P001] inline_credentials carries arbitrary secret-store key-value pairs; shape is connector-configuration-specific and cannot be statically bounded.
-class ProcessInput(Input, allow_unbounded_fields=True):
+class ProcessInput(Input):
     """Input for the ``process_metabaseprocess`` @task.
 
     ``metabase_host`` is resolved inside the task itself via
@@ -317,7 +337,7 @@ class ProcessInput(Input, allow_unbounded_fields=True):
     dashboard_details_file: FileReference | None = None
     questions_filtered_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: dict[str, Any] = Field(default_factory=dict)
+    inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
     connection_qualified_name: str = ""
 
 

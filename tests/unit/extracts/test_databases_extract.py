@@ -1,7 +1,9 @@
 """Unit tests for app.extracts.databases."""
 
+import os
 from unittest.mock import AsyncMock, MagicMock
 
+import orjson
 import pytest
 
 from app.client import MetabaseApiClient
@@ -10,6 +12,14 @@ from app.extracts.databases import (
     fetch_databases_details,
     fetch_databases_summaries,
 )
+
+
+def _read_residual_failures(output_path):
+    path = os.path.join(output_path, "residual", "failures.jsonl")
+    if not os.path.isfile(path):
+        return []
+    with open(path, "rb") as fh:
+        return [orjson.loads(line) for line in fh if line.strip()]
 
 
 class TestFetchDatabasesSummaries:
@@ -26,7 +36,9 @@ class TestFetchDatabasesSummaries:
     # Success: response with 'data' key → unwrap and return
     # -------------------------------------------------------------------------
 
-    async def test_success_unwraps_data_key_and_returns_list(self, mock_client):
+    async def test_success_unwraps_data_key_and_returns_list(
+        self, mock_client, tmp_path
+    ):
         """Response with 'data' key is unwrapped; the inner list is returned."""
         mock_response = MagicMock()
         mock_response.is_success = True
@@ -38,26 +50,26 @@ class TestFetchDatabasesSummaries:
         }
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        result = await fetch_databases_summaries(mock_client)
+        result = await fetch_databases_summaries(mock_client, str(tmp_path))
 
         assert isinstance(result, list)
         assert len(result) == 2
         assert result[0]["id"] == 1
         assert result[1]["name"] == "Postgres"
 
-    async def test_success_calls_database_endpoint(self, mock_client):
+    async def test_success_calls_database_endpoint(self, mock_client, tmp_path):
         """The correct /api/database URL is requested."""
         mock_response = MagicMock()
         mock_response.is_success = True
         mock_response.json.return_value = {"data": []}
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        await fetch_databases_summaries(mock_client)
+        await fetch_databases_summaries(mock_client, str(tmp_path))
 
         called_url = mock_client.execute_http_get_request.call_args[1]["url"]
         assert "/api/database" in called_url
 
-    async def test_success_preserves_database_fields(self, mock_client):
+    async def test_success_preserves_database_fields(self, mock_client, tmp_path):
         """Fields in each database record are preserved intact."""
         mock_response = MagicMock()
         mock_response.is_success = True
@@ -74,7 +86,7 @@ class TestFetchDatabasesSummaries:
         }
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        result = await fetch_databases_summaries(mock_client)
+        result = await fetch_databases_summaries(mock_client, str(tmp_path))
 
         assert result[0]["engine"] == "bigquery-cloud-sdk"
         assert result[0]["native_permissions"] == "write"
@@ -83,24 +95,26 @@ class TestFetchDatabasesSummaries:
     # Missing 'data' key → return []
     # -------------------------------------------------------------------------
 
-    async def test_response_without_data_key_returns_empty_list(self, mock_client):
+    async def test_response_without_data_key_returns_empty_list(
+        self, mock_client, tmp_path
+    ):
         """Response without a 'data' key returns []."""
         mock_response = MagicMock()
         mock_response.is_success = True
         mock_response.json.return_value = {"other_key": "value"}
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        result = await fetch_databases_summaries(mock_client)
+        result = await fetch_databases_summaries(mock_client, str(tmp_path))
 
         assert result == []
 
-    async def test_empty_data_list_returns_empty_list(self, mock_client):
+    async def test_empty_data_list_returns_empty_list(self, mock_client, tmp_path):
         mock_response = MagicMock()
         mock_response.is_success = True
         mock_response.json.return_value = {"data": []}
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        result = await fetch_databases_summaries(mock_client)
+        result = await fetch_databases_summaries(mock_client, str(tmp_path))
 
         assert result == []
 
@@ -108,32 +122,46 @@ class TestFetchDatabasesSummaries:
     # Failure paths
     # -------------------------------------------------------------------------
 
-    async def test_non_200_returns_empty_list(self, mock_client):
+    async def test_non_200_returns_empty_list_and_records_residual(
+        self, mock_client, tmp_path
+    ):
         mock_response = MagicMock()
         mock_response.is_success = False
         mock_response.status_code = 500
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        result = await fetch_databases_summaries(mock_client)
+        result = await fetch_databases_summaries(mock_client, str(tmp_path))
 
         assert result == []
+        failures = _read_residual_failures(str(tmp_path))
+        assert len(failures) == 1
+        assert failures[0]["category"] == "databases_fetch_failed"
+        assert failures[0]["http_status"] == 500
 
-    async def test_401_response_returns_empty_list(self, mock_client):
+    async def test_401_response_returns_empty_list_and_records_residual(
+        self, mock_client, tmp_path
+    ):
         mock_response = MagicMock()
         mock_response.is_success = False
         mock_response.status_code = 401
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        result = await fetch_databases_summaries(mock_client)
+        result = await fetch_databases_summaries(mock_client, str(tmp_path))
 
         assert result == []
+        failures = _read_residual_failures(str(tmp_path))
+        assert len(failures) == 1
 
-    async def test_none_response_returns_empty_list(self, mock_client):
+    async def test_none_response_returns_empty_list_and_records_residual(
+        self, mock_client, tmp_path
+    ):
         mock_client.execute_http_get_request = AsyncMock(return_value=None)
 
-        result = await fetch_databases_summaries(mock_client)
+        result = await fetch_databases_summaries(mock_client, str(tmp_path))
 
         assert result == []
+        failures = _read_residual_failures(str(tmp_path))
+        assert len(failures) == 1
 
 
 class TestFetchDatabaseMetadata:
@@ -146,7 +174,7 @@ class TestFetchDatabaseMetadata:
         client.port = 443
         return client
 
-    async def test_success_returns_metadata_dict(self, mock_client):
+    async def test_success_returns_metadata_dict(self, mock_client, tmp_path):
         """Successful GET returns the metadata dict."""
         expected = {
             "id": 1,
@@ -158,41 +186,51 @@ class TestFetchDatabaseMetadata:
         mock_response.json.return_value = expected
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        result = await fetch_database_metadata(mock_client, 1)
+        result = await fetch_database_metadata(mock_client, 1, str(tmp_path))
 
         assert result is not None
         assert result["id"] == 1
         assert "tables" in result
 
-    async def test_success_calls_metadata_endpoint(self, mock_client):
+    async def test_success_calls_metadata_endpoint(self, mock_client, tmp_path):
         """The URL must contain /api/database/<id>/metadata."""
         mock_response = MagicMock()
         mock_response.is_success = True
         mock_response.json.return_value = {"id": 7}
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        await fetch_database_metadata(mock_client, 7)
+        await fetch_database_metadata(mock_client, 7, str(tmp_path))
 
         called_url = mock_client.execute_http_get_request.call_args[1]["url"]
         assert "/api/database/7/metadata" in called_url
 
-    async def test_non_200_returns_none(self, mock_client):
-        """Non-success response returns None (silent skip)."""
+    async def test_non_200_returns_none_and_records_residual(
+        self, mock_client, tmp_path
+    ):
+        """Non-success response returns None and records a residual failure."""
         mock_response = MagicMock()
         mock_response.is_success = False
         mock_response.status_code = 404
         mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
 
-        result = await fetch_database_metadata(mock_client, 99)
+        result = await fetch_database_metadata(mock_client, 99, str(tmp_path))
 
         assert result is None
+        failures = _read_residual_failures(str(tmp_path))
+        assert len(failures) == 1
+        assert failures[0]["category"] == "database_metadata_fetch_failed"
+        assert failures[0]["record_id"] == 99
 
-    async def test_none_response_returns_none(self, mock_client):
+    async def test_none_response_returns_none_and_records_residual(
+        self, mock_client, tmp_path
+    ):
         mock_client.execute_http_get_request = AsyncMock(return_value=None)
 
-        result = await fetch_database_metadata(mock_client, 1)
+        result = await fetch_database_metadata(mock_client, 1, str(tmp_path))
 
         assert result is None
+        failures = _read_residual_failures(str(tmp_path))
+        assert len(failures) == 1
 
 
 class TestFetchDatabasesDetails:
@@ -205,7 +243,7 @@ class TestFetchDatabasesDetails:
         client.port = 443
         return client
 
-    async def test_returns_metadata_for_each_summary(self, mock_client):
+    async def test_returns_metadata_for_each_summary(self, mock_client, tmp_path):
         """One metadata record is fetched per summary with an id."""
         summaries = [{"id": 1}, {"id": 2}]
 
@@ -223,26 +261,29 @@ class TestFetchDatabasesDetails:
 
         mock_client.execute_http_get_request = fake_get
 
-        result = await fetch_databases_details(mock_client, summaries)
+        result = await fetch_databases_details(mock_client, summaries, str(tmp_path))
 
         assert len(result) == 2
 
-    async def test_skips_summaries_without_id(self, mock_client):
+    async def test_skips_summaries_without_id(self, mock_client, tmp_path):
         """Summary records without 'id' are silently skipped."""
         summaries = [{"name": "No ID DB"}]
         mock_client.execute_http_get_request = AsyncMock()
 
-        result = await fetch_databases_details(mock_client, summaries)
+        result = await fetch_databases_details(mock_client, summaries, str(tmp_path))
 
         assert result == []
         mock_client.execute_http_get_request.assert_not_called()
 
-    async def test_empty_summaries_returns_empty_list(self, mock_client):
-        result = await fetch_databases_details(mock_client, [])
+    async def test_empty_summaries_returns_empty_list(self, mock_client, tmp_path):
+        result = await fetch_databases_details(mock_client, [], str(tmp_path))
         assert result == []
 
-    async def test_api_failure_for_one_db_skips_it(self, mock_client):
-        """API failure for a single database causes it to be silently skipped."""
+    async def test_api_failure_for_one_db_is_skipped_and_recorded(
+        self, mock_client, tmp_path
+    ):
+        """API failure for a single database is skipped (not aborted) and
+        recorded as a residual — the rest of the batch still completes."""
         summaries = [{"id": 1}, {"id": 2}]
 
         async def fake_get(url, **kwargs):
@@ -257,8 +298,11 @@ class TestFetchDatabasesDetails:
 
         mock_client.execute_http_get_request = fake_get
 
-        result = await fetch_databases_details(mock_client, summaries)
+        result = await fetch_databases_details(mock_client, summaries, str(tmp_path))
 
         # Only id=2 should be present
         assert len(result) == 1
         assert result[0]["id"] == 2
+        failures = _read_residual_failures(str(tmp_path))
+        assert len(failures) == 1
+        assert failures[0]["record_id"] == 1

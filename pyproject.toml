@@ -8,7 +8,6 @@ license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
     "atlan-application-sdk[iam-auth,pandas,tests,workflows]>=3.15.1,<4.0.0",
-    "poethepoet>=0.38.0",
 ]
 
 [dependency-groups]
@@ -18,6 +17,11 @@ dev = [
     "pyright>=1.1.403",
     "ruff>=0.12.7",
     "atlan-application-sdk-conformance<=1.0.0",
+    # Drives the `poe` task runner (local-dev tasks: generate, start-dapr,
+    # download-components, …). Not imported by app/ source, only invoked as
+    # a CLI, and not needed in the production image (Dockerfile installs
+    # with --no-dev).
+    "poethepoet>=0.38.0",
 ]
 test = [
     "pytest>=8.3.3",
@@ -45,34 +49,19 @@ start-temporal = "temporal server start-dev --db-filename /tmp/temporal.db"
 start-deps.shell = "poe start-dapr & poe start-temporal &"
 stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"
 
-# Fetch Dapr resource manifests (secretstore, statestore, objectstore, …) from
-# the application-sdk repo's components/ directory at the pinned ref. Required
+# Copy Dapr resource manifests (secretstore, statestore, objectstore, …) from
+# the installed atlan-application-sdk wheel's components/ directory. Required
 # by `atlan app run` and by every CI workflow that starts the local stack
-# (integration-tests, e2e). Matches the atlan-mssql-app v3
-# pattern. components/ is gitignored so each environment fetches a fresh copy.
+# (integration-tests, e2e). components/ is gitignored so each environment
+# copies a fresh set matching whatever SDK version is locked in uv.lock.
 [tool.poe.tasks.download-components]
 interpreter = "python"
-env = { SDK_VERSION = "v3.12.0" }
 shell = """
-import os, pathlib, requests
+import pathlib, shutil
+import application_sdk
 
-components_dir = pathlib.Path("components")
-components_dir.mkdir(exist_ok=True)
-
-headers = {}
-if token := os.getenv("GITHUB_TOKEN"):
-    headers["Authorization"] = f"Bearer {token}"
-
-api_url = "https://api.github.com/repos/atlanhq/application-sdk/contents/components"
-response = requests.get(api_url, params={"ref": os.getenv("SDK_VERSION")}, headers=headers)
-response.raise_for_status()
-
-for file_info in response.json():
-    if file_info["type"] == "file" and file_info["name"].endswith(".yaml"):
-        file_response = requests.get(file_info["download_url"], headers=headers)
-        file_response.raise_for_status()
-        (components_dir / file_info["name"]).write_text(file_response.text)
-        print(f"Downloaded: {file_info['name']}")
+src = pathlib.Path(application_sdk.__file__).parent / "components"
+shutil.copytree(src, "components", dirs_exist_ok=True)
 """
 
 [tool.hatch.build.targets.sdist]
@@ -95,6 +84,7 @@ build-backend = "hatchling.build"
 # get_logger() adapter bridges %-style to loguru via _format_printf_args,
 # making %-style the *correct* pattern in this repo.
 select = [
+    "G001",   # logging-string-format
     "G004",   # logging-f-string
     "G003",   # logging-string-concat
     "T201",   # print statement
@@ -146,6 +136,7 @@ timeout = 3000
 timeout_method = "thread"
 markers = [
     "e2e: tenant-hitting end-to-end test (requires ATLAN_BASE_URL + ATLAN_API_KEY)",
+    "integration: exercises external services/containers (e.g. testcontainers); deselected from the unit job",
 ]
 
 [tool.coverage.run]

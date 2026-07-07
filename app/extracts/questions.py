@@ -6,11 +6,14 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 from app.client import MetabaseApiClient
 from app.constants import MetabaseUrls
+from app.residuals import record_residual_failure
 
 logger = get_logger(__name__)
 
 
-async def fetch_questions_summaries(client: MetabaseApiClient) -> List[Dict]:
+async def fetch_questions_summaries(
+    client: MetabaseApiClient, output_path: str
+) -> List[Dict]:
     """Fetch all questions/cards from the Metabase API.
 
     Calls ``GET /api/card`` which returns a flat JSON array of card (question)
@@ -31,17 +34,26 @@ async def fetch_questions_summaries(client: MetabaseApiClient) -> List[Dict]:
 
     Args:
         client: Authenticated ``MetabaseApiClient`` instance.
+        output_path: Task-local staging directory — a failure is recorded to
+            ``<output_path>/residual/failures.jsonl`` for later review.
 
     Returns:
-        List of raw question/card dicts.  Returns ``[]`` on any failure.
+        List of raw question/card dicts.  Returns ``[]`` on failure — the
+        failure is recorded as a residual rather than raised (see
+        ``app/residuals.py``).
     """
     url = MetabaseUrls.card(client.host, client.port)
     response = await client.execute_http_get_request(url=url, timeout=60)
     if response is None or not response.is_success:
-        logger.warning(
-            "Failed to fetch questions: %s",
-            response.status_code if response else "No response",
+        status = response.status_code if response else "No response"
+        logger.warning("Failed to fetch questions: %s", status)
+        record_residual_failure(
+            output_path,
+            "questions_fetch_failed",
+            endpoint="/api/card",
+            http_status=status if isinstance(status, int) else None,
         )
+        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow.
         return []
     records = response.json()
     logger.info("Fetched %d question summaries", len(records))
@@ -49,7 +61,7 @@ async def fetch_questions_summaries(client: MetabaseApiClient) -> List[Dict]:
 
 
 async def fetch_question_queries(
-    client: MetabaseApiClient, questions: List[Dict]
+    client: MetabaseApiClient, questions: List[Dict], output_path: str
 ) -> List[Dict]:
     """Fetch the native SQL query for each question via POST to
     ``/api/dataset/native``.
@@ -58,8 +70,8 @@ async def fetch_question_queries(
 
     - Questions without a ``dataset_query`` field are silently skipped
       (``ignore=True`` equivalent).
-    - API failures for individual questions are silently skipped
-      (``FailureHandler.NONE`` equivalent).
+    - API failures for individual questions are skipped (``FailureHandler.NONE``
+      equivalent) and recorded to ``<output_path>/residual/failures.jsonl``.
     - A result record is only appended when the response contains a non-empty
       ``query`` string.
 
@@ -76,6 +88,8 @@ async def fetch_question_queries(
         client: Authenticated ``MetabaseApiClient`` instance.
         questions: Filtered question summary records — each must contain at
             minimum ``id`` and optionally ``dataset_query``.
+        output_path: Task-local staging directory, forwarded to
+            :func:`fetch_question_queries_single` for residual recording.
 
     Returns:
         List of dicts with shape ``{"question_id": int, "query": str,
@@ -84,7 +98,7 @@ async def fetch_question_queries(
     """
     records = []
     for question in questions:
-        result = await _fetch_question_query(client, question)
+        result = await _fetch_question_query(client, question, output_path)
         if result is not None:
             records.append(result)
     logger.info("Fetched %d question query records", len(records))
@@ -92,7 +106,7 @@ async def fetch_question_queries(
 
 
 async def fetch_question_queries_single(
-    client: MetabaseApiClient, question_id: int, dataset_query: Dict
+    client: MetabaseApiClient, question_id: int, dataset_query: Dict, output_path: str
 ) -> Optional[Dict]:
     """Fetch the native SQL query for a single question.
 
@@ -103,6 +117,8 @@ async def fetch_question_queries_single(
         client: Authenticated ``MetabaseApiClient`` instance.
         question_id: Integer ID of the question.
         dataset_query: The ``dataset_query`` dict from the question record.
+        output_path: Task-local staging directory — a failure is recorded to
+            ``<output_path>/residual/failures.jsonl`` for later review.
 
     Returns:
         Dict with shape ``{"question_id": int, "query": str, "params": ...}``,
@@ -116,6 +132,15 @@ async def fetch_question_queries_single(
             timeout=60,
         )
         if response is None or not response.is_success:
+            status = response.status_code if response else "No response"
+            record_residual_failure(
+                output_path,
+                "question_query_fetch_failed",
+                endpoint="/api/dataset/native",
+                record_id=question_id,
+                http_status=status if isinstance(status, int) else None,
+            )
+            # conformance: ignore[E020] deliberate best-effort per-question skip (FailureHandler.NONE equivalent), recorded to residual/failures.jsonl — one bad question must not abort the whole batch.
             return None
         data = response.json()
         query = data.get("query")
@@ -132,11 +157,17 @@ async def fetch_question_queries_single(
             question_id,
             exc_info=True,
         )
+        record_residual_failure(
+            output_path,
+            "question_query_fetch_errored",
+            endpoint="/api/dataset/native",
+            record_id=question_id,
+        )
         return None
 
 
 async def _fetch_question_query(
-    client: MetabaseApiClient, question: Dict
+    client: MetabaseApiClient, question: Dict, output_path: str
 ) -> Optional[Dict]:
     """Fetch native SQL query for a single question dict.
 
@@ -144,6 +175,8 @@ async def _fetch_question_query(
         client: Authenticated ``MetabaseApiClient`` instance.
         question: Question summary dict containing at minimum ``id`` and
             optionally ``dataset_query``.
+        output_path: Task-local staging directory, forwarded to
+            :func:`fetch_question_queries_single` for residual recording.
 
     Returns:
         Dict with ``question_id``, ``query``, and ``params``, or ``None`` if
@@ -157,4 +190,6 @@ async def _fetch_question_query(
     question_id = question.get("id")
     if question_id is None:
         return None
-    return await fetch_question_queries_single(client, int(question_id), dataset_query)
+    return await fetch_question_queries_single(
+        client, int(question_id), dataset_query, output_path
+    )

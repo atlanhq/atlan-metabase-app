@@ -17,6 +17,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class CollectionRecord:
@@ -200,5 +204,8 @@ def _to_millis(value: Any) -> int | None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return int(dt.timestamp() * 1000)
         except ValueError:
+            logger.warning(
+                "Failed to parse timestamp %r as epoch ms", value, exc_info=True
+            )
             return None
     return None
