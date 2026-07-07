@@ -45,6 +45,7 @@ def to_epoch_ms(dt_str: str | None) -> int | None:
         except ValueError:
             logger.debug("Datetime %r did not match format %r", dt_str, fmt)
             continue
+    logger.warning("Failed to parse datetime %r against any known format", dt_str)
     return None
 
 

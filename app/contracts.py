@@ -190,6 +190,11 @@ class MetabaseOutput(Output):
     - ``lineage_publish_state_prefix`` / ``lineage_current_state_prefix``
       — read by LineagePublishNode; same pattern but scoped under
       ``…/lineage/``.
+    - ``residual_failures_file`` — set only when at least one tolerated
+      extract failure was recorded (see ``app/residuals.py``); a durable
+      (``RETAINED`` tier) reference to the uploaded ``residual/`` directory,
+      so tolerated failures survive pod teardown and are reviewable after
+      the run instead of being stranded on ephemeral local disk.
     """
 
     transformed_data_prefix: str = ""
@@ -202,6 +207,7 @@ class MetabaseOutput(Output):
     lineage_current_state_prefix: str = ""
     lineage_stage_prefix: str = ""
     total_records: int = 0
+    residual_failures_file: FileReference | None = None
 
 
 # ---------------------------------------------------------------------------

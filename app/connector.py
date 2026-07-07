@@ -91,6 +91,7 @@ from app.paths import (
     processed_file,
     raw_file,
 )
+from app.residuals import RESIDUAL_DIR
 from app.utils import read_jsonl, write_jsonl
 
 logger = get_logger(__name__)
@@ -689,6 +690,17 @@ class MetabaseApp(App):
             )
             transformed_data_prefix = upload.ref.storage_path or ""
 
+        # Upload residual/ (tolerated-failure records — see app/residuals.py)
+        # so they survive pod teardown instead of being stranded on ephemeral
+        # local disk. Only present when at least one failure was recorded.
+        residual_dir = os.path.join(output_path, RESIDUAL_DIR)
+        residual_failures_file = None
+        if os.path.isdir(residual_dir):
+            residual_upload = await self.upload(
+                UploadInput(local_path=residual_dir, tier=StorageTier.RETAINED)
+            )
+            residual_failures_file = residual_upload.ref
+
         # --- 9. Compute lineage path prefixes for downstream nodes ----
         # The QueryIntelligenceNode writes to `view_lineage_output_prefix`;
         # extract_lineage reads from it. LineagePublishNode reads its blue-
@@ -726,6 +738,7 @@ class MetabaseApp(App):
             lineage_current_state_prefix=lineage_current_state_prefix,
             lineage_stage_prefix=lineage_stage_prefix,
             total_records=total_transformed,
+            residual_failures_file=residual_failures_file,
         )
 
     # ------------------------------------------------------------------
