@@ -29,10 +29,10 @@ deploy:
   resources:
     requests:
       cpu: 100m
-      memory: 256Mi
+      memory: 512Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 2Gi
   env:
     ATLAN_APP_MODULE: app.connector:MetabaseApp
     ATLAN_HEARTBEAT_TIMEOUT_SECONDS: '120'
