@@ -15,15 +15,14 @@ serves the platform endpoints: ``/workflows/v1/auth``,
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from typing import Any
 
+import orjson
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.errors import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.api_types import (
@@ -60,6 +59,11 @@ from app.contracts import (
     TransformTaskOutput,
 )
 from app.credentials import build_credential_ref, parse_metabase_credentials
+from app.errors import (
+    MetabaseCredentialInputError,
+    MissingOutputPathInputError,
+    MissingTypenameInputError,
+)
 from app.extracts.collections import fetch_collections_summaries
 from app.extracts.dashboards import fetch_dashboards_details, fetch_dashboards_summaries
 from app.extracts.databases import fetch_databases_details, fetch_databases_summaries
@@ -87,6 +91,7 @@ from app.paths import (
     processed_file,
     raw_file,
 )
+from app.residuals import RESIDUAL_DIR
 from app.utils import read_jsonl, write_jsonl
 
 logger = get_logger(__name__)
@@ -167,7 +172,7 @@ class MetabaseApp(App):
         else:
             inline = getattr(input, "inline_credentials", {}) or {}
             if not inline:
-                raise InvalidInputError(
+                raise MetabaseCredentialInputError(
                     message="_build_client: no credential_ref or inline_credentials",
                     field="credentials",
                 )
@@ -184,7 +189,7 @@ class MetabaseApp(App):
     async def extract_collections(self, input: FetchInput) -> FetchOutput:
         """Fetch all collections → ``raw/collections/result-0.json``."""
         client = await self._build_client(input)
-        records = await fetch_collections_summaries(client)
+        records = await fetch_collections_summaries(client, input.output_path)
         out = raw_file(input.output_path, "collections")
         write_jsonl(out, records)
         logger.info("extract_collections: wrote %d records", len(records))
@@ -196,7 +201,7 @@ class MetabaseApp(App):
     async def extract_dashboards(self, input: FetchInput) -> FetchOutput:
         """Fetch dashboard summaries → ``raw/dashboards/result-0.json``."""
         client = await self._build_client(input)
-        records = await fetch_dashboards_summaries(client)
+        records = await fetch_dashboards_summaries(client, input.output_path)
         out = raw_file(input.output_path, "dashboards")
         write_jsonl(out, records)
         logger.info("extract_dashboards: wrote %d records", len(records))
@@ -208,7 +213,7 @@ class MetabaseApp(App):
     async def extract_questions(self, input: FetchInput) -> FetchOutput:
         """Fetch question (card) summaries → ``raw/questions/result-0.json``."""
         client = await self._build_client(input)
-        records = await fetch_questions_summaries(client)
+        records = await fetch_questions_summaries(client, input.output_path)
         out = raw_file(input.output_path, "questions")
         write_jsonl(out, records)
         logger.info("extract_questions: wrote %d records", len(records))
@@ -220,7 +225,7 @@ class MetabaseApp(App):
     async def extract_databases(self, input: FetchInput) -> FetchOutput:
         """Fetch database summaries → ``raw/databases/result-0.json``."""
         client = await self._build_client(input)
-        records = await fetch_databases_summaries(client)
+        records = await fetch_databases_summaries(client, input.output_path)
         out = raw_file(input.output_path, "databases")
         write_jsonl(out, records)
         logger.info("extract_databases: wrote %d records", len(records))
@@ -307,7 +312,9 @@ class MetabaseApp(App):
             "extract_individual_dashboards: fetching detail for %d dashboards",
             len(filtered_dashboards),
         )
-        records = await fetch_dashboards_details(client, filtered_dashboards)
+        records = await fetch_dashboards_details(
+            client, filtered_dashboards, input.output_path
+        )
         out = raw_file(input.output_path, "dashboard_details")
         write_jsonl(out, records)
         logger.info("extract_individual_dashboards: wrote %d records", len(records))
@@ -332,7 +339,7 @@ class MetabaseApp(App):
             "extract_individual_databases: fetching metadata for %d databases",
             len(databases),
         )
-        records = await fetch_databases_details(client, databases)
+        records = await fetch_databases_details(client, databases, input.output_path)
         out = raw_file(input.output_path, "database_metadata")
         write_jsonl(out, records)
         logger.info("extract_individual_databases: wrote %d records", len(records))
@@ -357,7 +364,7 @@ class MetabaseApp(App):
             "fetch_question_queries_activity: fetching queries for %d questions",
             len(questions),
         )
-        records = await fetch_question_queries(client, questions)
+        records = await fetch_question_queries(client, questions, input.output_path)
         out = raw_file(input.output_path, "question_queries")
         write_jsonl(out, records)
         logger.info("fetch_question_queries_activity: wrote %d records", len(records))
@@ -487,12 +494,12 @@ class MetabaseApp(App):
         """
         typename = (input.typename or "").upper()
         if not typename:
-            raise InvalidInputError(
+            raise MissingTypenameInputError(
                 message="transform_data: 'typename' is required",
                 field="typename",
             )
         if not input.output_path:
-            raise InvalidInputError(
+            raise MissingOutputPathInputError(
                 message="transform_data: 'output_path' is required",
                 field="output_path",
             )
@@ -525,12 +532,12 @@ class MetabaseApp(App):
         )
 
         count = 0
-        with open(out_file, "w", encoding="utf-8") as fh:
+        with open(out_file, "wb") as fh:
             for raw in records:
                 entity = _map_one_record(typename, raw, ctx)
                 if entity is None:
                     continue
-                fh.write(json.dumps(entity, ensure_ascii=False) + "\n")
+                fh.write(orjson.dumps(entity) + b"\n")
                 count += 1
 
         logger.info("transform_data complete: typename=%s, records=%d", typename, count)
@@ -683,6 +690,17 @@ class MetabaseApp(App):
             )
             transformed_data_prefix = upload.ref.storage_path or ""
 
+        # Upload residual/ (tolerated-failure records — see app/residuals.py)
+        # so they survive pod teardown instead of being stranded on ephemeral
+        # local disk. Only present when at least one failure was recorded.
+        residual_dir = os.path.join(output_path, RESIDUAL_DIR)
+        residual_failures = None
+        if os.path.isdir(residual_dir):
+            residual_upload = await self.upload(
+                UploadInput(local_path=residual_dir, tier=StorageTier.RETAINED)
+            )
+            residual_failures = residual_upload.ref
+
         # --- 9. Compute lineage path prefixes for downstream nodes ----
         # The QueryIntelligenceNode writes to `view_lineage_output_prefix`;
         # extract_lineage reads from it. LineagePublishNode reads its blue-
@@ -720,6 +738,7 @@ class MetabaseApp(App):
             lineage_current_state_prefix=lineage_current_state_prefix,
             lineage_stage_prefix=lineage_stage_prefix,
             total_records=total_transformed,
+            residual_failures=residual_failures,
         )
 
     # ------------------------------------------------------------------

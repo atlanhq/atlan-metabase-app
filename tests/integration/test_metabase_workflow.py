@@ -98,6 +98,8 @@ class TestMetabaseExtraction:
     per pytest session.
     """
 
+    pytestmark = pytest.mark.integration
+
     @pytest.fixture(scope="class")
     def tmp_dir_class(self, tmp_path_factory: pytest.TempPathFactory) -> Path:
         return tmp_path_factory.mktemp("metabase_extraction")

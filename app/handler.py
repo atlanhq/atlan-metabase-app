@@ -11,10 +11,9 @@ The SDK auto-serves ``/workflows/v1/configmap/<id>`` from ``app/generated/``
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from application_sdk.errors import DependencyUnavailableError, InvalidInputError
+import orjson
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -34,6 +33,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from app.client import MetabaseApiClient, build_client
 from app.constants import MetabaseUrls
 from app.credentials import parse_metabase_credentials
+from app.errors import MetabaseClientNotInitializedError, MetabaseSourceUnavailableError
 
 logger = get_logger(__name__)
 
@@ -71,7 +71,7 @@ class MetabaseHandler(Handler):
                 )
 
             if not input.credentials:
-                raise InvalidInputError(
+                raise MetabaseClientNotInitializedError(
                     message="Metabase client not initialized",
                     field="credentials",
                 )
@@ -86,11 +86,11 @@ class MetabaseHandler(Handler):
                 )
             finally:
                 await client.close()
-        except Exception as e:
+        except Exception:
             logger.warning("Metabase auth failed", exc_info=True)
             return AuthOutput(
                 status=AuthStatus.FAILED,
-                message=str(e),
+                message="Authentication failed — see application logs for detail",
             )
 
     async def fetch_metadata(self, input: MetadataInput) -> ApiMetadataOutput:
@@ -123,7 +123,7 @@ class MetabaseHandler(Handler):
         """Run the four ``sageTemplate`` preflight checks."""
         try:
             client = await self._client_for(input.credentials)
-        except Exception as e:
+        except Exception:
             logger.error("Preflight client build failed", exc_info=True)
             return PreflightOutput(
                 status=PreflightStatus.NOT_READY,
@@ -131,10 +131,10 @@ class MetabaseHandler(Handler):
                     PreflightCheck(
                         name="collectionCountCheck",
                         passed=False,
-                        message=f"Preflight check failed: {e}",
+                        message="Preflight check failed — see application logs for detail",
                     ),
                 ],
-                message=f"Preflight check failed: {e}",
+                message="Preflight check failed — see application logs for detail",
             )
 
         owns_client = self.client is None
@@ -184,7 +184,7 @@ class MetabaseHandler(Handler):
                 else PreflightStatus.NOT_READY,
                 checks=checks,
             )
-        except Exception as e:
+        except Exception:
             logger.error("Preflight check failed", exc_info=True)
             return PreflightOutput(
                 status=PreflightStatus.NOT_READY,
@@ -192,10 +192,10 @@ class MetabaseHandler(Handler):
                     PreflightCheck(
                         name="collectionCountCheck",
                         passed=False,
-                        message=f"Preflight check failed: {e}",
+                        message="Preflight check failed — see application logs for detail",
                     ),
                 ],
-                message=f"Preflight check failed: {e}",
+                message="Preflight check failed — see application logs for detail",
             )
         finally:
             if owns_client:
@@ -212,7 +212,7 @@ class MetabaseHandler(Handler):
         if self.client is not None:
             return self.client
         if not credentials:
-            raise InvalidInputError(
+            raise MetabaseClientNotInitializedError(
                 message="Metabase client not initialized",
                 field="credentials",
             )
@@ -228,8 +228,13 @@ class MetabaseHandler(Handler):
                 return value
             if isinstance(value, str):
                 try:
-                    parsed = json.loads(value)
-                except (json.JSONDecodeError, ValueError):
+                    parsed = orjson.loads(value)
+                except orjson.JSONDecodeError:
+                    logger.warning(
+                        "Collection filter %r is not valid JSON; treating as empty",
+                        value,
+                        exc_info=True,
+                    )
                     return {}
                 return parsed if isinstance(parsed, dict) else {}
             return {}
@@ -267,10 +272,11 @@ class MetabaseHandler(Handler):
         response = await client.execute_http_get_request(url=url, timeout=30)
         if response is None or not response.is_success:
             status = response.status_code if response else "No response"
-            raise DependencyUnavailableError(
+            raise MetabaseSourceUnavailableError(
                 message=f"Failed to fetch collections — HTTP {status}",
-                service="metabase",
-                target="/api/collection",
+                source_type="metabase",
+                endpoint="/api/collection",
+                http_status=status if isinstance(status, int) else None,
             )
         return response.json()
 
@@ -297,12 +303,12 @@ class MetabaseHandler(Handler):
                 passed=True,
                 message=f"Total collections: {count}",
             )
-        except Exception as e:
+        except Exception:
             logger.warning("collectionCountCheck failed", exc_info=True)
             return PreflightCheck(
                 name="collectionCountCheck",
                 passed=False,
-                message=f"Collection count check failed: {e}",
+                message="Collection count check failed — see application logs for detail",
             )
 
     @staticmethod
@@ -322,10 +328,11 @@ class MetabaseHandler(Handler):
             response = await client.execute_http_get_request(url=url, timeout=30)
             if response is None or not response.is_success:
                 status = response.status_code if response else "No response"
-                raise DependencyUnavailableError(
+                raise MetabaseSourceUnavailableError(
                     message=f"Failed to fetch dashboards — HTTP {status}",
-                    service="metabase",
-                    target="/api/dashboard",
+                    source_type="metabase",
+                    endpoint="/api/dashboard",
+                    http_status=status if isinstance(status, int) else None,
                 )
             dashboards: list[dict[str, Any]] = response.json()
 
@@ -343,12 +350,12 @@ class MetabaseHandler(Handler):
                 passed=True,
                 message=f"Total dashboards: {count}",
             )
-        except Exception as e:
+        except Exception:
             logger.warning("dashboardCountCheck failed", exc_info=True)
             return PreflightCheck(
                 name="dashboardCountCheck",
                 passed=False,
-                message=f"Dashboard count check failed: {e}",
+                message="Dashboard count check failed — see application logs for detail",
             )
 
     @staticmethod
@@ -368,10 +375,11 @@ class MetabaseHandler(Handler):
             response = await client.execute_http_get_request(url=url, timeout=30)
             if response is None or not response.is_success:
                 status = response.status_code if response else "No response"
-                raise DependencyUnavailableError(
+                raise MetabaseSourceUnavailableError(
                     message=f"Failed to fetch questions — HTTP {status}",
-                    service="metabase",
-                    target="/api/card",
+                    source_type="metabase",
+                    endpoint="/api/card",
+                    http_status=status if isinstance(status, int) else None,
                 )
             questions: list[dict[str, Any]] = response.json()
 
@@ -389,12 +397,12 @@ class MetabaseHandler(Handler):
                 passed=True,
                 message=f"Total questions: {count}",
             )
-        except Exception as e:
+        except Exception:
             logger.warning("questionCountCheck failed", exc_info=True)
             return PreflightCheck(
                 name="questionCountCheck",
                 passed=False,
-                message=f"Question count check failed: {e}",
+                message="Question count check failed — see application logs for detail",
             )
 
     @staticmethod
@@ -406,10 +414,11 @@ class MetabaseHandler(Handler):
             response = await client.execute_http_get_request(url=url, timeout=30)
             if response is None or not response.is_success:
                 status = response.status_code if response else "No response"
-                raise DependencyUnavailableError(
+                raise MetabaseSourceUnavailableError(
                     message=f"Failed to fetch database list — HTTP {status}",
-                    service="metabase",
-                    target="/api/database",
+                    source_type="metabase",
+                    endpoint="/api/database",
+                    http_status=status if isinstance(status, int) else None,
                 )
 
             response_body: dict[str, Any] = response.json()
@@ -437,10 +446,10 @@ class MetabaseHandler(Handler):
                     f"the following databases: [{', '.join(missing)}]"
                 ),
             )
-        except Exception as e:
+        except Exception:
             logger.warning("nativeQueryPermissionCheck failed", exc_info=True)
             return PreflightCheck(
                 name="nativeQueryPermissionCheck",
                 passed=False,
-                message=f"Native query permission check failed: {e}",
+                message="Native query permission check failed — see application logs for detail",
             )

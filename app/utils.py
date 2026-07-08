@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import html
-import json
 import os
 import re
 from datetime import datetime, timezone
 from typing import Any
+
+import orjson
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 def strip_html_tags(text: str | None) -> str | None:
@@ -39,7 +43,9 @@ def to_epoch_ms(dt_str: str | None) -> int | None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return int(dt.timestamp() * 1000)
         except ValueError:
+            logger.debug("Datetime %r did not match format %r", dt_str, fmt)
             continue
+    logger.warning("Failed to parse datetime %r against any known format", dt_str)
     return None
 
 
@@ -48,7 +54,7 @@ def serialize_complex_columns(record: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in record.items():
         if isinstance(value, (dict, list)):
-            result[key] = json.dumps(value)
+            result[key] = orjson.dumps(value).decode("utf-8")
         else:
             result[key] = value
     return result
@@ -62,9 +68,9 @@ def write_jsonl(local_path: str, records: list[dict[str, Any]]) -> None:
     so the SDK handles upload/download between tasks.
     """
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    with open(local_path, "w", encoding="utf-8") as fh:
+    with open(local_path, "wb") as fh:
         for record in records:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            fh.write(orjson.dumps(record) + b"\n")
 
 
 def read_jsonl(local_path: str | None) -> list[dict[str, Any]]:
@@ -77,13 +83,16 @@ def read_jsonl(local_path: str | None) -> list[dict[str, Any]]:
     if not local_path or not os.path.isfile(local_path):
         return []
     records: list[dict[str, Any]] = []
-    with open(local_path, "r", encoding="utf-8") as fh:
+    with open(local_path, "rb") as fh:
         for line in fh:
             line = line.strip()
             if not line:
                 continue
             try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
+                records.append(orjson.loads(line))
+            except orjson.JSONDecodeError:
+                logger.warning(
+                    "Skipping unparseable JSONL line in %s", local_path, exc_info=True
+                )
                 continue
     return records

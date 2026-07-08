@@ -303,6 +303,64 @@ class TestExtractMetadataOrchestration:
         assert "lineage/current-state" in out.lineage_current_state_prefix
         # transform_data must be called once per asset typename.
         assert app.transform_data.await_count == 4
+        # No residual/ dir was ever created — no upload, no reference.
+        assert out.residual_failures is None
+
+    @pytest.mark.asyncio
+    async def test_uploads_residual_dir_when_failures_were_recorded(
+        self, metabase_input, tmp_path
+    ):
+        """A residual/ dir (written by record_residual_failure) is uploaded
+        as a durable RETAINED reference and returned on the output."""
+        from app.residuals import RESIDUAL_DIR, record_residual_failure
+
+        record_residual_failure(
+            str(tmp_path), "collections_fetch_failed", http_status=500
+        )
+        assert (tmp_path / RESIDUAL_DIR).is_dir()
+
+        app = MetabaseApp()
+        fake_fetch = MagicMock(
+            output_file=FileReference(local_path="/tmp/x.json"),
+            record_count=0,
+            typename="t",
+        )
+        fake_filter = MagicMock(
+            collections_filtered_file=FileReference(local_path="/tmp/c.json"),
+            dashboards_filtered_file=FileReference(local_path="/tmp/d.json"),
+            questions_filtered_file=FileReference(local_path="/tmp/q.json"),
+            databases_filtered_file=FileReference(local_path="/tmp/db.json"),
+            total_records=0,
+        )
+        app.extract_collections = AsyncMock(return_value=fake_fetch)
+        app.extract_dashboards = AsyncMock(return_value=fake_fetch)
+        app.extract_questions = AsyncMock(return_value=fake_fetch)
+        app.extract_databases = AsyncMock(return_value=fake_fetch)
+        app.filter_data = AsyncMock(return_value=fake_filter)
+        app.extract_individual_dashboards = AsyncMock(return_value=fake_fetch)
+        app.extract_individual_databases = AsyncMock(return_value=fake_fetch)
+        app.fetch_question_queries_activity = AsyncMock(return_value=fake_fetch)
+        app.process_metabaseprocess = AsyncMock(return_value=MagicMock(total_records=0))
+        app.transform_data = AsyncMock(return_value=MagicMock(record_count=0))
+        type(app).run_id = property(lambda _self: "run-xyz")  # type: ignore[misc]
+
+        residual_ref = FileReference(
+            local_path=str(tmp_path / RESIDUAL_DIR), storage_path="artifacts/residual"
+        )
+
+        async def fake_upload(input):
+            if input.local_path == str(tmp_path / RESIDUAL_DIR):
+                return MagicMock(ref=residual_ref)
+            return MagicMock(ref=MagicMock(storage_path=""))
+
+        app.upload = AsyncMock(side_effect=fake_upload)
+
+        out = await app.extract_metadata(metabase_input)  # type: ignore[call-arg]
+
+        assert out.residual_failures is residual_ref
+        assert residual_ref.storage_path == "artifacts/residual"
+        uploaded_paths = {c.args[0].local_path for c in app.upload.await_args_list}
+        assert str(tmp_path / RESIDUAL_DIR) in uploaded_paths
 
     @pytest.mark.asyncio
     async def test_default_output_path_used_when_none_supplied(

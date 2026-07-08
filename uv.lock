@@ -256,12 +256,12 @@ version = "2.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "atlan-application-sdk", extra = ["iam-auth", "pandas", "tests", "workflows"] },
-    { name = "poethepoet" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "atlan-application-sdk-conformance" },
+    { name = "poethepoet" },
     { name = "pre-commit" },
     { name = "pyright" },
     { name = "requests" },
@@ -278,14 +278,12 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "atlan-application-sdk", extras = ["iam-auth", "pandas", "tests", "workflows"], specifier = ">=3.15.1,<4.0.0" },
-    { name = "poethepoet", specifier = ">=0.38.0" },
-]
+requires-dist = [{ name = "atlan-application-sdk", extras = ["iam-auth", "pandas", "tests", "workflows"], specifier = ">=3.15.1,<4.0.0" }]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "atlan-application-sdk-conformance", specifier = "<=1.0.0" },
+    { name = "poethepoet", specifier = ">=0.38.0" },
     { name = "pre-commit", specifier = ">=3.8.0" },
     { name = "pyright", specifier = ">=1.1.403" },
     { name = "requests" },

@@ -16,16 +16,17 @@ secret store). Three primitives:
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
+import orjson
 from application_sdk.credentials.errors import CredentialRoutingError
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
-from application_sdk.errors import InvalidInputError
 from application_sdk.handler.contracts import HandlerCredential
 from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import ConfigDict
+
+from app.errors import UnsupportedCredentialsPayloadError
 
 if TYPE_CHECKING:
     from app.contracts import MetabaseInput
@@ -88,7 +89,7 @@ def parse_metabase_credentials(
         raw = flat
 
     if not isinstance(raw, dict):
-        raise InvalidInputError(
+        raise UnsupportedCredentialsPayloadError(
             message=f"Unsupported credentials payload type: {type(raw).__name__}",
             field="credentials",
         )
@@ -100,8 +101,11 @@ def parse_metabase_credentials(
     extra = raw.get("extra") or {}
     if isinstance(extra, str):
         try:
-            extra = json.loads(extra) or {}
-        except (json.JSONDecodeError, ValueError):
+            extra = orjson.loads(extra) or {}
+        except orjson.JSONDecodeError:
+            logger.warning(
+                "Credential 'extra' field is not valid JSON; ignoring", exc_info=True
+            )
             extra = {}
     if isinstance(extra, dict):
         for k, v in extra.items():
@@ -111,6 +115,11 @@ def parse_metabase_credentials(
     try:
         port = int(port_raw) if port_raw not in (None, "") else 443
     except (TypeError, ValueError):
+        logger.warning(
+            "Credential port %r is not a valid integer; defaulting to 443",
+            port_raw,
+            exc_info=True,
+        )
         port = 443
 
     return MetabaseCredential(
