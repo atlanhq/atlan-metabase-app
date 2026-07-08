@@ -410,7 +410,7 @@
     },
     {
       "contract": "MetabaseOutput",
-      "field": "residual_failures_file",
+      "field": "residual_failures",
       "status": "active",
       "type": "FileReference | None"
     },

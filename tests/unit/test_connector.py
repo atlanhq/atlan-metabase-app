@@ -304,7 +304,7 @@ class TestExtractMetadataOrchestration:
         # transform_data must be called once per asset typename.
         assert app.transform_data.await_count == 4
         # No residual/ dir was ever created — no upload, no reference.
-        assert out.residual_failures_file is None
+        assert out.residual_failures is None
 
     @pytest.mark.asyncio
     async def test_uploads_residual_dir_when_failures_were_recorded(
@@ -357,7 +357,7 @@ class TestExtractMetadataOrchestration:
 
         out = await app.extract_metadata(metabase_input)  # type: ignore[call-arg]
 
-        assert out.residual_failures_file is residual_ref
+        assert out.residual_failures is residual_ref
         assert residual_ref.storage_path == "artifacts/residual"
         uploaded_paths = {c.args[0].local_path for c in app.upload.await_args_list}
         assert str(tmp_path / RESIDUAL_DIR) in uploaded_paths

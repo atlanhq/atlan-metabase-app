@@ -694,12 +694,12 @@ class MetabaseApp(App):
         # so they survive pod teardown instead of being stranded on ephemeral
         # local disk. Only present when at least one failure was recorded.
         residual_dir = os.path.join(output_path, RESIDUAL_DIR)
-        residual_failures_file = None
+        residual_failures = None
         if os.path.isdir(residual_dir):
             residual_upload = await self.upload(
                 UploadInput(local_path=residual_dir, tier=StorageTier.RETAINED)
             )
-            residual_failures_file = residual_upload.ref
+            residual_failures = residual_upload.ref
 
         # --- 9. Compute lineage path prefixes for downstream nodes ----
         # The QueryIntelligenceNode writes to `view_lineage_output_prefix`;
@@ -738,7 +738,7 @@ class MetabaseApp(App):
             lineage_current_state_prefix=lineage_current_state_prefix,
             lineage_stage_prefix=lineage_stage_prefix,
             total_records=total_transformed,
-            residual_failures_file=residual_failures_file,
+            residual_failures=residual_failures,
         )
 
     # ------------------------------------------------------------------
