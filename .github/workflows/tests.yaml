@@ -70,7 +70,9 @@ on:
 
 jobs:
   tests:
-    uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main
+    # A/B validation of application-sdk#2605 (2nd hermetic-source canonical).
+    # TEMP ref — DO NOT MERGE.
+    uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@adityachoudhury/e2e-full-setup-uv
     with:
       app-name: "metabase"
       app-image-name: "atlan-metabase-app"
