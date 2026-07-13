@@ -11,22 +11,28 @@ import "@app-contract-toolkit/Widgets.pkl"
 
 emitAppYaml = true
 
-// Suppress the auto-generated `entrypoints:` block in atlan.yaml.
+// ---- Entrypoints (route/card split, BLDX-1342) -------------------------
 //
-// We have two @entrypoint methods on MetabaseApp (extract_metadata +
-// extract_lineage) but the marketplace treats this as ONE connector card
-// (single setup form, single workflow type the user invokes from the UI;
-// extract_lineage is invoked downstream by the QI/lineage-publish nodes
-// in the DAG, not directly by the user).
+// Two @entrypoint methods on MetabaseApp, but only ONE marketplace card —
+// extract_lineage is invoked downstream by the DAG (qi → publish →
+// extract-lineage → lineage-publish via workflowType
+// "metabase:extract-lineage"), never by the user.
 //
-// Hightouch follows the same shape — 2 @entrypoint methods in code but
-// no `entrypoints:` block in atlan.yaml. That's what makes
-// local-marketplace register it as single-entrypoint and the frontend
-// build URLs WITHOUT `?entrypoint=`, which keeps the platform in its
-// URL-derivation branch (serves `app/generated/<name>.json`) instead of
-// the multi-entrypoint branch (which forwards as `<name>-<entrypoint>.json`
-// and 404s on us today).
-emitEntrypoints = false
+// Toolkit ≥0.18.x (application-sdk#2351) retires the old
+// `emitEntrypoints = false` workaround (now deprecated; removal slated for
+// the next minor). With no `entrypoints` listing declared, the app stays in
+// single-entrypoint contract mode: the toolkit auto-derives one implicit
+// entrypoint carrying `package_id: "@atlan/metabase"` (from the
+// `marketplaceCard = true` default) and `marketplace_card: true`, which pins
+// the stable card ID to match the legacy Argo `app_id` — matching
+// `argo_package_names` below.
+//
+// We deliberately do NOT declare an explicit `entrypoints {}` listing:
+// a non-empty listing flips the toolkit into bundle mode, which stops
+// emitting the app-level `app/generated/*` artifacts (workflow config,
+// manifest.json, _input.py) and instead expects per-entrypoint
+// `Entrypoint.contract` imports under `app/generated/<name>/`. Adopting
+// that layout is a separate, larger migration.
 
 // ---- App identity ----
 
