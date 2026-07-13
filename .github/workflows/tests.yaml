@@ -83,11 +83,7 @@ jobs:
       # and openapi's .github/test/setup-services.sh for a reference
       # demonstration of the hook (used intentionally to exercise the pattern).
 
-      # Serverless unit+integration run only. tests/sdr/ is EXCLUDED here: its
-      # BaseSDRIntegrationTest suite needs a live SDR server (setup_class fails
-      # hard, not skips, without one) and is run separately by the SDK sdr-e2e
-      # action (default target tests/sdr/).
-      test-paths: "tests/unit tests/integration"
+      # Review test-paths and pytest-args before committing; defaults auto-discover.
       application-sdk-ref: ${{ inputs.application_sdk_ref }}
       distinct-id: ${{ inputs.distinct_id }}
       run-e2e: ${{ inputs.run_e2e }}
