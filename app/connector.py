@@ -829,18 +829,16 @@ class MetabaseApp(App):
     # ------------------------------------------------------------------
     # extract_lineage — second @entrypoint
     # ------------------------------------------------------------------
-    # Intentional Hightouch-style two-entrypoint app: contract/app.pkl sets
-    # emitEntrypoints=false so the platform treats this as ONE marketplace
-    # connector card (see app.pkl lines 14-29). extract_lineage is never
-    # dispatched via the multi-entrypoint HTTP contract path P016 checks —
-    # it's invoked directly by workflowType "metabase:extract-lineage" from
-    # the extraNodes DAG (app.pkl lines 178-213). Adding a named Entrypoint
-    # block would flip the platform into its multi-entrypoint branch, which
-    # 404s (BLDX-1425); removing the @entrypoint would break lineage
-    # publishing. The proper fix — toolkit-native packageId grouping on
-    # Entrypoint — lands with BLDX-1342 (application-sdk#2351, unreleased);
-    # revisit this suppression once it ships.
-    # conformance: ignore[P016] intentional single-card two-entrypoint app, see comment above (BLDX-1342 pending)
+    # Intentional two-entrypoint app with ONE marketplace card (BLDX-1342
+    # route/card split, toolkit ≥0.18.x). The contract stays in
+    # single-entrypoint mode: atlan.yaml carries one implicit card entry with
+    # package_id "@atlan/metabase" (auto-derived), and extract_lineage has no
+    # card or route declaration — it is invoked by workflowType
+    # "metabase:extract-lineage" from the extraNodes DAG, not by the user.
+    # P016 stays ignored: it requires per-entrypoint app/generated/<name>/
+    # contract subdirs (Entrypoint.contract bundle mode), which this app
+    # hasn't adopted — the generated artifacts remain app-level flat files.
+    # conformance: ignore[P016] single-card app; per-entrypoint generated/ bundle split not adopted (see contract/app.pkl)
     @entrypoint
     async def extract_lineage(
         self, input: MetabaseLineageInput
