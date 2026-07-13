@@ -118,3 +118,6 @@ coverage.json
 
 # Conformance remediation runtime output (SARIF reports, run artifacts)
 remediation/
+
+# Claude Code local worktrees
+.claude/worktrees/
