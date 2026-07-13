@@ -21,6 +21,9 @@
           "exclude_collections": "{{exclude-collections}}",
           "preflight_check": "{{preflight-check}}"
         }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "publish": {
@@ -83,10 +86,10 @@
     "extract-lineage": {
       "activity_name": "execute_workflow",
       "activity_display_name": "Build Metabase Cross-Connector Lineage",
-      "app_name": "metabase",
+      "app_name": "{app_name}",
       "inputs": {
         "workflow_type": "metabase:extract-lineage",
-        "app_name": "metabase",
+        "app_name": "{app_name}",
         "task_queue": "atlan-metabase-{deployment_name}",
         "args": {
           "workflow_id": "{{workflow-id}}",

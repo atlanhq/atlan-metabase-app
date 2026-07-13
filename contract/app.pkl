@@ -49,24 +49,22 @@ atlanYamlOverrides {
 }
 
 // ---- Deployment config (rendered into atlan.yaml's deploy: block) -----
-deploy {
+//
+// Toolkit 0.17.0 (pools refactor) moved per-pool KEDA / resources / env /
+// replicaCount off the deploy top level into `pools[…]`; only executionMode,
+// splitDeployment, and dapr remain top-level singletons. `deploy = new
+// DeployConfig { … }` (typed) replaces the old `deploy { … }` amend form,
+// which now fails `pkl eval` (amends null → Dynamic).
+deploy = new DeployConfig {
   executionMode = "native"
-  replicaCount = 1
 
   // splitDeployment pinned off explicitly — it changes the worker/HTTP
   // container topology and is a separate decision from KEDA. (Toolkit
   // 0.10.4 flipped its default to true; keep the bump a no-op here.)
   splitDeployment = false
 
-  // KEDA scale-to-zero enabled, matching the other connector apps
-  // (snowflake, dbt, postgres, redshift, …). Chart defaults handle the
-  // rest: minReplicaCount 0, maxReplicaCount 10, targetQueueSize 5.
-  keda {
-    enabled = true
-  }
-
-  // Dapr sidecars enabled. secretstore is needed for credential
-  // resolution (CredentialRef → raw creds via
+  // Dapr sidecars enabled (app-wide, not per-pool). secretstore is needed for
+  // credential resolution (CredentialRef → raw creds via
   // self.context.resolve_credential_raw). objectstore is enabled because
   // the app uploads transformed/ + lineage-stage/ via self.upload(...).
   dapr {
@@ -79,30 +77,48 @@ deploy {
     lock = false
   }
 
-  // 512Mi limit was insufficient — Metabase's /api/database/<id>/metadata
-  // returns tens of MB for warehouse-scale DBs and httpx.response.json()
-  // buffers the full payload. Verified on sonarsource: pod was OOMKilled
-  // every ~150s (container restart_count 30 → 36 in an 18-min window;
-  // 6 distinct container_ids each climbing baseline→~400 MiB→cliff against
-  // the 512 MiB limit). 2Gi covers 2–3 warehouse DBs with headroom;
-  // requests bumped to 512Mi to match KEDA scheduling reality.
-  resources = new ResourceConfig {
-    requests {
-      ["cpu"] = "100m"
-      ["memory"] = "512Mi"
-    }
-    limits {
-      ["cpu"] = "500m"
-      ["memory"] = "2Gi"
-    }
-  }
+  // Single worker pool. There are no `@task(pool=…)` declarations in app/, so
+  // every activity runs on the default task queue; "default" is the
+  // conventional single-pool key. The first (here only) pool drives the
+  // synthesised top-level deploy: block.
+  pools {
+    ["default"] = new Pool {
+      // Ignored while keda.enabled = true; kept for parity with prior config.
+      replicaCount = 1
 
-  env {
-    ["ATLAN_APP_MODULE"] = "app.connector:MetabaseApp"
-    ["ATLAN_HEARTBEAT_TIMEOUT_SECONDS"] = "120"
-    ["ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS"] = "86400"
-    ["ATLAN_TENANT_ID"] = "default"
-    ["APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR"] = "false"
+      // KEDA scale-to-zero enabled, matching the other connector apps
+      // (snowflake, dbt, postgres, redshift, …). Chart defaults handle the
+      // rest: minReplicaCount 0, maxReplicaCount 10, targetQueueSize 5.
+      keda {
+        enabled = true
+      }
+
+      // 512Mi limit was insufficient — Metabase's /api/database/<id>/metadata
+      // returns tens of MB for warehouse-scale DBs and httpx.response.json()
+      // buffers the full payload. Verified on a prior RCA: pod was OOMKilled
+      // every ~150s (container restart_count 30 → 36 in an 18-min window;
+      // 6 distinct container_ids each climbing baseline→~400 MiB→cliff against
+      // the 512 MiB limit). 2Gi covers 2–3 warehouse DBs with headroom;
+      // requests bumped to 512Mi to match KEDA scheduling reality.
+      resources = new ResourceConfig {
+        requests {
+          ["cpu"] = "100m"
+          ["memory"] = "512Mi"
+        }
+        limits {
+          ["cpu"] = "500m"
+          ["memory"] = "2Gi"
+        }
+      }
+
+      env {
+        ["ATLAN_APP_MODULE"] = "app.connector:MetabaseApp"
+        ["ATLAN_HEARTBEAT_TIMEOUT_SECONDS"] = "120"
+        ["ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS"] = "86400"
+        ["ATLAN_TENANT_ID"] = "default"
+        ["APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR"] = "false"
+      }
+    }
   }
 }
 
