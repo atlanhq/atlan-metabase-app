@@ -236,6 +236,12 @@
     },
     {
       "contract": "MetabaseInput",
+      "field": "correlation_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "MetabaseInput",
       "field": "credential_guid",
       "status": "active",
       "type": "str"
@@ -308,6 +314,12 @@
     },
     {
       "contract": "MetabaseLineageInput",
+      "field": "correlation_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "MetabaseLineageInput",
       "field": "output_path",
       "status": "active",
       "type": "str"
@@ -329,6 +341,12 @@
       "field": "workflow_id",
       "status": "active",
       "type": "str"
+    },
+    {
+      "contract": "MetabaseLineageOutput",
+      "field": "artifacts",
+      "status": "active",
+      "type": "dict[str, Any] | None"
     },
     {
       "contract": "MetabaseLineageOutput",
@@ -362,9 +380,27 @@
     },
     {
       "contract": "MetabaseLineageOutput",
+      "field": "metrics",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "MetabaseLineageOutput",
       "field": "process_count",
       "status": "active",
       "type": "int"
+    },
+    {
+      "contract": "MetabaseLineageOutput",
+      "field": "status",
+      "status": "active",
+      "type": "OutputStatus"
+    },
+    {
+      "contract": "MetabaseOutput",
+      "field": "artifacts",
+      "status": "active",
+      "type": "dict[str, Any] | None"
     },
     {
       "contract": "MetabaseOutput",
@@ -398,6 +434,12 @@
     },
     {
       "contract": "MetabaseOutput",
+      "field": "metrics",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "MetabaseOutput",
       "field": "output_path",
       "status": "active",
       "type": "str"
@@ -413,6 +455,12 @@
       "field": "residual_failures",
       "status": "active",
       "type": "FileReference | None"
+    },
+    {
+      "contract": "MetabaseOutput",
+      "field": "status",
+      "status": "active",
+      "type": "OutputStatus"
     },
     {
       "contract": "MetabaseOutput",
