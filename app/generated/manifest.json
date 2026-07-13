@@ -86,10 +86,10 @@
     "extract-lineage": {
       "activity_name": "execute_workflow",
       "activity_display_name": "Build Metabase Cross-Connector Lineage",
-      "app_name": "{app_name}",
+      "app_name": "metabase",
       "inputs": {
         "workflow_type": "metabase:extract-lineage",
-        "app_name": "{app_name}",
+        "app_name": "metabase",
         "task_queue": "atlan-metabase-{deployment_name}",
         "args": {
           "workflow_id": "{{workflow-id}}",

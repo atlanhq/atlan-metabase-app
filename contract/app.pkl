@@ -201,7 +201,12 @@ extraNodes {
   ["extract-lineage"] = new DAGNode {
     displayName = "Build Metabase Cross-Connector Lineage"
     workflowType = "metabase:extract-lineage"
-    appName = "{app_name}"
+    // Bake the literal app name. The toolkit stopped substituting the
+    // `{app_name}` placeholder at serve time (application-sdk #2271); left as a
+    // placeholder it ships literally in the AE DAG and breaks failure-log
+    // correlation (HYP-1678 / HYP-1954). This node is this app's own
+    // extract_lineage @entrypoint, so app_name is "metabase".
+    appName = "metabase"
     taskQueue = "atlan-metabase-{deployment_name}"
     errorHandling = new ErrorHandlingConfig {
       startToCloseTimeoutSeconds = 86400
