@@ -12,7 +12,6 @@ self_deployed_runtime: true
 deploy:
   execution_mode: native
   splitDeploymentEnabled: false
-  replicaCount: 1
   dapr:
     objectstore: true
     secretstore: true
@@ -21,6 +20,7 @@ deploy:
     subscription: false
     configurationstore: false
     lock: false
+  replicaCount: 1
   keda:
     enabled: true
     minReplicaCount: 0
@@ -39,6 +39,27 @@ deploy:
     ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS: '86400'
     ATLAN_TENANT_ID: default
     APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR: 'false'
+pools:
+  default:
+    replicaCount: 1
+    keda:
+      enabled: true
+      minReplicaCount: 0
+      temporal:
+        targetQueueSize: 5
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 2Gi
+    env:
+      ATLAN_APP_MODULE: app.connector:MetabaseApp
+      ATLAN_HEARTBEAT_TIMEOUT_SECONDS: '120'
+      ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS: '86400'
+      ATLAN_TENANT_ID: default
+      APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR: 'false'
 dockerfile: ./Dockerfile
 argo_package_names:
 - '@atlan/metabase'
