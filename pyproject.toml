@@ -113,7 +113,15 @@ asyncio_mode = "auto"
 # Temporal + worker fixtures share the same loop with per-test async tests.
 # Matches atlan-openapi-app/pyproject.toml.
 asyncio_default_fixture_loop_scope = "session"
-testpaths = ["tests"]
+# Default auto-discovery tiers for the bare-`pytest` (unit+integration) CI step.
+# tests/sdr/ is deliberately EXCLUDED: its BaseSDRIntegrationTest suite needs a
+# live SDR server (setup_class fails hard, not skips, without one) and is run
+# only by the SDK sdr-e2e action, which targets tests/sdr/ with an explicit path
+# (explicit paths override testpaths). tests/e2e/ is likewise run by the e2e job
+# with an explicit path, but is kept here since its tests skip cleanly without a
+# tenant. Keeping the exclusion here (not in the bootstrap-managed tests.yaml)
+# avoids C002 managed-file drift.
+testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
