@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.2.0 (July 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.1.0...v2.2.0
+
+### Features
+
+- retire emitEntrypoints=false via toolkit route/card split (BLDX-1342) (#191) (by @vaibhavatlan in [c0f55b1](https://github.com/atlanhq/atlan-metabase-app/commit/c0f55b1))
+- adopt SDK-native gate with tiered blocking/advisory checks and typed errors (#200) (by @fyzanshaik-atlan in [bd7b61c](https://github.com/atlanhq/atlan-metabase-app/commit/bd7b61c))
+
+### Bug Fixes
+
+- adopt toolkit 0.16.0 e2e codegen — generate everything, drop hand-written overrides (#138) (by @vaibhavatlan in [58b4eab](https://github.com/atlanhq/atlan-metabase-app/commit/58b4eab))
+- migrate deploy block to pools schema so pkl eval regenerates (#186) (by @vaibhavatlan in [df548b6](https://github.com/atlanhq/atlan-metabase-app/commit/df548b6))
+
+
 ## v2.1.0 (June 24, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.0.1...v2.1.0
