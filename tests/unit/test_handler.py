@@ -6,6 +6,7 @@ import pytest
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthStatus,
+    BaseMetadataConfig,
     HandlerCredential,
     MetadataInput,
     PreflightCheck,
@@ -14,6 +15,12 @@ from application_sdk.handler.contracts import (
 )
 
 from app.client import MetabaseApiClient
+from app.errors import (
+    MetabaseCollectionAccessError,
+    MetabaseNativeQueryPermissionError,
+    MetabaseSessionAuthError,
+    MetabaseSourceUnavailableError,
+)
 from app.handler import MetabaseHandler
 
 
@@ -236,15 +243,37 @@ class TestMetabaseHandlerValidators:
         assert "1" in result.message
 
     @patch.object(MetabaseHandler, "_fetch_collections", new_callable=AsyncMock)
-    async def test_validate_collection_count_api_failure_returns_failure(
+    async def test_validate_collection_count_api_failure_returns_typed_source_error(
         self, mock_fetch, mock_client
     ):
-        mock_fetch.side_effect = Exception("Failed to fetch collections")
+        """An unexpected fetch error becomes a typed SOURCE_UNAVAILABLE failure."""
+        mock_fetch.side_effect = Exception("connection refused")
 
         result = await MetabaseHandler._validate_collection_count(mock_client, {}, {})
 
         assert result.passed is False
-        assert "Collection count check failed" in result.message
+        assert result.error is not None
+        assert result.error.category.name == "SOURCE_UNAVAILABLE"
+        assert "connection refused" not in result.message
+
+    @patch.object(MetabaseHandler, "_fetch_collections", new_callable=AsyncMock)
+    async def test_validate_collection_count_403_maps_to_permission(
+        self, mock_fetch, mock_client
+    ):
+        """A 401/403 on /api/collection maps to a PERMISSION failure, not source."""
+        mock_fetch.side_effect = MetabaseSourceUnavailableError(
+            message="Failed to fetch collections — HTTP 403",
+            source_type="metabase",
+            endpoint="/api/collection",
+            http_status=403,
+        )
+
+        result = await MetabaseHandler._validate_collection_count(mock_client, {}, {})
+
+        assert result.passed is False
+        assert result.error is not None
+        assert result.error.category.name == "PERMISSION"
+        assert result.error.code == "PERMISSION_METABASE_COLLECTION"
 
     # _validate_dashboard_count -------------------------------------------------
 
@@ -301,6 +330,8 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_dashboard_count(mock_client, {}, {})
 
         assert result.passed is False
+        assert result.error is not None
+        assert result.error.category.name == "SOURCE_UNAVAILABLE"
 
     # _validate_question_count -------------------------------------------------
 
@@ -337,7 +368,8 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_question_count(mock_client, {}, {})
 
         assert result.passed is False
-        assert "Question count check failed" in result.message
+        assert result.error is not None
+        assert result.error.category.name == "SOURCE_UNAVAILABLE"
 
     # _validate_native_query_permission ----------------------------------------
 
@@ -376,7 +408,14 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_native_query_permission(mock_client)
 
         assert result.passed is False
-        assert "BigQuery" in result.message
+        assert result.error is not None
+        assert result.error.code == "PERMISSION_METABASE_NATIVE_QUERY"
+        assert result.error.category.name == "PERMISSION"
+        assert result.error.audience.name == "USER"
+        assert "BigQuery" in result.error.evidence["missing_databases"]
+        assert result.error.suggested_action is not None
+        # DB names ride in evidence, never the user-facing message.
+        assert "BigQuery" not in result.message
 
     async def test_validate_native_query_permission_api_failure_returns_failure(
         self, mock_client
@@ -389,16 +428,56 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_native_query_permission(mock_client)
 
         assert result.passed is False
+        assert result.error is not None
+        assert result.error.category.name == "SOURCE_UNAVAILABLE"
+
+    async def test_validate_native_query_permission_accepts_bare_list_response(
+        self, mock_client
+    ):
+        """Older Metabase returns a bare list (no ``{"data": ...}``) — handle it."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = [
+            {"id": 1, "name": "Snowflake", "native_permissions": "write"},
+        ]
+        mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
+
+        result = await MetabaseHandler._validate_native_query_permission(mock_client)
+
+        assert result.passed is True
+        assert "Check successful" in result.message
+
+    # duration measurement -----------------------------------------------------
+
+    @patch.object(MetabaseHandler, "_elapsed_ms", return_value=42.0)
+    @patch.object(MetabaseHandler, "_fetch_collections", new_callable=AsyncMock)
+    async def test_validator_stamps_measured_duration_ms(
+        self, mock_fetch, mock_elapsed, mock_client
+    ):
+        """A check stamps the measured elapsed time onto ``duration_ms``."""
+        mock_fetch.return_value = [{"id": 1, "personal_owner_id": None}]
+
+        result = await MetabaseHandler._validate_collection_count(mock_client, {}, {})
+
+        assert result.duration_ms == 42.0
+        mock_elapsed.assert_called_once()
 
 
 class TestMetabaseHandlerPreflightCheck:
-    """Integration tests for MetabaseHandler.preflight_check()."""
+    """Verdict-path tests for MetabaseHandler.preflight_check().
+
+    The gate tree is: authentication → collection (blocking) → native-query
+    (blocking) → dashboard/question (advisory). NOT_READY only via a
+    short-circuit; PARTIAL if an advisory check fails; READY otherwise.
+    """
 
     @pytest.fixture
     def mock_client(self):
         client = MagicMock(spec=MetabaseApiClient)
         client.host = "https://myinstance.metabaseapp.com"
         client.port = 443
+        # Authentication tier passes by default; failure tests override this.
+        client.test_connection = AsyncMock(return_value=True)
         return client
 
     @pytest.fixture
@@ -410,8 +489,8 @@ class TestMetabaseHandlerPreflightCheck:
         return MetabaseHandler(client=None)
 
     @staticmethod
-    def _check(name: str, passed: bool, message: str = "") -> PreflightCheck:
-        return PreflightCheck(name=name, passed=passed, message=message)
+    def _check(name, passed, message="", error=None) -> PreflightCheck:
+        return PreflightCheck(name=name, passed=passed, message=message, error=error)
 
     @patch.object(
         MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
@@ -419,15 +498,10 @@ class TestMetabaseHandlerPreflightCheck:
     @patch.object(MetabaseHandler, "_validate_question_count", new_callable=AsyncMock)
     @patch.object(MetabaseHandler, "_validate_dashboard_count", new_callable=AsyncMock)
     @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
-    async def test_preflight_check_all_pass_returns_all_results(
-        self,
-        mock_collection,
-        mock_dashboard,
-        mock_question,
-        mock_native,
-        handler,
+    async def test_all_pass_returns_ready_in_tier_order(
+        self, mock_collection, mock_dashboard, mock_question, mock_native, handler
     ):
-        """When all validators succeed, all four checks are present in the result."""
+        """All checks pass → READY, five checks in canonical tier order."""
         mock_collection.return_value = self._check(
             "collectionCountCheck", True, "Total collections: 3"
         )
@@ -444,49 +518,227 @@ class TestMetabaseHandlerPreflightCheck:
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
         assert result.status == PreflightStatus.READY
-        assert len(result.checks) == 4
-        names = {c.name for c in result.checks}
-        assert names == {
+        assert [c.name for c in result.checks] == [
+            "authenticationCheck",
             "collectionCountCheck",
+            "nativeQueryPermissionCheck",
             "dashboardCountCheck",
             "questionCountCheck",
-            "nativeQueryPermissionCheck",
-        }
+        ]
         assert all(c.passed for c in result.checks)
 
-    @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
-    async def test_preflight_check_short_circuits_when_collection_check_fails(
-        self, mock_collection, handler
+    async def test_auth_failure_bad_credentials_blocks_and_short_circuits(
+        self, handler, mock_client
     ):
-        """When collectionCountCheck fails, subsequent checks are not run."""
-        mock_collection.return_value = self._check(
-            "collectionCountCheck",
-            False,
-            "Collection count check failed: connection refused",
+        """Rejected credentials → NOT_READY with a typed AUTH/USER error, no later checks."""
+        mock_client.test_connection = AsyncMock(
+            side_effect=MetabaseSessionAuthError(
+                auth_method="session-token",
+                principal="u",
+                failure_reason="401",
+            )
         )
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
         assert result.status == PreflightStatus.NOT_READY
-        # Short-circuit: only the failed collection check is present.
-        assert len(result.checks) == 1
-        assert result.checks[0].name == "collectionCountCheck"
-        assert result.checks[0].passed is False
+        assert [c.name for c in result.checks] == ["authenticationCheck"]
+        err = result.checks[0].error
+        assert err is not None
+        assert err.category.name == "AUTH"
+        assert err.audience.name == "USER"
+        # Clean default message renders on the gate; status stays out of it.
+        assert err.message == "Metabase authentication failed."
+        assert err.suggested_action is not None
+        assert "401" not in err.message
 
-    async def test_preflight_check_no_client_returns_failure(self, handler_no_client):
-        """preflight_check returns NOT_READY when no client AND no credentials.
+    async def test_auth_failure_unreachable_maps_to_source_unavailable(
+        self, handler, mock_client
+    ):
+        """A transport error → NOT_READY with a SOURCE_UNAVAILABLE error, no leak."""
+        mock_client.test_connection = AsyncMock(
+            side_effect=ConnectionError("connection refused")
+        )
 
-        The raw exception text must NOT leak into the typed ``message`` field
-        (E019) — the detail goes to the application logs instead.
+        result = await handler.preflight_check(PreflightInput(credentials=_creds()))
+
+        assert result.status == PreflightStatus.NOT_READY
+        assert [c.name for c in result.checks] == ["authenticationCheck"]
+        assert result.checks[0].error.category.name == "SOURCE_UNAVAILABLE"
+        assert "connection refused" not in result.checks[0].message
+
+    @patch.object(
+        MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
+    )
+    @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
+    async def test_collection_failure_blocks_and_short_circuits(
+        self, mock_collection, mock_native, handler
+    ):
+        """Collection read failure → NOT_READY; native-query check never runs."""
+        mock_collection.return_value = self._check(
+            "collectionCountCheck",
+            False,
+            "denied",
+            error=MetabaseCollectionAccessError().to_failure_details(),
+        )
+
+        result = await handler.preflight_check(PreflightInput(credentials=_creds()))
+
+        assert result.status == PreflightStatus.NOT_READY
+        assert [c.name for c in result.checks] == [
+            "authenticationCheck",
+            "collectionCountCheck",
+        ]
+        mock_native.assert_not_called()
+        assert result.checks[1].error.category.name == "PERMISSION"
+
+    @patch.object(MetabaseHandler, "_validate_question_count", new_callable=AsyncMock)
+    @patch.object(MetabaseHandler, "_validate_dashboard_count", new_callable=AsyncMock)
+    @patch.object(
+        MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
+    )
+    @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
+    async def test_native_query_failure_blocks_before_advisory_tier(
+        self, mock_collection, mock_native, mock_dashboard, mock_question, handler
+    ):
+        """Native-query permission is blocking: NOT_READY, advisory checks never run."""
+        mock_collection.return_value = self._check(
+            "collectionCountCheck", True, "Total collections: 3"
+        )
+        mock_native.return_value = self._check(
+            "nativeQueryPermissionCheck",
+            False,
+            "missing native query permission",
+            error=MetabaseNativeQueryPermissionError(
+                missing_databases=["BigQuery"]
+            ).to_failure_details(),
+        )
+
+        result = await handler.preflight_check(PreflightInput(credentials=_creds()))
+
+        assert result.status == PreflightStatus.NOT_READY
+        assert [c.name for c in result.checks] == [
+            "authenticationCheck",
+            "collectionCountCheck",
+            "nativeQueryPermissionCheck",
+        ]
+        mock_dashboard.assert_not_called()
+        mock_question.assert_not_called()
+        err = result.checks[2].error
+        assert err.code == "PERMISSION_METABASE_NATIVE_QUERY"
+        assert "BigQuery" in err.evidence["missing_databases"]
+        assert err.suggested_action is not None
+
+    @patch.object(
+        MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
+    )
+    @patch.object(MetabaseHandler, "_validate_question_count", new_callable=AsyncMock)
+    @patch.object(MetabaseHandler, "_validate_dashboard_count", new_callable=AsyncMock)
+    @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
+    async def test_dashboard_advisory_failure_returns_partial_and_proceeds(
+        self, mock_collection, mock_dashboard, mock_question, mock_native, handler
+    ):
+        """An advisory dashboard failure downgrades to PARTIAL — the run proceeds."""
+        mock_collection.return_value = self._check(
+            "collectionCountCheck", True, "Total collections: 3"
+        )
+        mock_native.return_value = self._check(
+            "nativeQueryPermissionCheck", True, "Check successful"
+        )
+        mock_question.return_value = self._check(
+            "questionCountCheck", True, "Total questions: 5"
+        )
+        mock_dashboard.return_value = self._check(
+            "dashboardCountCheck",
+            False,
+            "dashboards unavailable",
+            error=MetabaseSourceUnavailableError(
+                message="Failed to fetch Metabase dashboards.", source_type="metabase"
+            ).to_failure_details(),
+        )
+
+        result = await handler.preflight_check(PreflightInput(credentials=_creds()))
+
+        assert result.status == PreflightStatus.PARTIAL
+        assert len(result.checks) == 5
+        dashboard = next(c for c in result.checks if c.name == "dashboardCountCheck")
+        assert dashboard.passed is False
+
+    @patch.object(
+        MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
+    )
+    @patch.object(MetabaseHandler, "_validate_question_count", new_callable=AsyncMock)
+    @patch.object(MetabaseHandler, "_validate_dashboard_count", new_callable=AsyncMock)
+    @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
+    async def test_both_advisory_failures_return_partial(
+        self, mock_collection, mock_dashboard, mock_question, mock_native, handler
+    ):
+        """Both advisory checks failing still only downgrades to PARTIAL."""
+        mock_collection.return_value = self._check(
+            "collectionCountCheck", True, "Total collections: 3"
+        )
+        mock_native.return_value = self._check(
+            "nativeQueryPermissionCheck", True, "Check successful"
+        )
+        mock_dashboard.return_value = self._check("dashboardCountCheck", False, "down")
+        mock_question.return_value = self._check("questionCountCheck", False, "down")
+
+        result = await handler.preflight_check(PreflightInput(credentials=_creds()))
+
+        assert result.status == PreflightStatus.PARTIAL
+        assert len(result.checks) == 5
+
+    async def test_no_client_no_credentials_blocks_at_authentication(
+        self, handler_no_client
+    ):
+        """No client and no credentials → blocked at the authentication tier.
+
+        The typed message stays a clean sentence — no raw exception text (E019).
         """
         result = await handler_no_client.preflight_check(PreflightInput(credentials=[]))
 
         assert result.status == PreflightStatus.NOT_READY
-        assert len(result.checks) >= 1
-        assert result.checks[0].name == "collectionCountCheck"
+        assert result.checks[0].name == "authenticationCheck"
         assert result.checks[0].passed is False
-        assert (
-            result.checks[0].message
-            == "Preflight check failed — see application logs for detail"
+        assert result.checks[0].error is not None
+        assert "not initialized" in result.checks[0].message.lower()
+
+    @patch.object(
+        MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
+    )
+    @patch.object(MetabaseHandler, "_validate_question_count", new_callable=AsyncMock)
+    @patch.object(MetabaseHandler, "_validate_dashboard_count", new_callable=AsyncMock)
+    @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
+    async def test_gate_path_reads_underscore_filter_contract_fields(
+        self, mock_collection, mock_dashboard, mock_question, mock_native, handler
+    ):
+        """Regression for the silent-drift audit.
+
+        On the gate path the typed input carries only the underscore contract
+        fields (``include_collections`` / ``exclude_collections``); the handler
+        must parse them and pass them to the validators.
+        """
+        for mock, name in (
+            (mock_collection, "collectionCountCheck"),
+            (mock_dashboard, "dashboardCountCheck"),
+            (mock_question, "questionCountCheck"),
+            (mock_native, "nativeQueryPermissionCheck"),
+        ):
+            mock.return_value = self._check(name, True, "ok")
+
+        gate_input = PreflightInput(
+            credentials=_creds(),
+            metadata=BaseMetadataConfig.model_validate(
+                {
+                    "include_collections": {"1": "Engineering"},
+                    "exclude_collections": {"9": "Archived"},
+                }
+            ),
         )
-        assert "Metabase client not initialized" not in result.checks[0].message
+
+        await handler.preflight_check(gate_input)
+
+        include_arg = mock_collection.call_args.args[1]
+        exclude_arg = mock_collection.call_args.args[2]
+        assert include_arg == {"1": "Engineering"}
+        assert exclude_arg == {"9": "Archived"}

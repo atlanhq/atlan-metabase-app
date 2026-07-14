@@ -12,13 +12,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors import AuthError, InvalidInputError, SourceUnavailableError
+from application_sdk.errors import (
+    AppPermissionDeniedError,
+    AuthError,
+    InvalidInputError,
+    SourceUnavailableError,
+)
 
 
 @dataclass(kw_only=True)
 class MetabaseSessionAuthError(AuthError):
-    """``POST /api/session`` did not return a successful response."""
+    """``POST /api/session`` did not return a successful response.
 
+    Carries a clean default ``message`` so the gate surfaces a stable sentence;
+    the HTTP status rides in ``failure_reason`` / the ``cause`` chain, never the
+    user-facing message.
+    """
+
+    message: str = "Metabase authentication failed."
+    suggested_action: str | None = (
+        "Verify the Metabase host, port, and credentials, then re-run preflight."
+    )
     code: ClassVar[str] = "AUTH_METABASE_SESSION"
 
 
@@ -75,3 +89,43 @@ class MetabaseSourceUnavailableError(SourceUnavailableError):
     """
 
     code: ClassVar[str] = "SOURCE_UNAVAILABLE_METABASE"
+
+
+@dataclass(kw_only=True)
+class MetabaseCollectionAccessError(AppPermissionDeniedError):
+    """Metabase rejected the collection listing with 401/403 during preflight.
+
+    Read access to ``/api/collection`` is the authorization gate for the whole
+    run — collections are the root asset type. A permission failure here is
+    the customer's to fix, so this inherits ``AppPermissionDeniedError``'s
+    PERMISSION category / USER audience.
+    """
+
+    message: str = "Metabase denied access to the collection listing."
+    suggested_action: str | None = (
+        "Grant the connector's user read access to collections in Metabase, "
+        "then re-run preflight."
+    )
+    code: ClassVar[str] = "PERMISSION_METABASE_COLLECTION"
+
+
+@dataclass(kw_only=True)
+class MetabaseNativeQueryPermissionError(AppPermissionDeniedError):
+    """One or more databases lack native-query ``write`` permission.
+
+    The connector needs native query editing permission to extract question
+    SQL; a missing grant is customer-fixable, so this inherits
+    ``AppPermissionDeniedError``'s PERMISSION category / USER audience. The
+    offending database names ride in ``evidence`` via ``missing_databases``.
+    """
+
+    message: str = (
+        "One or more Metabase databases are missing native query editing permission."
+    )
+    suggested_action: str | None = (
+        "Grant native query editing (write) permission on the affected "
+        "databases in Metabase, then re-run preflight."
+    )
+    code: ClassVar[str] = "PERMISSION_METABASE_NATIVE_QUERY"
+
+    missing_databases: list[str] | None = None

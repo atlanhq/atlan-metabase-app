@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.client import MetabaseApiClient
+from app.errors import MetabaseSessionAuthError
 
 
 class TestMetabaseApiClient:
@@ -119,15 +120,19 @@ class TestMetabaseApiClient:
     @patch.object(
         MetabaseApiClient, "execute_http_post_request", new_callable=AsyncMock
     )
-    async def test_authenticate_non_200_raises_exception(self, mock_post, client):
-        """Non-success response raises an Exception with the status code."""
+    async def test_authenticate_non_200_captures_status_in_failure_reason(
+        self, mock_post, client
+    ):
+        """Non-success response raises with the status in failure_reason, not the message."""
         mock_response = MagicMock()
         mock_response.is_success = False
         mock_response.status_code = 401
         mock_post.return_value = mock_response
 
-        with pytest.raises(Exception, match="401"):
+        with pytest.raises(MetabaseSessionAuthError) as exc_info:
             await client._authenticate()
+        assert exc_info.value.failure_reason == "401"
+        assert exc_info.value.message == "Metabase authentication failed."
 
     @patch.object(
         MetabaseApiClient, "execute_http_post_request", new_callable=AsyncMock
@@ -142,15 +147,19 @@ class TestMetabaseApiClient:
     @patch.object(
         MetabaseApiClient, "execute_http_post_request", new_callable=AsyncMock
     )
-    async def test_authenticate_403_raises_with_status(self, mock_post, client):
-        """403 response raises Exception mentioning the status."""
+    async def test_authenticate_403_captures_status_in_failure_reason(
+        self, mock_post, client
+    ):
+        """403 response captures the status in failure_reason; message stays clean."""
         mock_response = MagicMock()
         mock_response.is_success = False
         mock_response.status_code = 403
         mock_post.return_value = mock_response
 
-        with pytest.raises(Exception, match="403"):
+        with pytest.raises(MetabaseSessionAuthError) as exc_info:
             await client._authenticate()
+        assert exc_info.value.failure_reason == "403"
+        assert "403" not in exc_info.value.message
 
     # -------------------------------------------------------------------------
     # test_connection
