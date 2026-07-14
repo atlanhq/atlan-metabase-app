@@ -18,7 +18,7 @@ entrypoints:
   marketplace_card: true
 deploy:
   execution_mode: native
-  splitDeploymentEnabled: false
+  splitDeploymentEnabled: true
   dapr:
     objectstore: true
     secretstore: true
