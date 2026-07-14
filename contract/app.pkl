@@ -64,10 +64,10 @@ atlanYamlOverrides {
 deploy = new DeployConfig {
   executionMode = "native"
 
-  // splitDeployment pinned off explicitly — it changes the worker/HTTP
-  // container topology and is a separate decision from KEDA. (Toolkit
-  // 0.10.4 flipped its default to true; keep the bump a no-op here.)
-  splitDeployment = false
+  // splitDeployment enabled to align with the toolkit default (flipped to
+  // true in 0.10.4). Splits the Temporal worker and HTTP/server into separate
+  // container topologies; a separate decision from KEDA.
+  splitDeployment = true
 
   // Dapr sidecars enabled (app-wide, not per-pool). secretstore is needed for
   // credential resolution (CredentialRef → raw creds via
