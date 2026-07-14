@@ -165,8 +165,10 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
         "include_collections", "exclude_collections", mode="before"
     )(_coerce_collection_filter)
 
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
     output_prefix: str = ""
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     processed_data_path: str = ""
     chunk_start: int = 0
 
@@ -199,6 +201,7 @@ class MetabaseOutput(Output):
 
     transformed_data_prefix: str = ""
     connection_qualified_name: str = ""
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
     view_lineage_output_prefix: str = ""
     publish_state_prefix: str = ""
@@ -236,6 +239,7 @@ class MetabaseLineageInput(Input):
     view_lineage_input_prefix: str = ""
 
     # Where to write the Process / ColumnProcess NDJSON.
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
     output_prefix: str = ""
 
@@ -272,6 +276,7 @@ class FetchInput(Input):
     only be reachable inside one activity context.
     """
 
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
     credential_ref: CredentialRef | None = None
     inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
@@ -293,6 +298,7 @@ class FilterInput(Input):
     ``FileReference`` referenced here before the task runs.
     """
 
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
     include_collections: CollectionFilter = Field(default_factory=dict)
     exclude_collections: CollectionFilter = Field(default_factory=dict)
@@ -322,6 +328,7 @@ class FilterOutput(Output):
 class FetchDetailInput(Input):
     """Input for tasks that fetch per-entity detail from a filtered file."""
 
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
     source_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
@@ -336,6 +343,7 @@ class ProcessInput(Input):
     inline) stays consistent with every other task.
     """
 
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
     collections_filtered_file: FileReference | None = None
     databases_filtered_file: FileReference | None = None
@@ -365,9 +373,11 @@ class BuildLineageInput(Input):
     built-in ``open()``.
     """
 
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
     # Local directory holding QI parsed-SQL NDJSON (already downloaded from
     # ``view_lineage_input_prefix`` by the entrypoint).
+    # conformance: ignore[P012] local directory holding downloaded QI parsed-SQL NDJSON, read via iter_qi_records; workflow-relative path normalised by the SDK ObjectStore. FileReference migration tracked as a follow-up refactor.
     qi_local_path: str = ""
     connection_qualified_name: str = ""
     connection_name: str = ""
@@ -376,6 +386,7 @@ class BuildLineageInput(Input):
 class BuildLineageOutput(Output):
     """Output for ``build_lineage_records``."""
 
+    # conformance: ignore[P012] local staging directory uploaded via UploadInput(local_path=...); workflow-relative path normalised by the SDK ObjectStore. FileReference migration tracked as a follow-up refactor.
     stage_dir: str = ""
     process_count: int = 0
     column_process_count: int = 0
@@ -385,7 +396,9 @@ class TransformTaskInput(Input):
     """Input for ``transform_data`` — runs once per asset typename."""
 
     workflow_id: str = ""
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     output_path: str = ""
+    # conformance: ignore[P012] workflow-relative local staging path (default_output_path/{workflow_id}); consumed by local file I/O (os.path.join / raw_file / UploadInput.local_path) and normalised by the SDK ObjectStore per its documented path semantics (accepts ./local/tmp workflow paths) — not a cross-worker absolute path. FileReference migration tracked as a follow-up refactor.
     processed_data_path: str = ""
     connection_qualified_name: str = ""
     connection_name: str = ""

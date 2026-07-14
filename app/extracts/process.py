@@ -415,6 +415,7 @@ def process_assets(
             question_ref = {
                 "typeName": "MetabaseQuestion",
                 "uniqueAttributes": {
+                    # conformance: ignore[P028] cross-reference to an existing asset by qualifiedName (Atlas ref uniqueAttributes), not asset instantiation; pyatlan ships no creator for the Metabase family.
                     "qualifiedName": f"{connection_qualified_name}/questions/{question['id']}"
                 },
             }
@@ -422,6 +423,7 @@ def process_assets(
                 {
                     "typeName": "MetabaseDashboard",
                     "uniqueAttributes": {
+                        # conformance: ignore[P028] cross-reference to an existing asset by qualifiedName (Atlas ref uniqueAttributes), not asset instantiation; pyatlan ships no creator for the Metabase family.
                         "qualifiedName": f"{connection_qualified_name}/dashboards/{d['id']}"
                     },
                 }

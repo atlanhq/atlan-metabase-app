@@ -48,18 +48,22 @@ from app.api_types import (
 
 
 def _collection_qn(connection_qn: str, collection_id: Any) -> str:
+    # conformance: ignore[P028] Metabase asset qualifiedName; pyatlan_v9 ships no .creator()/.create() for the Metabase asset family, so the grammar cannot be delegated. Centralised here as the single source of truth (see module docstring).
     return f"{connection_qn}/collections/{collection_id}"
 
 
 def _dashboard_qn(connection_qn: str, dashboard_id: Any) -> str:
+    # conformance: ignore[P028] Metabase asset qualifiedName; pyatlan_v9 ships no .creator()/.create() for the Metabase asset family, so the grammar cannot be delegated. Centralised here as the single source of truth (see module docstring).
     return f"{connection_qn}/dashboards/{dashboard_id}"
 
 
 def _question_qn(connection_qn: str, question_id: Any) -> str:
+    # conformance: ignore[P028] Metabase asset qualifiedName; pyatlan_v9 ships no .creator()/.create() for the Metabase asset family, so the grammar cannot be delegated. Centralised here as the single source of truth (see module docstring).
     return f"{connection_qn}/questions/{question_id}"
 
 
 def _bi_process_qn(connection_qn: str, question_id: Any) -> str:
+    # conformance: ignore[P028] Metabase asset qualifiedName; pyatlan_v9 ships no .creator()/.create() for the Metabase asset family, so the grammar cannot be delegated. Centralised here as the single source of truth (see module docstring).
     return f"{connection_qn}/questions_dashboards/{question_id}"
 
 

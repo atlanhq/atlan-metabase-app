@@ -245,8 +245,10 @@ def build_process(
     if not source_tables:
         return None
 
+    # conformance: ignore[P028] reference to an existing MetabaseQuestion by qualifiedName, not asset instantiation.
     question_qn = f"{connection_qualified_name}/questions/{question_id}"
     p_hash = _hash(str(question_id), sql)
+    # conformance: ignore[P028] custom lineage-Process qualifiedName (question_tables/question_columns + content hash) — bespoke grammar owned by this connector's lineage builder, not a pyatlan asset factory.
     process_qn = f"{connection_qualified_name}/question_tables/{question_id}/{p_hash}"
     process_name = _truncate(question_name or f"Question {question_id}")
 
@@ -325,12 +327,15 @@ def build_column_process(
     if not source_columns:
         return None
 
+    # conformance: ignore[P028] reference to an existing MetabaseQuestion by qualifiedName, not asset instantiation.
     question_qn = f"{connection_qualified_name}/questions/{question_id}"
     parent_process_qn = (
+        # conformance: ignore[P028] custom lineage-Process qualifiedName (question_tables/question_columns + content hash) — bespoke grammar owned by this connector's lineage builder, not a pyatlan asset factory.
         f"{connection_qualified_name}/question_tables/{question_id}/"
         f"{parent_process_hash}"
     )
     cp_hash = _hash(str(question_id), sql, "column")
+    # conformance: ignore[P028] custom lineage-Process qualifiedName (question_tables/question_columns + content hash) — bespoke grammar owned by this connector's lineage builder, not a pyatlan asset factory.
     cp_qn = f"{connection_qualified_name}/question_columns/{question_id}/{cp_hash}"
     cp_name = _truncate(question_name or f"Question {question_id} columns")
 
