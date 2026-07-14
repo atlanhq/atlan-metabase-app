@@ -11,9 +11,11 @@ The SDK auto-serves ``/workflows/v1/configmap/<id>`` from ``app/generated/``
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import orjson
+from application_sdk.errors import AuthError, InvalidInputError
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -33,7 +35,12 @@ from application_sdk.observability.logger_adaptor import get_logger
 from app.client import MetabaseApiClient, build_client
 from app.constants import MetabaseUrls
 from app.credentials import parse_metabase_credentials
-from app.errors import MetabaseClientNotInitializedError, MetabaseSourceUnavailableError
+from app.errors import (
+    MetabaseClientNotInitializedError,
+    MetabaseCollectionAccessError,
+    MetabaseNativeQueryPermissionError,
+    MetabaseSourceUnavailableError,
+)
 
 logger = get_logger(__name__)
 
@@ -120,82 +127,52 @@ class MetabaseHandler(Handler):
                 await client.close()
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        """Run the four ``sageTemplate`` preflight checks."""
-        try:
-            client = await self._client_for(input.credentials)
-        except Exception:
-            logger.error("Preflight client build failed", exc_info=True)
-            return PreflightOutput(
-                status=PreflightStatus.NOT_READY,
-                checks=[
-                    PreflightCheck(
-                        name="collectionCountCheck",
-                        passed=False,
-                        message="Preflight check failed — see application logs for detail",
-                    ),
-                ],
-                message="Preflight check failed — see application logs for detail",
-            )
+        """Gate readiness in blocking → advisory tiers.
+
+        Ordering is reachability → authentication → authorization → advisory.
+        Each blocking tier short-circuits ``NOT_READY``; the advisory tier only
+        downgrades the verdict to ``PARTIAL`` (the run still proceeds). Unhandled
+        errors are deliberately *not* caught here — a plumbing bug should fail the
+        gate open (SDK logs and proceeds), never silently block every run.
+        """
+        checks: list[PreflightCheck] = []
+
+        auth_check, client = await self._authentication_check(input.credentials)
+        checks.append(auth_check)
+        if client is None:
+            return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
 
         owns_client = self.client is None
         try:
-            # Filters may arrive under ``metadata`` (curl / docs path) or
-            # ``connection_config`` (v3 preflight runner path — see
-            # ``application_sdk.testing.integration.client._call_preflight``).
-            # Try both so the same handler serves the UI form, the integration
-            # runner, and direct API consumers.
-            include_filter, exclude_filter = self._read_filters(input.metadata)
-            if not include_filter and not exclude_filter:
-                include_filter, exclude_filter = self._read_filters(
-                    getattr(input, "connection_config", None)
-                )
-
-            checks: list[PreflightCheck] = []
+            include_filter, exclude_filter = self._resolve_filters(input)
 
             collection_check = await self._validate_collection_count(
                 client, include_filter, exclude_filter
             )
             checks.append(collection_check)
-
             if not collection_check.passed:
-                # Short-circuit when the first check fails — it usually means
-                # the API call itself failed and the rest will fail identically.
-                return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
-                    checks=checks,
-                )
+                return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
 
-            checks.append(
-                await self._validate_dashboard_count(
-                    client, include_filter, exclude_filter
-                )
-            )
-            checks.append(
-                await self._validate_question_count(
-                    client, include_filter, exclude_filter
-                )
-            )
-            checks.append(await self._validate_native_query_permission(client))
+            native_check = await self._validate_native_query_permission(client)
+            checks.append(native_check)
+            if not native_check.passed:
+                return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
 
-            all_passed = all(c.passed for c in checks)
+            dashboard_check = await self._validate_dashboard_count(
+                client, include_filter, exclude_filter
+            )
+            question_check = await self._validate_question_count(
+                client, include_filter, exclude_filter
+            )
+            checks.append(dashboard_check)
+            checks.append(question_check)
+
+            advisory_ok = dashboard_check.passed and question_check.passed
             return PreflightOutput(
                 status=PreflightStatus.READY
-                if all_passed
-                else PreflightStatus.NOT_READY,
+                if advisory_ok
+                else PreflightStatus.PARTIAL,
                 checks=checks,
-            )
-        except Exception:
-            logger.error("Preflight check failed", exc_info=True)
-            return PreflightOutput(
-                status=PreflightStatus.NOT_READY,
-                checks=[
-                    PreflightCheck(
-                        name="collectionCountCheck",
-                        passed=False,
-                        message="Preflight check failed — see application logs for detail",
-                    ),
-                ],
-                message="Preflight check failed — see application logs for detail",
             )
         finally:
             if owns_client:
@@ -218,6 +195,89 @@ class MetabaseHandler(Handler):
             )
         credential = parse_metabase_credentials(credentials)
         return await build_client(credential)
+
+    async def _authentication_check(
+        self, credentials: list[HandlerCredential] | dict[str, Any]
+    ) -> tuple[PreflightCheck, MetabaseApiClient | None]:
+        """Reachability + authentication tier.
+
+        Returns ``(check, client)``. On success the caller reuses the returned
+        client for the remaining tiers; on failure ``client`` is ``None`` and a
+        freshly-built client (if any) is closed here. Failures are attributed by
+        type — malformed/absent credentials to ``InvalidInputError``, a rejected
+        session to the ``AuthError`` the client raised, anything else to
+        ``SourceUnavailableError``. This tier deliberately fails *closed*: unlike
+        the whole-preflight wrapper, an unresolved client means extraction cannot
+        run at all, so blocking with a typed error beats a mid-run crash.
+        """
+        start = time.perf_counter()
+        client: MetabaseApiClient | None = None
+        try:
+            client = await self._client_for(credentials)
+            await client.test_connection()
+            return (
+                PreflightCheck(
+                    name="authenticationCheck",
+                    passed=True,
+                    message="Authentication successful",
+                    duration_ms=self._elapsed_ms(start),
+                ),
+                client,
+            )
+        except (InvalidInputError, AuthError) as exc:
+            check = self._failed_check("authenticationCheck", exc, start)
+        except Exception as exc:
+            logger.warning("authenticationCheck failed", exc_info=True)
+            check = self._failed_check(
+                "authenticationCheck",
+                MetabaseSourceUnavailableError(
+                    message="Could not reach the Metabase host.",
+                    source_type="metabase",
+                    cause=exc,
+                ),
+                start,
+            )
+        if client is not None and self.client is None:
+            await client.close()
+        return check, None
+
+    def _resolve_filters(
+        self, input: PreflightInput
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Read include / exclude filters, tolerating both wire shapes.
+
+        Filters arrive under ``metadata`` (curl / docs path) or
+        ``connection_config`` (v3 preflight-runner path). Try both so one handler
+        serves the UI form, the integration runner, and direct API consumers.
+        """
+        include, exclude = self._read_filters(input.metadata)
+        if not include and not exclude:
+            include, exclude = self._read_filters(
+                getattr(input, "connection_config", None)
+            )
+        return include, exclude
+
+    @staticmethod
+    def _elapsed_ms(start: float) -> float:
+        """Milliseconds elapsed since ``start`` (``time.perf_counter``)."""
+        return round((time.perf_counter() - start) * 1000, 2)
+
+    @staticmethod
+    def _failed_check(name: str, error: Any, start: float) -> PreflightCheck:
+        """Build a failed ``PreflightCheck`` carrying a typed failure detail.
+
+        The user-facing text comes from ``error.message`` — the SDK ignores the
+        deprecated ``PreflightCheck.message`` for a failed check with a typed
+        ``error`` — so the check message mirrors it; diagnostics ride the
+        ``cause`` / ``evidence`` chain, never the message.
+        """
+        return PreflightCheck(
+            name=name,
+            passed=False,
+            message=getattr(error, "message", "") or "",
+            error=error.to_failure_details(),
+            duration_ms=MetabaseHandler._elapsed_ms(start),
+        )
 
     @staticmethod
     def _read_filters(metadata: Any) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -286,6 +346,7 @@ class MetabaseHandler(Handler):
         include_filter: dict[str, Any],
         exclude_filter: dict[str, Any],
     ) -> PreflightCheck:
+        start = time.perf_counter()
         try:
             collections = await MetabaseHandler._fetch_collections(client)
             count = 0
@@ -302,13 +363,27 @@ class MetabaseHandler(Handler):
                 name="collectionCountCheck",
                 passed=True,
                 message=f"Total collections: {count}",
+                duration_ms=MetabaseHandler._elapsed_ms(start),
             )
-        except Exception:
+        except MetabaseSourceUnavailableError as exc:
             logger.warning("collectionCountCheck failed", exc_info=True)
-            return PreflightCheck(
-                name="collectionCountCheck",
-                passed=False,
-                message="Collection count check failed — see application logs for detail",
+            error = (
+                MetabaseCollectionAccessError(cause=exc)
+                if exc.http_status in (401, 403)
+                else exc
+            )
+            return MetabaseHandler._failed_check("collectionCountCheck", error, start)
+        except Exception as exc:
+            logger.warning("collectionCountCheck failed", exc_info=True)
+            return MetabaseHandler._failed_check(
+                "collectionCountCheck",
+                MetabaseSourceUnavailableError(
+                    message="Failed to fetch Metabase collections.",
+                    source_type="metabase",
+                    endpoint="/api/collection",
+                    cause=exc,
+                ),
+                start,
             )
 
     @staticmethod
@@ -317,6 +392,7 @@ class MetabaseHandler(Handler):
         include_filter: dict[str, Any],
         exclude_filter: dict[str, Any],
     ) -> PreflightCheck:
+        start = time.perf_counter()
         try:
             collections = await MetabaseHandler._fetch_collections(client)
             effective_exclude: dict[str, Any] = dict(exclude_filter)
@@ -349,13 +425,22 @@ class MetabaseHandler(Handler):
                 name="dashboardCountCheck",
                 passed=True,
                 message=f"Total dashboards: {count}",
+                duration_ms=MetabaseHandler._elapsed_ms(start),
             )
-        except Exception:
+        except MetabaseSourceUnavailableError as exc:
             logger.warning("dashboardCountCheck failed", exc_info=True)
-            return PreflightCheck(
-                name="dashboardCountCheck",
-                passed=False,
-                message="Dashboard count check failed — see application logs for detail",
+            return MetabaseHandler._failed_check("dashboardCountCheck", exc, start)
+        except Exception as exc:
+            logger.warning("dashboardCountCheck failed", exc_info=True)
+            return MetabaseHandler._failed_check(
+                "dashboardCountCheck",
+                MetabaseSourceUnavailableError(
+                    message="Failed to fetch Metabase dashboards.",
+                    source_type="metabase",
+                    endpoint="/api/dashboard",
+                    cause=exc,
+                ),
+                start,
             )
 
     @staticmethod
@@ -364,6 +449,7 @@ class MetabaseHandler(Handler):
         include_filter: dict[str, Any],
         exclude_filter: dict[str, Any],
     ) -> PreflightCheck:
+        start = time.perf_counter()
         try:
             collections = await MetabaseHandler._fetch_collections(client)
             effective_exclude: dict[str, Any] = dict(exclude_filter)
@@ -396,19 +482,29 @@ class MetabaseHandler(Handler):
                 name="questionCountCheck",
                 passed=True,
                 message=f"Total questions: {count}",
+                duration_ms=MetabaseHandler._elapsed_ms(start),
             )
-        except Exception:
+        except MetabaseSourceUnavailableError as exc:
             logger.warning("questionCountCheck failed", exc_info=True)
-            return PreflightCheck(
-                name="questionCountCheck",
-                passed=False,
-                message="Question count check failed — see application logs for detail",
+            return MetabaseHandler._failed_check("questionCountCheck", exc, start)
+        except Exception as exc:
+            logger.warning("questionCountCheck failed", exc_info=True)
+            return MetabaseHandler._failed_check(
+                "questionCountCheck",
+                MetabaseSourceUnavailableError(
+                    message="Failed to fetch Metabase questions.",
+                    source_type="metabase",
+                    endpoint="/api/card",
+                    cause=exc,
+                ),
+                start,
             )
 
     @staticmethod
     async def _validate_native_query_permission(
         client: MetabaseApiClient,
     ) -> PreflightCheck:
+        start = time.perf_counter()
         try:
             url = MetabaseUrls.database(client.host, client.port)
             response = await client.execute_http_get_request(url=url, timeout=30)
@@ -421,8 +517,15 @@ class MetabaseHandler(Handler):
                     http_status=status if isinstance(status, int) else None,
                 )
 
-            response_body: dict[str, Any] = response.json()
-            databases: list[dict[str, Any]] = response_body.get("data", response_body)
+            # Newer Metabase wraps databases under {"data": [...]}; older
+            # versions return a bare list. Handle both without a .get on a list.
+            body: Any = response.json()
+            if isinstance(body, dict):
+                databases = body.get("data", [])
+            elif isinstance(body, list):
+                databases = body
+            else:
+                databases = []
             if not isinstance(databases, list):
                 databases = []
 
@@ -437,19 +540,27 @@ class MetabaseHandler(Handler):
                     name="nativeQueryPermissionCheck",
                     passed=True,
                     message="Check successful",
+                    duration_ms=MetabaseHandler._elapsed_ms(start),
                 )
-            return PreflightCheck(
-                name="nativeQueryPermissionCheck",
-                passed=False,
-                message=(
-                    "Check failed. Missing native query editing permission on "
-                    f"the following databases: [{', '.join(missing)}]"
-                ),
+            return MetabaseHandler._failed_check(
+                "nativeQueryPermissionCheck",
+                MetabaseNativeQueryPermissionError(missing_databases=missing),
+                start,
             )
-        except Exception:
+        except MetabaseSourceUnavailableError as exc:
             logger.warning("nativeQueryPermissionCheck failed", exc_info=True)
-            return PreflightCheck(
-                name="nativeQueryPermissionCheck",
-                passed=False,
-                message="Native query permission check failed — see application logs for detail",
+            return MetabaseHandler._failed_check(
+                "nativeQueryPermissionCheck", exc, start
+            )
+        except Exception as exc:
+            logger.warning("nativeQueryPermissionCheck failed", exc_info=True)
+            return MetabaseHandler._failed_check(
+                "nativeQueryPermissionCheck",
+                MetabaseSourceUnavailableError(
+                    message="Failed to fetch the Metabase database list.",
+                    source_type="metabase",
+                    endpoint="/api/database",
+                    cause=exc,
+                ),
+                start,
             )

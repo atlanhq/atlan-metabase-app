@@ -69,7 +69,6 @@ class MetabaseApiClient(BaseClient):
         if response is None or not response.is_success:
             status = response.status_code if response else "No response"
             raise MetabaseSessionAuthError(
-                message=f"Metabase authentication failed with status: {status}",
                 auth_method="session-token",
                 principal=self.username,
                 failure_reason=str(status),
