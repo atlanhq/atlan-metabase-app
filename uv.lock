@@ -813,16 +813,16 @@ standard = [
 
 [[package]]
 name = "fastapi-cli"
-version = "0.0.29"
+version = "0.0.30"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "rich-toolkit" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/82/986d498e3b4c41b043bd14ece562fc1a766b56aa1bfd980ae10717c9bc46/fastapi_cli-0.0.29.tar.gz", hash = "sha256:d1140852664a91754da6db4db1e750ace4059f1a21adcf9b161ad4310271a621", size = 23948, upload-time = "2026-07-08T12:45:03.19Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/a9/d618b7743180fb5c1252ad5b682d512323c1b93c8a13f08521b351d511dd/fastapi_cli-0.0.30.tar.gz", hash = "sha256:f808773b1a7aa1531ef750b68905787f3dd13834e78c44d1501f017335a4c1a7", size = 24971, upload-time = "2026-07-15T17:21:50.815Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/02/13/0786e5265018238f9a014270ff89d84b02065c2303df9bfac6857ab54bab/fastapi_cli-0.0.29-py3-none-any.whl", hash = "sha256:05bf08e0e527e3649a50c44bd1e0a2c13575c6cf9a939ff70013f288afc074de", size = 13191, upload-time = "2026-07-08T12:45:02.378Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/a0/f95bb8e07c00efb98f26e1876d6504b416af09e0bbe0a52cce979eae8d7e/fastapi_cli-0.0.30-py3-none-any.whl", hash = "sha256:11375b2a2c8c5a5ee05087960b6f1404ba1b48da96fa1a5aa68e2a5caf76f756", size = 14185, upload-time = "2026-07-15T17:21:49.878Z" },
 ]
 
 [package.optional-dependencies]
@@ -2458,7 +2458,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "9.10.0"
+version = "9.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -2474,9 +2474,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/ec/dafcf92454e402721b7215f9f86db034a7662b73039a229727f9fded9766/pyatlan-9.10.0.tar.gz", hash = "sha256:05024f8dd5076720d78c785264f2588dd65e72a2abc74249e25fa9c8cfc5ae1d", size = 3606669, upload-time = "2026-07-14T10:08:54.293Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/02/1529d1b818126bd9d76cf32f3163a5cf9253a141db272f1c98bb9f297f52/pyatlan-9.10.1.tar.gz", hash = "sha256:cbb540ef78679bb00b6580df071589a1bb6135e6b2c4efcd62d7f623aa42be59", size = 3609122, upload-time = "2026-07-15T17:53:10.502Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/a1/405c442c0ce26a9d86227d58ba20c94b727e778344da89fefa6646dd0d31/pyatlan-9.10.0-py3-none-any.whl", hash = "sha256:992adfeb3f10cd28d6163b26b27d722e4cfc9ac4cc378c6feb6e85d2f93327ba", size = 5534622, upload-time = "2026-07-14T10:08:52.191Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/de/2b64b98a5a5aabf1a4820590ee4c26074ecd7179387efe08e5614c0aaaa0/pyatlan-9.10.1-py3-none-any.whl", hash = "sha256:9f0fb70b9ca88f4dddfe9c68e8922fc54630c5555098f8f1cf7732b2d1f07c4d", size = 5535385, upload-time = "2026-07-15T17:53:08.525Z" },
 ]
 
 [[package]]
