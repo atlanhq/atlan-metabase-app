@@ -70,3 +70,4 @@ pools:
 dockerfile: ./Dockerfile
 argo_package_names:
 - '@atlan/metabase'
+release_model: semver

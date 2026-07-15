@@ -48,10 +48,16 @@ buildTag = "v1"
 selfDeployedRuntime = true
 
 // Extra atlan.yaml keys the typed App.pkl doesn't model yet (dockerfile
-// path, argo_package_names). Deep-merged on top of the generated atlan.yaml.
+// path, argo_package_names, release_model). Deep-merged on top of the
+// generated atlan.yaml.
 atlanYamlOverrides {
   ["dockerfile"] = "./Dockerfile"
   ["argo_package_names"] = new Listing { "@atlan/metabase" }
+  // Publish authoritative semver images (e.g. :2.2.0) from GitHub Releases
+  // instead of the CD default (mutable main-<sha> tag). Matches the mysql app.
+  // Consequence: merges to main build the image but no longer auto-publish to
+  // channel='all' — only a GitHub Release publishes to all tenants.
+  ["release_model"] = "semver"
 }
 
 // ---- Deployment config (rendered into atlan.yaml's deploy: block) -----
