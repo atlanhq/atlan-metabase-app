@@ -215,9 +215,12 @@ class MetabaseHandler(Handler):
         freshly-built client (if any) is closed here. Failures are attributed by
         type — malformed/absent credentials to ``InvalidInputError``, a rejected
         session to the ``AuthError`` the client raised, anything else to
-        ``SourceUnavailableError``. This tier deliberately fails *closed*: unlike
-        the whole-preflight wrapper, an unresolved client means extraction cannot
-        run at all, so blocking with a typed error beats a mid-run crash.
+        ``SourceUnavailableError``. An unresolved client means extraction cannot
+        run at all, so this tier records blocking intent (``status=NOT_READY``)
+        rather than raising into a mid-run crash. During the observation window
+        the caller still softens the aggregate to ``PARTIAL`` (the flip restores
+        the hard block); the per-check ``NOT_READY`` stamp is what carries the
+        intent through.
         """
         start = time.perf_counter()
         client: MetabaseApiClient | None = None
