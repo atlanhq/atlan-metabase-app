@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.2.1 (July 16, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.0...v2.2.1
+
+### Bug Fixes
+
+- drop hard-coded agent_spec override (inherit per-leg queue) (#204) (by @cmgrote in [cc6245b](https://github.com/atlanhq/atlan-metabase-app/commit/cc6245b))
+- adopt release_model=semver so GitHub Releases publish semver image tags (#207) (by @vaibhavatlan in [039ef4c](https://github.com/atlanhq/atlan-metabase-app/commit/039ef4c))
+- stop duplicating BIProcess lineage refs across attribute channels (#212) (by @vaibhavatlan in [aac06d5](https://github.com/atlanhq/atlan-metabase-app/commit/aac06d5))
+
+
 ## v2.2.0 (July 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.1.0...v2.2.0

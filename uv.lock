@@ -252,7 +252,7 @@ wheels = [
 
 [[package]]
 name = "atlan-metabase-app"
-version = "2.2.0"
+version = "2.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "atlan-application-sdk", extra = ["iam-auth", "pandas", "tests", "workflows"] },
