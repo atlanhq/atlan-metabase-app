@@ -130,8 +130,11 @@ class MetabaseHandler(Handler):
         """Gate readiness in blocking → advisory tiers.
 
         Ordering is reachability → authentication → authorization → advisory.
-        Each blocking tier short-circuits ``NOT_READY``; the advisory tier only
-        downgrades the verdict to ``PARTIAL`` (the run still proceeds). Unhandled
+        Blocking intent is recorded per-check (``status=NOT_READY``) and the
+        short-circuit control flow is kept, but during the CNCT-81 observation
+        window the overall verdict is softened to ``PARTIAL`` so the gate lets the
+        run proceed while the check matrix is collected; the advisory tier stamps
+        ``PARTIAL`` and continues. The aggregate is never ``NOT_READY``. Unhandled
         errors are deliberately *not* caught here — a plumbing bug should fail the
         gate open (SDK logs and proceeds), never silently block every run.
         """
@@ -140,7 +143,9 @@ class MetabaseHandler(Handler):
         auth_check, client = await self._authentication_check(input.credentials)
         checks.append(auth_check)
         if client is None:
-            return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
+            # Observation window (CNCT-81): revert to NOT_READY at hard-fail flip;
+            # per-check statuses stay as they are.
+            return PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
 
         owns_client = self.client is None
         try:
@@ -151,12 +156,16 @@ class MetabaseHandler(Handler):
             )
             checks.append(collection_check)
             if not collection_check.passed:
-                return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
+                # Observation window (CNCT-81): revert to NOT_READY at hard-fail
+                # flip; per-check statuses stay as they are.
+                return PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
 
             native_check = await self._validate_native_query_permission(client)
             checks.append(native_check)
             if not native_check.passed:
-                return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
+                # Observation window (CNCT-81): revert to NOT_READY at hard-fail
+                # flip; per-check statuses stay as they are.
+                return PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
 
             dashboard_check = await self._validate_dashboard_count(
                 client, include_filter, exclude_filter
@@ -225,7 +234,9 @@ class MetabaseHandler(Handler):
                 client,
             )
         except (InvalidInputError, AuthError) as exc:
-            check = self._failed_check("authenticationCheck", exc, start)
+            check = self._failed_check(
+                "authenticationCheck", exc, start, PreflightStatus.NOT_READY
+            )
         except Exception as exc:
             logger.warning("authenticationCheck failed", exc_info=True)
             check = self._failed_check(
@@ -236,6 +247,7 @@ class MetabaseHandler(Handler):
                     cause=exc,
                 ),
                 start,
+                PreflightStatus.NOT_READY,
             )
         if client is not None and self.client is None:
             await client.close()
@@ -263,17 +275,25 @@ class MetabaseHandler(Handler):
         return round((time.perf_counter() - start) * 1000, 2)
 
     @staticmethod
-    def _failed_check(name: str, error: Any, start: float) -> PreflightCheck:
+    def _failed_check(
+        name: str, error: Any, start: float, status: PreflightStatus
+    ) -> PreflightCheck:
         """Build a failed ``PreflightCheck`` carrying a typed failure detail.
 
         The user-facing text comes from ``error.message`` — the SDK ignores the
         deprecated ``PreflightCheck.message`` for a failed check with a typed
         ``error`` — so the check message mirrors it; diagnostics ride the
         ``cause`` / ``evidence`` chain, never the message.
+
+        ``status`` is mandatory (CNCT-81): a blocking check stamps
+        ``NOT_READY``, an advisory one ``PARTIAL``. A failed check left unstamped
+        is emitted as ``"unset"`` in the gate check matrix, so requiring it here
+        makes an unstamped failure impossible to write by accident.
         """
         return PreflightCheck(
             name=name,
             passed=False,
+            status=status,
             message=getattr(error, "message", "") or "",
             error=error.to_failure_details(),
             duration_ms=MetabaseHandler._elapsed_ms(start),
@@ -372,7 +392,9 @@ class MetabaseHandler(Handler):
                 if exc.http_status in (401, 403)
                 else exc
             )
-            return MetabaseHandler._failed_check("collectionCountCheck", error, start)
+            return MetabaseHandler._failed_check(
+                "collectionCountCheck", error, start, PreflightStatus.NOT_READY
+            )
         except Exception as exc:
             logger.warning("collectionCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
@@ -384,6 +406,7 @@ class MetabaseHandler(Handler):
                     cause=exc,
                 ),
                 start,
+                PreflightStatus.NOT_READY,
             )
 
     @staticmethod
@@ -429,7 +452,9 @@ class MetabaseHandler(Handler):
             )
         except MetabaseSourceUnavailableError as exc:
             logger.warning("dashboardCountCheck failed", exc_info=True)
-            return MetabaseHandler._failed_check("dashboardCountCheck", exc, start)
+            return MetabaseHandler._failed_check(
+                "dashboardCountCheck", exc, start, PreflightStatus.PARTIAL
+            )
         except Exception as exc:
             logger.warning("dashboardCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
@@ -441,6 +466,7 @@ class MetabaseHandler(Handler):
                     cause=exc,
                 ),
                 start,
+                PreflightStatus.PARTIAL,
             )
 
     @staticmethod
@@ -486,7 +512,9 @@ class MetabaseHandler(Handler):
             )
         except MetabaseSourceUnavailableError as exc:
             logger.warning("questionCountCheck failed", exc_info=True)
-            return MetabaseHandler._failed_check("questionCountCheck", exc, start)
+            return MetabaseHandler._failed_check(
+                "questionCountCheck", exc, start, PreflightStatus.PARTIAL
+            )
         except Exception as exc:
             logger.warning("questionCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
@@ -498,6 +526,7 @@ class MetabaseHandler(Handler):
                     cause=exc,
                 ),
                 start,
+                PreflightStatus.PARTIAL,
             )
 
     @staticmethod
@@ -546,11 +575,12 @@ class MetabaseHandler(Handler):
                 "nativeQueryPermissionCheck",
                 MetabaseNativeQueryPermissionError(missing_databases=missing),
                 start,
+                PreflightStatus.NOT_READY,
             )
         except MetabaseSourceUnavailableError as exc:
             logger.warning("nativeQueryPermissionCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
-                "nativeQueryPermissionCheck", exc, start
+                "nativeQueryPermissionCheck", exc, start, PreflightStatus.NOT_READY
             )
         except Exception as exc:
             logger.warning("nativeQueryPermissionCheck failed", exc_info=True)
@@ -563,4 +593,5 @@ class MetabaseHandler(Handler):
                     cause=exc,
                 ),
                 start,
+                PreflightStatus.NOT_READY,
             )

@@ -162,3 +162,7 @@ fail_under = 85
 [tool.uv.sources]
 # atlan-application-sdk = { path = "../application-sdk", editable = true }
 # atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", rev = "326962d9363d5bc267609282c2862b857149ddac" }
+# Temporary (CNCT-81): pin to the SDK branch that ships PreflightCheck.status for
+# tenant verification; revert to a released version (>= the release carrying the
+# field) before merge. See atlanhq/application-sdk#2751.
+atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk.git", branch = "cnct-81-preflight-per-check-status" }

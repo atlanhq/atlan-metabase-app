@@ -252,6 +252,7 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_collection_count(mock_client, {}, {})
 
         assert result.passed is False
+        assert result.status == PreflightStatus.NOT_READY
         assert result.error is not None
         assert result.error.category.name == "SOURCE_UNAVAILABLE"
         assert "connection refused" not in result.message
@@ -271,6 +272,7 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_collection_count(mock_client, {}, {})
 
         assert result.passed is False
+        assert result.status == PreflightStatus.NOT_READY
         assert result.error is not None
         assert result.error.category.name == "PERMISSION"
         assert result.error.code == "PERMISSION_METABASE_COLLECTION"
@@ -330,6 +332,7 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_dashboard_count(mock_client, {}, {})
 
         assert result.passed is False
+        assert result.status == PreflightStatus.PARTIAL
         assert result.error is not None
         assert result.error.category.name == "SOURCE_UNAVAILABLE"
 
@@ -368,6 +371,7 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_question_count(mock_client, {}, {})
 
         assert result.passed is False
+        assert result.status == PreflightStatus.PARTIAL
         assert result.error is not None
         assert result.error.category.name == "SOURCE_UNAVAILABLE"
 
@@ -408,6 +412,7 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_native_query_permission(mock_client)
 
         assert result.passed is False
+        assert result.status == PreflightStatus.NOT_READY
         assert result.error is not None
         assert result.error.code == "PERMISSION_METABASE_NATIVE_QUERY"
         assert result.error.category.name == "PERMISSION"
@@ -428,6 +433,7 @@ class TestMetabaseHandlerValidators:
         result = await MetabaseHandler._validate_native_query_permission(mock_client)
 
         assert result.passed is False
+        assert result.status == PreflightStatus.NOT_READY
         assert result.error is not None
         assert result.error.category.name == "SOURCE_UNAVAILABLE"
 
@@ -467,8 +473,14 @@ class TestMetabaseHandlerPreflightCheck:
     """Verdict-path tests for MetabaseHandler.preflight_check().
 
     The gate tree is: authentication → collection (blocking) → native-query
-    (blocking) → dashboard/question (advisory). NOT_READY only via a
-    short-circuit; PARTIAL if an advisory check fails; READY otherwise.
+    (blocking) → dashboard/question (advisory).
+
+    Observation window (CNCT-81): blocking intent is recorded per-check
+    (``status == NOT_READY``) but the overall verdict is softened so the gate
+    never aborts the run — the aggregate is PARTIAL on any failure path and
+    READY only when everything passes; it is never NOT_READY. The hard-fail flip
+    later reverts only the aggregate on the blocking short-circuits, so these
+    per-check ``status`` assertions stay unchanged across the flip.
     """
 
     @pytest.fixture
@@ -489,8 +501,10 @@ class TestMetabaseHandlerPreflightCheck:
         return MetabaseHandler(client=None)
 
     @staticmethod
-    def _check(name, passed, message="", error=None) -> PreflightCheck:
-        return PreflightCheck(name=name, passed=passed, message=message, error=error)
+    def _check(name, passed, message="", error=None, status=None) -> PreflightCheck:
+        return PreflightCheck(
+            name=name, passed=passed, message=message, error=error, status=status
+        )
 
     @patch.object(
         MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
@@ -526,11 +540,14 @@ class TestMetabaseHandlerPreflightCheck:
             "questionCountCheck",
         ]
         assert all(c.passed for c in result.checks)
+        # Passed checks derive READY automatically (no explicit stamp needed).
+        assert all(c.status == PreflightStatus.READY for c in result.checks)
 
     async def test_auth_failure_bad_credentials_blocks_and_short_circuits(
         self, handler, mock_client
     ):
-        """Rejected credentials → NOT_READY with a typed AUTH/USER error, no later checks."""
+        """Rejected credentials → blocking intent NOT_READY on the check, aggregate
+        softened to PARTIAL, no later checks."""
         mock_client.test_connection = AsyncMock(
             side_effect=MetabaseSessionAuthError(
                 auth_method="session-token",
@@ -541,8 +558,9 @@ class TestMetabaseHandlerPreflightCheck:
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
-        assert result.status == PreflightStatus.NOT_READY
+        assert result.status == PreflightStatus.PARTIAL
         assert [c.name for c in result.checks] == ["authenticationCheck"]
+        assert result.checks[0].status == PreflightStatus.NOT_READY
         err = result.checks[0].error
         assert err is not None
         assert err.category.name == "AUTH"
@@ -555,15 +573,17 @@ class TestMetabaseHandlerPreflightCheck:
     async def test_auth_failure_unreachable_maps_to_source_unavailable(
         self, handler, mock_client
     ):
-        """A transport error → NOT_READY with a SOURCE_UNAVAILABLE error, no leak."""
+        """A transport error → check NOT_READY with a SOURCE_UNAVAILABLE error,
+        aggregate softened to PARTIAL, no leak."""
         mock_client.test_connection = AsyncMock(
             side_effect=ConnectionError("connection refused")
         )
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
-        assert result.status == PreflightStatus.NOT_READY
+        assert result.status == PreflightStatus.PARTIAL
         assert [c.name for c in result.checks] == ["authenticationCheck"]
+        assert result.checks[0].status == PreflightStatus.NOT_READY
         assert result.checks[0].error.category.name == "SOURCE_UNAVAILABLE"
         assert "connection refused" not in result.checks[0].message
 
@@ -574,21 +594,24 @@ class TestMetabaseHandlerPreflightCheck:
     async def test_collection_failure_blocks_and_short_circuits(
         self, mock_collection, mock_native, handler
     ):
-        """Collection read failure → NOT_READY; native-query check never runs."""
+        """Collection read failure → blocking intent NOT_READY on the check,
+        aggregate softened to PARTIAL; native-query check never runs."""
         mock_collection.return_value = self._check(
             "collectionCountCheck",
             False,
             "denied",
             error=MetabaseCollectionAccessError().to_failure_details(),
+            status=PreflightStatus.NOT_READY,
         )
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
-        assert result.status == PreflightStatus.NOT_READY
+        assert result.status == PreflightStatus.PARTIAL
         assert [c.name for c in result.checks] == [
             "authenticationCheck",
             "collectionCountCheck",
         ]
+        assert result.checks[1].status == PreflightStatus.NOT_READY
         mock_native.assert_not_called()
         assert result.checks[1].error.category.name == "PERMISSION"
 
@@ -601,7 +624,8 @@ class TestMetabaseHandlerPreflightCheck:
     async def test_native_query_failure_blocks_before_advisory_tier(
         self, mock_collection, mock_native, mock_dashboard, mock_question, handler
     ):
-        """Native-query permission is blocking: NOT_READY, advisory checks never run."""
+        """Native-query permission is blocking: check NOT_READY, aggregate softened
+        to PARTIAL, advisory checks never run."""
         mock_collection.return_value = self._check(
             "collectionCountCheck", True, "Total collections: 3"
         )
@@ -612,16 +636,18 @@ class TestMetabaseHandlerPreflightCheck:
             error=MetabaseNativeQueryPermissionError(
                 missing_databases=["BigQuery"]
             ).to_failure_details(),
+            status=PreflightStatus.NOT_READY,
         )
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
-        assert result.status == PreflightStatus.NOT_READY
+        assert result.status == PreflightStatus.PARTIAL
         assert [c.name for c in result.checks] == [
             "authenticationCheck",
             "collectionCountCheck",
             "nativeQueryPermissionCheck",
         ]
+        assert result.checks[2].status == PreflightStatus.NOT_READY
         mock_dashboard.assert_not_called()
         mock_question.assert_not_called()
         err = result.checks[2].error
@@ -655,6 +681,7 @@ class TestMetabaseHandlerPreflightCheck:
             error=MetabaseSourceUnavailableError(
                 message="Failed to fetch Metabase dashboards.", source_type="metabase"
             ).to_failure_details(),
+            status=PreflightStatus.PARTIAL,
         )
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
@@ -663,6 +690,7 @@ class TestMetabaseHandlerPreflightCheck:
         assert len(result.checks) == 5
         dashboard = next(c for c in result.checks if c.name == "dashboardCountCheck")
         assert dashboard.passed is False
+        assert dashboard.status == PreflightStatus.PARTIAL
 
     @patch.object(
         MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
@@ -680,13 +708,23 @@ class TestMetabaseHandlerPreflightCheck:
         mock_native.return_value = self._check(
             "nativeQueryPermissionCheck", True, "Check successful"
         )
-        mock_dashboard.return_value = self._check("dashboardCountCheck", False, "down")
-        mock_question.return_value = self._check("questionCountCheck", False, "down")
+        mock_dashboard.return_value = self._check(
+            "dashboardCountCheck", False, "down", status=PreflightStatus.PARTIAL
+        )
+        mock_question.return_value = self._check(
+            "questionCountCheck", False, "down", status=PreflightStatus.PARTIAL
+        )
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
         assert result.status == PreflightStatus.PARTIAL
         assert len(result.checks) == 5
+        advisory = [
+            c
+            for c in result.checks
+            if c.name in ("dashboardCountCheck", "questionCountCheck")
+        ]
+        assert all(c.status == PreflightStatus.PARTIAL for c in advisory)
 
     async def test_no_client_no_credentials_blocks_at_authentication(
         self, handler_no_client
@@ -697,11 +735,65 @@ class TestMetabaseHandlerPreflightCheck:
         """
         result = await handler_no_client.preflight_check(PreflightInput(credentials=[]))
 
-        assert result.status == PreflightStatus.NOT_READY
+        assert result.status == PreflightStatus.PARTIAL
         assert result.checks[0].name == "authenticationCheck"
         assert result.checks[0].passed is False
+        assert result.checks[0].status == PreflightStatus.NOT_READY
         assert result.checks[0].error is not None
         assert "not initialized" in result.checks[0].message.lower()
+
+    async def test_window_invariant_no_failure_path_returns_not_ready(
+        self, handler, mock_client
+    ):
+        """Observation-window invariant (CNCT-81): no matter which checks fail —
+        including every blocking check — the overall verdict is never NOT_READY.
+
+        This is also the guard against a premature de-pin: if the ``status=``
+        stamps were dropped by a pre-feature SDK, the blocking short-circuits would
+        still be softened here, but the per-check assertions elsewhere would fail
+        first. Deleted at the hard-fail flip.
+        """
+        failed = {
+            "collectionCountCheck": PreflightStatus.NOT_READY,
+            "nativeQueryPermissionCheck": PreflightStatus.NOT_READY,
+            "dashboardCountCheck": PreflightStatus.PARTIAL,
+            "questionCountCheck": PreflightStatus.PARTIAL,
+        }
+
+        def _fail(name):
+            return AsyncMock(
+                return_value=self._check(name, False, "down", status=failed[name])
+            )
+
+        # Auth failing (real path) also softens to PARTIAL.
+        mock_client.test_connection = AsyncMock(side_effect=ConnectionError("refused"))
+        result = await handler.preflight_check(PreflightInput(credentials=_creds()))
+        assert result.status != PreflightStatus.NOT_READY
+
+        # Every downstream check failing, with auth restored.
+        mock_client.test_connection = AsyncMock(return_value=True)
+        with (
+            patch.object(
+                MetabaseHandler,
+                "_validate_collection_count",
+                _fail("collectionCountCheck"),
+            ),
+            patch.object(
+                MetabaseHandler,
+                "_validate_native_query_permission",
+                _fail("nativeQueryPermissionCheck"),
+            ),
+            patch.object(
+                MetabaseHandler,
+                "_validate_dashboard_count",
+                _fail("dashboardCountCheck"),
+            ),
+            patch.object(
+                MetabaseHandler, "_validate_question_count", _fail("questionCountCheck")
+            ),
+        ):
+            result = await handler.preflight_check(PreflightInput(credentials=_creds()))
+        assert result.status != PreflightStatus.NOT_READY
 
     @patch.object(
         MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
