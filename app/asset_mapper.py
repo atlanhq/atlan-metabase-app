@@ -349,21 +349,32 @@ def serialize_entity(
         "attributes": attrs,
     }
     rel = nested.get("relationshipAttributes") or {}
-    # BIProcess lineage refs must surface as inputs/outputs on attributes —
+    # BIProcess lineage refs must surface as inputs/outputs on ``attributes`` —
     # the v2 YAML put them there inline and the publish-app's ARS resolver
     # reads from attributes.inputs/outputs. Hoisting from relationshipAttributes
     # preserves that contract while keeping the typed pyatlan asset canonical.
+    #
+    # ``attributes.{inputs,outputs}`` is LOAD-BEARING — do not drop the hoist
+    # thinking it duplicates relationshipAttributes. It is the sole channel that
+    # establishes BIProcess lineage across both publish paths:
+    #   * create  — Atlas ``visitRelationships`` falls back to reading a
+    #               relationship attr from ``attributes`` when it is absent from
+    #               ``relationshipAttributes`` (AtlasEntityGraphDiscoveryV2), so
+    #               the full entity's ``attributes.outputs`` builds the edges.
+    #   * update  — the publish-app diff computes the append set FROM
+    #               ``attributes.outputs`` and emits appendRelationshipAttributes.
     if out["typeName"] == "BIProcess":
         for key in ("inputs", "outputs"):
             value = rel.get(key)
             if value is not None:
                 out["attributes"][key] = value
                 # Drop the hoisted keys from relationshipAttributes so lineage
-                # refs travel on a single channel. The publish-app diff manages
-                # inputs/outputs via appendRelationshipAttributes; leaving them
-                # in relationshipAttributes too makes Atlas reject the entity on
-                # incremental runs (ATLAS-400-00-108: attribute already exists in
-                # relationshipAttributes).
+                # refs travel on a single channel. On an incremental publish the
+                # diff emits appendRelationshipAttributes.{key}; if the same key
+                # is ALSO left in relationshipAttributes, Atlas rejects the whole
+                # entity (ATLAS-400-00-108: attribute already exists in
+                # relationshipAttributes). Removing it here is safe for creates
+                # via the attributes fallback described above.
                 rel.pop(key, None)
     # Keep canonical relationshipAttributes for the publish layer's
     # relationship updates (Question→Collection, Question→Dashboards, etc).
