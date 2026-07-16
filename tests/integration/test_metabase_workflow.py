@@ -224,3 +224,42 @@ class TestMetabaseExtraction:
             / "result-0.json"
         )
         assert f.exists()
+
+    @pytest.mark.asyncio
+    async def test_biprocess_lineage_refs_on_single_channel(
+        self, extraction_result: MetabaseOutput
+    ) -> None:
+        """A BIProcess wire body must carry its lineage refs on exactly one
+        channel — the invariant that prevents ATLAS-400-00-108.
+
+        ``serialize_entity`` hoists inputs/outputs onto ``attributes`` (the
+        channel the publish-app ARS resolver reads). If it *also* leaves them
+        in ``relationshipAttributes``, an incremental publish sends the same
+        relationship key in both ``relationshipAttributes`` and
+        ``appendRelationshipAttributes`` (the publish-app diff emits the
+        latter), and Atlas rejects the entity with ATLAS-400-00-108
+        (``attribute already exists in relationshipAttributes``).
+
+        Asserted here on real testcontainer-extracted BIProcess entities: the
+        seeded questions sit on dashboards, so the extract workflow emits
+        BIProcess (question->dashboard) lineage.
+        """
+        records = _read_transformed_jsonl(extraction_result.output_path, "BIPROCESS")
+        assert records, (
+            "expected at least one transformed BIProcess — the seed places "
+            "questions on dashboards, which yields question->dashboard lineage"
+        )
+        for r in records:
+            assert r.get("typeName") == "BIProcess"
+            attrs = r.get("attributes") or {}
+            rel = r.get("relationshipAttributes") or {}
+            # outputs travels on attributes (present for a dashboard-bound question)
+            assert attrs.get("outputs"), f"BIProcess missing attributes.outputs: {r}"
+            # ...and must NOT be duplicated onto relationshipAttributes
+            assert "outputs" not in rel, (
+                f"BIProcess duplicates outputs into relationshipAttributes "
+                f"(ATLAS-400-00-108 trigger): {r}"
+            )
+            assert (
+                "inputs" not in rel
+            ), f"BIProcess duplicates inputs into relationshipAttributes: {r}"
