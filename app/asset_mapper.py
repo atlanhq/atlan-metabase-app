@@ -358,6 +358,13 @@ def serialize_entity(
             value = rel.get(key)
             if value is not None:
                 out["attributes"][key] = value
+                # Drop the hoisted keys from relationshipAttributes so lineage
+                # refs travel on a single channel. The publish-app diff manages
+                # inputs/outputs via appendRelationshipAttributes; leaving them
+                # in relationshipAttributes too makes Atlas reject the entity on
+                # incremental runs (ATLAS-400-00-108: attribute already exists in
+                # relationshipAttributes).
+                rel.pop(key, None)
     # Keep canonical relationshipAttributes for the publish layer's
     # relationship updates (Question→Collection, Question→Dashboards, etc).
     if rel:

@@ -324,3 +324,23 @@ class TestSerializeEntity:
         assert isinstance(out["attributes"], dict)
         assert "name" in out["attributes"]
         assert "qualifiedName" in out["attributes"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: BIProcess lineage refs must live on exactly one channel. The
+# connector hoists inputs/outputs into `attributes`; leaving a copy in
+# `relationshipAttributes` makes Atlas reject the entity on incremental runs
+# (the publish-app diff also emits appendRelationshipAttributes.outputs, and
+# Atlas raises ATLAS-400-00-108 when a key is in both places).
+# ---------------------------------------------------------------------------
+
+
+class TestBIProcessLineageChannel:
+    @pytest.mark.parametrize("key", ["inputs", "outputs"])
+    def test_lineage_refs_not_duplicated_in_relationship_attributes(self, key):
+        rec = BIProcessLineageRecord(name="Q", question_id=200, dashboard_ids=[100])
+        out = serialize_entity(map_bi_process(rec, **CTX))
+        # present on attributes (the channel publish-app's ARS resolver reads)
+        assert out["attributes"].get(key), f"{key} must be hoisted onto attributes"
+        # and NOT also on relationshipAttributes (the ATLAS-400-00-108 trigger)
+        assert key not in out.get("relationshipAttributes", {})
