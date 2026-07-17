@@ -225,6 +225,7 @@ class MetabaseHandler(Handler):
                 client,
             )
         except (InvalidInputError, AuthError) as exc:
+            logger.warning("authenticationCheck failed", exc_info=True)
             check = self._failed_check("authenticationCheck", exc, start)
         except Exception as exc:
             logger.warning("authenticationCheck failed", exc_info=True)
