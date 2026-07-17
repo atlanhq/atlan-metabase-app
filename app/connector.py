@@ -143,6 +143,13 @@ class MetabaseApp(App):
     name = "metabase"
     passthrough_modules = {"app.lineage"}
 
+    # CNCT-81 observation window: gate does not block on NOT_READY — dodged
+    # blocks are emitted as outcome=would_block and ranked in connector-pulse.
+    # Open question this window answers: is nativeQueryPermissionCheck too
+    # strict as a blocking check? Delete this line to restore hard gating once
+    # the checks are proven against real run outcomes.
+    preflight_gate_mode = "soft"
+
     # ------------------------------------------------------------------
     # Client + credential resolution
     # ------------------------------------------------------------------
