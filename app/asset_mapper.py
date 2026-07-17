@@ -38,30 +38,13 @@ from app.api_types import (
     QuestionRecord,
 )
 
-# ---------------------------------------------------------------------------
-# QN builders — single source of truth for every Metabase QN format
-# ---------------------------------------------------------------------------
-
-# Mirrors the YAML ``concat(connection_qualified_name, '/<segment>/', id)``
-# templates. Keeping them as helpers (not f-strings inlined per mapper) means
-# the BIProcess input/output refs can build the same QNs without drift.
-
-
-def _collection_qn(connection_qn: str, collection_id: Any) -> str:
-    return f"{connection_qn}/collections/{collection_id}"
-
-
-def _dashboard_qn(connection_qn: str, dashboard_id: Any) -> str:
-    return f"{connection_qn}/dashboards/{dashboard_id}"
-
-
-def _question_qn(connection_qn: str, question_id: Any) -> str:
-    return f"{connection_qn}/questions/{question_id}"
-
-
-def _bi_process_qn(connection_qn: str, question_id: Any) -> str:
-    return f"{connection_qn}/questions_dashboards/{question_id}"
-
+# QN grammar lives in app.qualified_names (single source of truth). Aliased to
+# the previous private names so the mapper call sites (and the local
+# ``collection_qn`` variables below) stay unchanged.
+from app.qualified_names import bi_process_qn as _bi_process_qn
+from app.qualified_names import collection_qn as _collection_qn
+from app.qualified_names import dashboard_qn as _dashboard_qn
+from app.qualified_names import question_qn as _question_qn
 
 # ---------------------------------------------------------------------------
 # Shared sync-stamp helper
