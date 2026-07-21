@@ -8,4 +8,5 @@ class MetabaseGeneratedE2EBase(BaseE2ETest):
     argo_package_name = "@atlan/metabase"
     argo_template_name = "atlan-metabase"
     app_service_url = "http://metabase.metabase-app.svc.cluster.local"
+    connection_type = "metabase"
     connection_category = "bi"

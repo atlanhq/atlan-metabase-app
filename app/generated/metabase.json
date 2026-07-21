@@ -113,7 +113,8 @@
           "label": "",
           "hidden": false,
           "help": "",
-          "grid": 8
+          "grid": 8,
+          "connector": "metabase"
         }
       },
       "include-collections": {
