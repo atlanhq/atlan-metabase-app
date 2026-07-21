@@ -15,7 +15,6 @@ serves the platform endpoints: ``/workflows/v1/auth``,
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 from typing import Any
@@ -133,7 +132,7 @@ def _write_transformed_records(
 
     Both the per-record mapper dispatch and the file write are synchronous
     and scale with tenant record count, so ``transform_data`` offloads this
-    whole pass via ``asyncio.to_thread`` instead of blocking the event loop
+    whole pass via ``self.run_in_thread`` instead of blocking the event loop
     for the duration of the write.
     """
     count = 0
@@ -155,7 +154,7 @@ def _build_process_records(
     ``iter_qi_records`` walks the QI output directory tree doing blocking
     ``Path.read_text()`` per file, and the per-record parse/build calls are
     pure CPU work — both scale with the tenant's QI output size. A sync
-    generator can't be handed to ``asyncio.to_thread`` mid-iteration, so the
+    generator can't be handed to ``self.run_in_thread`` mid-iteration, so the
     whole loop is materialized here and ``build_lineage_records`` offloads
     this single call instead of iterating directly on the event loop.
     """
@@ -267,7 +266,7 @@ class MetabaseApp(App):
         client = await self._build_client(input)
         records = await fetch_collections_summaries(client, input.output_path)
         out = raw_file(input.output_path, "collections")
-        await asyncio.to_thread(write_jsonl, out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_collections: wrote %d records", len(records))
         return FetchOutput(
             typename="collections", record_count=len(records), output_file=_ref(out)
@@ -279,7 +278,7 @@ class MetabaseApp(App):
         client = await self._build_client(input)
         records = await fetch_dashboards_summaries(client, input.output_path)
         out = raw_file(input.output_path, "dashboards")
-        await asyncio.to_thread(write_jsonl, out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_dashboards: wrote %d records", len(records))
         return FetchOutput(
             typename="dashboards", record_count=len(records), output_file=_ref(out)
@@ -291,7 +290,7 @@ class MetabaseApp(App):
         client = await self._build_client(input)
         records = await fetch_questions_summaries(client, input.output_path)
         out = raw_file(input.output_path, "questions")
-        await asyncio.to_thread(write_jsonl, out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_questions: wrote %d records", len(records))
         return FetchOutput(
             typename="questions", record_count=len(records), output_file=_ref(out)
@@ -303,7 +302,7 @@ class MetabaseApp(App):
         client = await self._build_client(input)
         records = await fetch_databases_summaries(client, input.output_path)
         out = raw_file(input.output_path, "databases")
-        await asyncio.to_thread(write_jsonl, out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_databases: wrote %d records", len(records))
         return FetchOutput(
             typename="databases", record_count=len(records), output_file=_ref(out)
@@ -312,18 +311,18 @@ class MetabaseApp(App):
     @task(timeout_seconds=600)
     async def filter_data(self, input: FilterInput) -> FilterOutput:
         """Apply include/exclude filters to the four raw files."""
-        raw_collections = await asyncio.to_thread(
+        raw_collections = await self.run_in_thread(
             read_jsonl,
             input.collections_file.local_path if input.collections_file else "",
         )
-        raw_dashboards = await asyncio.to_thread(
+        raw_dashboards = await self.run_in_thread(
             read_jsonl,
             input.dashboards_file.local_path if input.dashboards_file else "",
         )
-        raw_questions = await asyncio.to_thread(
+        raw_questions = await self.run_in_thread(
             read_jsonl, input.questions_file.local_path if input.questions_file else ""
         )
-        raw_databases = await asyncio.to_thread(
+        raw_databases = await self.run_in_thread(
             read_jsonl, input.databases_file.local_path if input.databases_file else ""
         )
 
@@ -347,11 +346,11 @@ class MetabaseApp(App):
         q_out = raw_file(input.output_path, "questions_filtered")
         db_out = raw_file(input.output_path, "databases_filtered")
 
-        await asyncio.to_thread(write_jsonl, c_out, filtered_collections)
-        await asyncio.to_thread(write_jsonl, d_out, filtered_dashboards)
-        await asyncio.to_thread(write_jsonl, q_out, filtered_questions)
+        await self.run_in_thread(write_jsonl, c_out, filtered_collections)
+        await self.run_in_thread(write_jsonl, d_out, filtered_dashboards)
+        await self.run_in_thread(write_jsonl, q_out, filtered_questions)
         # Databases pass through unfiltered (matches v2).
-        await asyncio.to_thread(write_jsonl, db_out, raw_databases)
+        await self.run_in_thread(write_jsonl, db_out, raw_databases)
 
         total = (
             len(filtered_collections)
@@ -383,7 +382,7 @@ class MetabaseApp(App):
     ) -> FetchOutput:
         """Fetch per-dashboard detail (incl. ``ordered_cards``)."""
         client = await self._build_client(input)
-        filtered_dashboards = await asyncio.to_thread(
+        filtered_dashboards = await self.run_in_thread(
             read_jsonl, input.source_file.local_path if input.source_file else ""
         )
         logger.info(
@@ -394,7 +393,7 @@ class MetabaseApp(App):
             client, filtered_dashboards, input.output_path
         )
         out = raw_file(input.output_path, "dashboard_details")
-        await asyncio.to_thread(write_jsonl, out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_individual_dashboards: wrote %d records", len(records))
         return FetchOutput(
             typename="dashboard_details",
@@ -410,7 +409,7 @@ class MetabaseApp(App):
     ) -> FetchOutput:
         """Fetch per-database schema/table metadata."""
         client = await self._build_client(input)
-        databases = await asyncio.to_thread(
+        databases = await self.run_in_thread(
             read_jsonl, input.source_file.local_path if input.source_file else ""
         )
         logger.info(
@@ -419,7 +418,7 @@ class MetabaseApp(App):
         )
         records = await fetch_databases_details(client, databases, input.output_path)
         out = raw_file(input.output_path, "database_metadata")
-        await asyncio.to_thread(write_jsonl, out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_individual_databases: wrote %d records", len(records))
         return FetchOutput(
             typename="database_metadata",
@@ -435,7 +434,7 @@ class MetabaseApp(App):
     ) -> FetchOutput:
         """Fetch the native SQL string for each filtered question."""
         client = await self._build_client(input)
-        questions = await asyncio.to_thread(
+        questions = await self.run_in_thread(
             read_jsonl, input.source_file.local_path if input.source_file else ""
         )
         logger.info(
@@ -444,7 +443,7 @@ class MetabaseApp(App):
         )
         records = await fetch_question_queries(client, questions, input.output_path)
         out = raw_file(input.output_path, "question_queries")
-        await asyncio.to_thread(write_jsonl, out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("fetch_question_queries_activity: wrote %d records", len(records))
         return FetchOutput(
             typename="question_queries",
@@ -455,31 +454,31 @@ class MetabaseApp(App):
     @task(timeout_seconds=1800)
     async def process_metabaseprocess(self, input: ProcessInput) -> ProcessOutput:
         """Enrich filtered records into the four ``processed/*`` JSONL outputs."""
-        filtered_collections = await asyncio.to_thread(
+        filtered_collections = await self.run_in_thread(
             read_jsonl,
             input.collections_filtered_file.local_path
             if input.collections_filtered_file
             else "",
         )
-        database_details = await asyncio.to_thread(
+        database_details = await self.run_in_thread(
             read_jsonl,
             input.databases_filtered_file.local_path
             if input.databases_filtered_file
             else "",
         )
-        question_queries = await asyncio.to_thread(
+        question_queries = await self.run_in_thread(
             read_jsonl,
             input.question_queries_file.local_path
             if input.question_queries_file
             else "",
         )
-        dashboard_details = await asyncio.to_thread(
+        dashboard_details = await self.run_in_thread(
             read_jsonl,
             input.dashboard_details_file.local_path
             if input.dashboard_details_file
             else "",
         )
-        filtered_questions = await asyncio.to_thread(
+        filtered_questions = await self.run_in_thread(
             read_jsonl,
             input.questions_filtered_file.local_path
             if input.questions_filtered_file
@@ -521,10 +520,10 @@ class MetabaseApp(App):
         q_out = processed_file(input.output_path, "questions")
         qd_out = processed_file(input.output_path, "questions_dashboards")
 
-        await asyncio.to_thread(write_jsonl, c_out, filtered_collections)
-        await asyncio.to_thread(write_jsonl, d_out, enriched_dashboards)
-        await asyncio.to_thread(write_jsonl, q_out, enriched_questions)
-        await asyncio.to_thread(write_jsonl, qd_out, questions_dashboards_lineage)
+        await self.run_in_thread(write_jsonl, c_out, filtered_collections)
+        await self.run_in_thread(write_jsonl, d_out, enriched_dashboards)
+        await self.run_in_thread(write_jsonl, q_out, enriched_questions)
+        await self.run_in_thread(write_jsonl, qd_out, questions_dashboards_lineage)
 
         total = (
             len(filtered_collections)
@@ -595,7 +594,7 @@ class MetabaseApp(App):
 
         logger.info("transform_data: typename=%s, input_file=%s", typename, input_file)
 
-        records = await asyncio.to_thread(read_jsonl, input_file)
+        records = await self.run_in_thread(read_jsonl, input_file)
         if not records:
             logger.info("transform_data: no records found for %s", typename)
             return TransformTaskOutput(typename=typename, record_count=0)
@@ -614,7 +613,7 @@ class MetabaseApp(App):
             tenant_id="default",
         )
 
-        count = await asyncio.to_thread(
+        count = await self.run_in_thread(
             _write_transformed_records, out_file, records, typename, ctx
         )
 
@@ -841,9 +840,9 @@ class MetabaseApp(App):
         # Path.read_text() per QI output file, and the per-record
         # parse/build calls below are pure CPU work — both scale with the
         # tenant's QI output size. A sync generator can't be handed to
-        # asyncio.to_thread mid-iteration, so the whole loop is
+        # self.run_in_thread mid-iteration, so the whole loop is
         # materialized in _build_process_records and offloaded in one call.
-        processes, column_processes = await asyncio.to_thread(
+        processes, column_processes = await self.run_in_thread(
             _build_process_records,
             input.qi_local_path,
             input.connection_qualified_name,
@@ -866,12 +865,12 @@ class MetabaseApp(App):
         resolvable_dir = os.path.join(stage_dir, "resolvable")
         os.makedirs(os.path.join(resolvable_dir, "PROCESS"), exist_ok=True)
         os.makedirs(os.path.join(resolvable_dir, "COLUMNPROCESS"), exist_ok=True)
-        await asyncio.to_thread(
+        await self.run_in_thread(
             write_jsonl,
             os.path.join(resolvable_dir, "PROCESS", "result-0.json"),
             processes,
         )
-        await asyncio.to_thread(
+        await self.run_in_thread(
             write_jsonl,
             os.path.join(resolvable_dir, "COLUMNPROCESS", "result-0.json"),
             column_processes,

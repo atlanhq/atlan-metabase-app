@@ -244,28 +244,32 @@ class TestFilterDataTask:
 
 
 # ---------------------------------------------------------------------------
-# Heartbeat-timeout regression guard — asyncio.to_thread offload
+# Heartbeat-timeout regression guard — run_in_thread offload
 # ---------------------------------------------------------------------------
 # Bare write_jsonl()/read_jsonl() calls (and the QI-record parsing loop)
 # run synchronous, tenant-scale file I/O directly on the activity's event
 # loop. That starves the SDK's auto-heartbeat background task, which shares
 # the same loop — Temporal then kills the activity as dead even though it's
-# still working (heartbeat-timeout-detector rule HB-13). These tests spy on
-# asyncio.to_thread on a few representative call sites (one write_jsonl
-# site, one read_jsonl site, and the build_lineage_records QI loop) so a
-# future revert of the offload fails loudly instead of silently.
+# still working (heartbeat-timeout-detector rule HB-13). The offload uses the
+# SDK's self.run_in_thread (dedicated sdk-blocking-* pool, isolated from
+# Temporal's own worker pool), not bare asyncio.to_thread. These tests spy on
+# run_in_thread on a few representative call sites (one write_jsonl site, one
+# read_jsonl site, and the build_lineage_records QI loop) so a future revert
+# of the offload fails loudly instead of silently.
 
 
-async def _inline_to_thread(func, *args, **kwargs):
-    """Test double for asyncio.to_thread: runs func inline, no real thread.
+async def _inline_run_in_thread(func, *args, **kwargs):
+    """Test double for App.run_in_thread: runs func inline, no real thread.
 
     Keeps the real file-I/O side effects the surrounding assertions check
-    while letting the spy record how ``asyncio.to_thread`` was called.
+    while letting the spy record how ``self.run_in_thread`` was called.
+    (``run_in_thread`` is patched on the class, so the mock is unbound and
+    receives ``func`` as its first positional arg — no ``self``.)
     """
     return func(*args, **kwargs)
 
 
-class TestAsyncioToThreadOffload:
+class TestRunInThreadOffload:
     @pytest.mark.asyncio
     async def test_extract_collections_offloads_write_jsonl(
         self, app_with_mock_client, fetch_input
@@ -279,16 +283,16 @@ class TestAsyncioToThreadOffload:
                 return_value=records,
             ),
             patch(
-                "app.connector.asyncio.to_thread", side_effect=_inline_to_thread
-            ) as mock_to_thread,
+                "app.connector.App.run_in_thread", side_effect=_inline_run_in_thread
+            ) as mock_run_in_thread,
         ):
             out = await app_with_mock_client.extract_collections(fetch_input)
 
         assert out.record_count == 1
         assert Path(out.output_file.local_path).exists()
-        offloaded = [c.args[0] for c in mock_to_thread.call_args_list]
+        offloaded = [c.args[0] for c in mock_run_in_thread.call_args_list]
         assert write_jsonl in offloaded, (
-            "write_jsonl must run via asyncio.to_thread, not directly on "
+            "write_jsonl must run via self.run_in_thread, not directly on "
             "the event loop — see heartbeat-timeout-detector rule HB-13"
         )
 
@@ -315,23 +319,23 @@ class TestAsyncioToThreadOffload:
             databases_file=FileReference(local_path=str(paths[3])),
         )
         with patch(
-            "app.connector.asyncio.to_thread", side_effect=_inline_to_thread
-        ) as mock_to_thread:
+            "app.connector.App.run_in_thread", side_effect=_inline_run_in_thread
+        ) as mock_run_in_thread:
             await app.filter_data(input_obj)
 
-        offloaded = [c.args[0] for c in mock_to_thread.call_args_list]
+        offloaded = [c.args[0] for c in mock_run_in_thread.call_args_list]
         assert (
             offloaded.count(read_jsonl) == 4
-        ), "filter_data must read all four raw files via asyncio.to_thread"
+        ), "filter_data must read all four raw files via self.run_in_thread"
         assert (
             offloaded.count(write_jsonl) == 4
-        ), "filter_data must write all four filtered files via asyncio.to_thread"
+        ), "filter_data must write all four filtered files via self.run_in_thread"
 
     @pytest.mark.asyncio
     async def test_build_lineage_records_offloads_qi_parsing(self, tmp_path):
         """build_lineage_records: the QI-parsing loop must be materialized in
         a sync helper (``_build_process_records``) and thread-offloaded — a
-        sync generator can't be handed to asyncio.to_thread mid-iteration."""
+        sync generator can't be handed to self.run_in_thread mid-iteration."""
         qi_dir = tmp_path / "qi"
         qi_dir.mkdir()
         record = {
@@ -371,14 +375,14 @@ class TestAsyncioToThreadOffload:
             connection_name="metabase-test",
         )
         with patch(
-            "app.connector.asyncio.to_thread", side_effect=_inline_to_thread
-        ) as mock_to_thread:
+            "app.connector.App.run_in_thread", side_effect=_inline_run_in_thread
+        ) as mock_run_in_thread:
             out = await app.build_lineage_records(input_obj)
 
         assert out.process_count == 1
-        offloaded = [c.args[0] for c in mock_to_thread.call_args_list]
+        offloaded = [c.args[0] for c in mock_run_in_thread.call_args_list]
         assert _build_process_records in offloaded, (
-            "the QI record loop must run via asyncio.to_thread, not "
+            "the QI record loop must run via self.run_in_thread, not "
             "iterate directly on the event loop — see HB-13"
         )
         assert write_jsonl in offloaded
