@@ -313,10 +313,12 @@ class MetabaseApp(App):
     async def filter_data(self, input: FilterInput) -> FilterOutput:
         """Apply include/exclude filters to the four raw files."""
         raw_collections = await asyncio.to_thread(
-            read_jsonl, input.collections_file.local_path if input.collections_file else ""
+            read_jsonl,
+            input.collections_file.local_path if input.collections_file else "",
         )
         raw_dashboards = await asyncio.to_thread(
-            read_jsonl, input.dashboards_file.local_path if input.dashboards_file else ""
+            read_jsonl,
+            input.dashboards_file.local_path if input.dashboards_file else "",
         )
         raw_questions = await asyncio.to_thread(
             read_jsonl, input.questions_file.local_path if input.questions_file else ""

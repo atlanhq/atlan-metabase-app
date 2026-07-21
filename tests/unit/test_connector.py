@@ -24,7 +24,13 @@ from application_sdk.contracts.types import ConnectionRef, FileReference
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors import InvalidInputError
 
-from app.connector import MetabaseApp, _build_process_records, _ref, read_jsonl, write_jsonl
+from app.connector import (
+    MetabaseApp,
+    _build_process_records,
+    _ref,
+    read_jsonl,
+    write_jsonl,
+)
 from app.contracts import (
     BuildLineageInput,
     FetchInput,
@@ -314,12 +320,12 @@ class TestAsyncioToThreadOffload:
             await app.filter_data(input_obj)
 
         offloaded = [c.args[0] for c in mock_to_thread.call_args_list]
-        assert offloaded.count(read_jsonl) == 4, (
-            "filter_data must read all four raw files via asyncio.to_thread"
-        )
-        assert offloaded.count(write_jsonl) == 4, (
-            "filter_data must write all four filtered files via asyncio.to_thread"
-        )
+        assert (
+            offloaded.count(read_jsonl) == 4
+        ), "filter_data must read all four raw files via asyncio.to_thread"
+        assert (
+            offloaded.count(write_jsonl) == 4
+        ), "filter_data must write all four filtered files via asyncio.to_thread"
 
     @pytest.mark.asyncio
     async def test_build_lineage_records_offloads_qi_parsing(self, tmp_path):
