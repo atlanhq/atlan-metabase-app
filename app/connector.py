@@ -894,7 +894,6 @@ class MetabaseApp(App):
     # P016 stays ignored: it requires per-entrypoint app/generated/<name>/
     # contract subdirs (Entrypoint.contract bundle mode), which this app
     # hasn't adopted — the generated artifacts remain app-level flat files.
-    # conformance: ignore[P016] single-card app; per-entrypoint generated/ bundle split not adopted (see contract/app.pkl)
     @entrypoint
     async def extract_lineage(
         self, input: MetabaseLineageInput
