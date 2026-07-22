@@ -24,8 +24,20 @@ from application_sdk.contracts.types import ConnectionRef, FileReference
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors import InvalidInputError
 
-from app.connector import MetabaseApp, _ref
-from app.contracts import FetchInput, FilterInput, MetabaseInput, MetabaseLineageInput
+from app.connector import (
+    MetabaseApp,
+    _build_process_records,
+    _ref,
+    read_jsonl,
+    write_jsonl,
+)
+from app.contracts import (
+    BuildLineageInput,
+    FetchInput,
+    FilterInput,
+    MetabaseInput,
+    MetabaseLineageInput,
+)
 
 
 class TestRef:
@@ -229,6 +241,151 @@ class TestFilterDataTask:
         assert out.databases_filtered_file.local_path is not None
         db_text = Path(out.databases_filtered_file.local_path).read_text()
         assert "db" in db_text
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat-timeout regression guard — run_in_thread offload
+# ---------------------------------------------------------------------------
+# Bare write_jsonl()/read_jsonl() calls (and the QI-record parsing loop)
+# run synchronous, tenant-scale file I/O directly on the activity's event
+# loop. That starves the SDK's auto-heartbeat background task, which shares
+# the same loop — Temporal then kills the activity as dead even though it's
+# still working (heartbeat-timeout-detector rule HB-13). The offload uses the
+# SDK's self.run_in_thread (dedicated sdk-blocking-* pool, isolated from
+# Temporal's own worker pool), not bare asyncio.to_thread. These tests spy on
+# run_in_thread on a few representative call sites (one write_jsonl site, one
+# read_jsonl site, and the build_lineage_records QI loop) so a future revert
+# of the offload fails loudly instead of silently.
+
+
+async def _inline_run_in_thread(func, *args, **kwargs):
+    """Test double for App.run_in_thread: runs func inline, no real thread.
+
+    Keeps the real file-I/O side effects the surrounding assertions check
+    while letting the spy record how ``self.run_in_thread`` was called.
+    (``run_in_thread`` is patched on the class, so the mock is unbound and
+    receives ``func`` as its first positional arg — no ``self``.)
+    """
+    return func(*args, **kwargs)
+
+
+class TestRunInThreadOffload:
+    @pytest.mark.asyncio
+    async def test_extract_collections_offloads_write_jsonl(
+        self, app_with_mock_client, fetch_input
+    ):
+        """Representative write_jsonl() site: extract_collections."""
+        records = [{"id": 1, "name": "c1"}]
+        with (
+            patch(
+                "app.connector.fetch_collections_summaries",
+                new_callable=AsyncMock,
+                return_value=records,
+            ),
+            patch(
+                "app.connector.App.run_in_thread", side_effect=_inline_run_in_thread
+            ) as mock_run_in_thread,
+        ):
+            out = await app_with_mock_client.extract_collections(fetch_input)
+
+        assert out.record_count == 1
+        assert Path(out.output_file.local_path).exists()
+        offloaded = [c.args[0] for c in mock_run_in_thread.call_args_list]
+        assert write_jsonl in offloaded, (
+            "write_jsonl must run via self.run_in_thread, not directly on "
+            "the event loop — see heartbeat-timeout-detector rule HB-13"
+        )
+
+    @pytest.mark.asyncio
+    async def test_filter_data_offloads_read_jsonl(self, tmp_path):
+        """Representative read_jsonl() site: filter_data (4 reads + 4 writes)."""
+        raw_dir = tmp_path / "raw"
+        paths = [
+            raw_dir / "collections" / "result-0.json",
+            raw_dir / "dashboards" / "result-0.json",
+            raw_dir / "questions" / "result-0.json",
+            raw_dir / "databases" / "result-0.json",
+        ]
+        for p in paths:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("")
+
+        app = MetabaseApp()
+        input_obj = FilterInput(
+            output_path=str(tmp_path),
+            collections_file=FileReference(local_path=str(paths[0])),
+            dashboards_file=FileReference(local_path=str(paths[1])),
+            questions_file=FileReference(local_path=str(paths[2])),
+            databases_file=FileReference(local_path=str(paths[3])),
+        )
+        with patch(
+            "app.connector.App.run_in_thread", side_effect=_inline_run_in_thread
+        ) as mock_run_in_thread:
+            await app.filter_data(input_obj)
+
+        offloaded = [c.args[0] for c in mock_run_in_thread.call_args_list]
+        assert (
+            offloaded.count(read_jsonl) == 4
+        ), "filter_data must read all four raw files via self.run_in_thread"
+        assert (
+            offloaded.count(write_jsonl) == 4
+        ), "filter_data must write all four filtered files via self.run_in_thread"
+
+    @pytest.mark.asyncio
+    async def test_build_lineage_records_offloads_qi_parsing(self, tmp_path):
+        """build_lineage_records: the QI-parsing loop must be materialized in
+        a sync helper (``_build_process_records``) and thread-offloaded — a
+        sync generator can't be handed to self.run_in_thread mid-iteration."""
+        qi_dir = tmp_path / "qi"
+        qi_dir.mkdir()
+        record = {
+            "QUERY_ID": "default/metabase/test/questions/40",
+            "SQL": "SELECT customer_name FROM analytics.customers",
+            "QUESTION_NAME": "Top Customers",
+            "PARSED_DATA": {
+                "dbobjs": [
+                    {
+                        "name": "customers",
+                        "db": "testdata",
+                        "schema": "analytics",
+                        "type": "table",
+                        "vendor_name": "postgres",
+                    }
+                ],
+                "relationships": [
+                    {
+                        "source": {
+                            "column": "customer_name",
+                            "table": "customers",
+                            "schema": "analytics",
+                            "db": "testdata",
+                            "vendor_name": "postgres",
+                        }
+                    }
+                ],
+            },
+        }
+        (qi_dir / "out.json").write_text(json.dumps(record) + "\n")
+
+        app = MetabaseApp()
+        input_obj = BuildLineageInput(
+            output_path=str(tmp_path / "out"),
+            qi_local_path=str(qi_dir),
+            connection_qualified_name="default/metabase/test",
+            connection_name="metabase-test",
+        )
+        with patch(
+            "app.connector.App.run_in_thread", side_effect=_inline_run_in_thread
+        ) as mock_run_in_thread:
+            out = await app.build_lineage_records(input_obj)
+
+        assert out.process_count == 1
+        offloaded = [c.args[0] for c in mock_run_in_thread.call_args_list]
+        assert _build_process_records in offloaded, (
+            "the QI record loop must run via self.run_in_thread, not "
+            "iterate directly on the event loop — see HB-13"
+        )
+        assert write_jsonl in offloaded
 
 
 # ---------------------------------------------------------------------------

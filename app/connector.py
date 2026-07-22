@@ -125,6 +125,81 @@ def _map_one_record(
     return None
 
 
+def _write_transformed_records(
+    out_file: str, records: list[dict[str, Any]], typename: str, ctx: dict[str, Any]
+) -> int:
+    """Map + write one typename's records to Atlas JSON (sync helper).
+
+    Both the per-record mapper dispatch and the file write are synchronous
+    and scale with tenant record count, so ``transform_data`` offloads this
+    whole pass via ``self.run_in_thread`` instead of blocking the event loop
+    for the duration of the write.
+    """
+    count = 0
+    with open(out_file, "wb") as fh:
+        for raw in records:
+            entity = _map_one_record(typename, raw, ctx)
+            if entity is None:
+                continue
+            fh.write(orjson.dumps(entity) + b"\n")
+            count += 1
+    return count
+
+
+def _build_process_records(
+    qi_local_path: str, connection_qualified_name: str, connection_name: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Parse QI NDJSON output into Process + ColumnProcess records (sync helper).
+
+    ``iter_qi_records`` walks the QI output directory tree doing blocking
+    ``Path.read_text()`` per file, and the per-record parse/build calls are
+    pure CPU work — both scale with the tenant's QI output size. A sync
+    generator can't be handed to ``self.run_in_thread`` mid-iteration, so the
+    whole loop is materialized here and ``build_lineage_records`` offloads
+    this single call instead of iterating directly on the event loop.
+    """
+    processes: list[dict[str, Any]] = []
+    column_processes: list[dict[str, Any]] = []
+
+    for record in iter_qi_records(qi_local_path):
+        query_id, sql, source_tables, source_columns = parse_qi_record(record)
+        if not query_id:
+            continue
+        # QI emits the source-question qualifiedName at
+        # extra.attributes.qualifiedName (current) or top-level
+        # QUERY_ID (legacy). Format is
+        # ``default/metabase/<conn>/questions/<id>``; the trailing id
+        # is what builds the BIProcess QN.
+        question_id = query_id.rsplit("/", 1)[-1]
+        question_name = _qi_question_name(record) or query_id
+
+        process = build_process(
+            connection_qualified_name=connection_qualified_name,
+            connection_name=connection_name,
+            question_id=question_id,
+            question_name=question_name,
+            sql=sql,
+            source_tables=source_tables,
+        )
+        if process is None:
+            continue
+        processes.append(process)
+
+        cp = build_column_process(
+            connection_qualified_name=connection_qualified_name,
+            connection_name=connection_name,
+            question_id=question_id,
+            question_name=question_name,
+            sql=sql,
+            source_columns=source_columns,
+            parent_process_hash=process_hash(question_id, sql),
+        )
+        if cp is not None:
+            column_processes.append(cp)
+
+    return processes, column_processes
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -191,7 +266,7 @@ class MetabaseApp(App):
         client = await self._build_client(input)
         records = await fetch_collections_summaries(client, input.output_path)
         out = raw_file(input.output_path, "collections")
-        write_jsonl(out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_collections: wrote %d records", len(records))
         return FetchOutput(
             typename="collections", record_count=len(records), output_file=_ref(out)
@@ -203,7 +278,7 @@ class MetabaseApp(App):
         client = await self._build_client(input)
         records = await fetch_dashboards_summaries(client, input.output_path)
         out = raw_file(input.output_path, "dashboards")
-        write_jsonl(out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_dashboards: wrote %d records", len(records))
         return FetchOutput(
             typename="dashboards", record_count=len(records), output_file=_ref(out)
@@ -215,7 +290,7 @@ class MetabaseApp(App):
         client = await self._build_client(input)
         records = await fetch_questions_summaries(client, input.output_path)
         out = raw_file(input.output_path, "questions")
-        write_jsonl(out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_questions: wrote %d records", len(records))
         return FetchOutput(
             typename="questions", record_count=len(records), output_file=_ref(out)
@@ -227,7 +302,7 @@ class MetabaseApp(App):
         client = await self._build_client(input)
         records = await fetch_databases_summaries(client, input.output_path)
         out = raw_file(input.output_path, "databases")
-        write_jsonl(out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_databases: wrote %d records", len(records))
         return FetchOutput(
             typename="databases", record_count=len(records), output_file=_ref(out)
@@ -236,17 +311,19 @@ class MetabaseApp(App):
     @task(timeout_seconds=600)
     async def filter_data(self, input: FilterInput) -> FilterOutput:
         """Apply include/exclude filters to the four raw files."""
-        raw_collections = read_jsonl(
-            input.collections_file.local_path if input.collections_file else ""
+        raw_collections = await self.run_in_thread(
+            read_jsonl,
+            input.collections_file.local_path if input.collections_file else "",
         )
-        raw_dashboards = read_jsonl(
-            input.dashboards_file.local_path if input.dashboards_file else ""
+        raw_dashboards = await self.run_in_thread(
+            read_jsonl,
+            input.dashboards_file.local_path if input.dashboards_file else "",
         )
-        raw_questions = read_jsonl(
-            input.questions_file.local_path if input.questions_file else ""
+        raw_questions = await self.run_in_thread(
+            read_jsonl, input.questions_file.local_path if input.questions_file else ""
         )
-        raw_databases = read_jsonl(
-            input.databases_file.local_path if input.databases_file else ""
+        raw_databases = await self.run_in_thread(
+            read_jsonl, input.databases_file.local_path if input.databases_file else ""
         )
 
         logger.info(
@@ -269,11 +346,11 @@ class MetabaseApp(App):
         q_out = raw_file(input.output_path, "questions_filtered")
         db_out = raw_file(input.output_path, "databases_filtered")
 
-        write_jsonl(c_out, filtered_collections)
-        write_jsonl(d_out, filtered_dashboards)
-        write_jsonl(q_out, filtered_questions)
+        await self.run_in_thread(write_jsonl, c_out, filtered_collections)
+        await self.run_in_thread(write_jsonl, d_out, filtered_dashboards)
+        await self.run_in_thread(write_jsonl, q_out, filtered_questions)
         # Databases pass through unfiltered (matches v2).
-        write_jsonl(db_out, raw_databases)
+        await self.run_in_thread(write_jsonl, db_out, raw_databases)
 
         total = (
             len(filtered_collections)
@@ -305,8 +382,8 @@ class MetabaseApp(App):
     ) -> FetchOutput:
         """Fetch per-dashboard detail (incl. ``ordered_cards``)."""
         client = await self._build_client(input)
-        filtered_dashboards = read_jsonl(
-            input.source_file.local_path if input.source_file else ""
+        filtered_dashboards = await self.run_in_thread(
+            read_jsonl, input.source_file.local_path if input.source_file else ""
         )
         logger.info(
             "extract_individual_dashboards: fetching detail for %d dashboards",
@@ -316,7 +393,7 @@ class MetabaseApp(App):
             client, filtered_dashboards, input.output_path
         )
         out = raw_file(input.output_path, "dashboard_details")
-        write_jsonl(out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_individual_dashboards: wrote %d records", len(records))
         return FetchOutput(
             typename="dashboard_details",
@@ -332,8 +409,8 @@ class MetabaseApp(App):
     ) -> FetchOutput:
         """Fetch per-database schema/table metadata."""
         client = await self._build_client(input)
-        databases = read_jsonl(
-            input.source_file.local_path if input.source_file else ""
+        databases = await self.run_in_thread(
+            read_jsonl, input.source_file.local_path if input.source_file else ""
         )
         logger.info(
             "extract_individual_databases: fetching metadata for %d databases",
@@ -341,7 +418,7 @@ class MetabaseApp(App):
         )
         records = await fetch_databases_details(client, databases, input.output_path)
         out = raw_file(input.output_path, "database_metadata")
-        write_jsonl(out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_individual_databases: wrote %d records", len(records))
         return FetchOutput(
             typename="database_metadata",
@@ -357,8 +434,8 @@ class MetabaseApp(App):
     ) -> FetchOutput:
         """Fetch the native SQL string for each filtered question."""
         client = await self._build_client(input)
-        questions = read_jsonl(
-            input.source_file.local_path if input.source_file else ""
+        questions = await self.run_in_thread(
+            read_jsonl, input.source_file.local_path if input.source_file else ""
         )
         logger.info(
             "fetch_question_queries_activity: fetching queries for %d questions",
@@ -366,7 +443,7 @@ class MetabaseApp(App):
         )
         records = await fetch_question_queries(client, questions, input.output_path)
         out = raw_file(input.output_path, "question_queries")
-        write_jsonl(out, records)
+        await self.run_in_thread(write_jsonl, out, records)
         logger.info("fetch_question_queries_activity: wrote %d records", len(records))
         return FetchOutput(
             typename="question_queries",
@@ -377,30 +454,35 @@ class MetabaseApp(App):
     @task(timeout_seconds=1800)
     async def process_metabaseprocess(self, input: ProcessInput) -> ProcessOutput:
         """Enrich filtered records into the four ``processed/*`` JSONL outputs."""
-        filtered_collections = read_jsonl(
+        filtered_collections = await self.run_in_thread(
+            read_jsonl,
             input.collections_filtered_file.local_path
             if input.collections_filtered_file
-            else ""
+            else "",
         )
-        database_details = read_jsonl(
+        database_details = await self.run_in_thread(
+            read_jsonl,
             input.databases_filtered_file.local_path
             if input.databases_filtered_file
-            else ""
+            else "",
         )
-        question_queries = read_jsonl(
+        question_queries = await self.run_in_thread(
+            read_jsonl,
             input.question_queries_file.local_path
             if input.question_queries_file
-            else ""
+            else "",
         )
-        dashboard_details = read_jsonl(
+        dashboard_details = await self.run_in_thread(
+            read_jsonl,
             input.dashboard_details_file.local_path
             if input.dashboard_details_file
-            else ""
+            else "",
         )
-        filtered_questions = read_jsonl(
+        filtered_questions = await self.run_in_thread(
+            read_jsonl,
             input.questions_filtered_file.local_path
             if input.questions_filtered_file
-            else ""
+            else "",
         )
 
         # Resolve metabase_host via the same credential path every other
@@ -438,10 +520,10 @@ class MetabaseApp(App):
         q_out = processed_file(input.output_path, "questions")
         qd_out = processed_file(input.output_path, "questions_dashboards")
 
-        write_jsonl(c_out, filtered_collections)
-        write_jsonl(d_out, enriched_dashboards)
-        write_jsonl(q_out, enriched_questions)
-        write_jsonl(qd_out, questions_dashboards_lineage)
+        await self.run_in_thread(write_jsonl, c_out, filtered_collections)
+        await self.run_in_thread(write_jsonl, d_out, enriched_dashboards)
+        await self.run_in_thread(write_jsonl, q_out, enriched_questions)
+        await self.run_in_thread(write_jsonl, qd_out, questions_dashboards_lineage)
 
         total = (
             len(filtered_collections)
@@ -512,7 +594,7 @@ class MetabaseApp(App):
 
         logger.info("transform_data: typename=%s, input_file=%s", typename, input_file)
 
-        records = read_jsonl(input_file)
+        records = await self.run_in_thread(read_jsonl, input_file)
         if not records:
             logger.info("transform_data: no records found for %s", typename)
             return TransformTaskOutput(typename=typename, record_count=0)
@@ -531,14 +613,9 @@ class MetabaseApp(App):
             tenant_id="default",
         )
 
-        count = 0
-        with open(out_file, "wb") as fh:
-            for raw in records:
-                entity = _map_one_record(typename, raw, ctx)
-                if entity is None:
-                    continue
-                fh.write(orjson.dumps(entity) + b"\n")
-                count += 1
+        count = await self.run_in_thread(
+            _write_transformed_records, out_file, records, typename, ctx
+        )
 
         logger.info("transform_data complete: typename=%s, records=%d", typename, count)
         return TransformTaskOutput(typename=typename, record_count=count)
@@ -759,44 +836,18 @@ class MetabaseApp(App):
         format coercion and app/lineage/ars_builder.py for the ARS 2.0
         ``arsIdentity``-bearing record construction.
         """
-        processes: list[dict[str, Any]] = []
-        column_processes: list[dict[str, Any]] = []
-
-        for record in iter_qi_records(input.qi_local_path):
-            query_id, sql, source_tables, source_columns = parse_qi_record(record)
-            if not query_id:
-                continue
-            # QI emits the source-question qualifiedName at
-            # extra.attributes.qualifiedName (current) or top-level
-            # QUERY_ID (legacy). Format is
-            # ``default/metabase/<conn>/questions/<id>``; the trailing id
-            # is what builds the BIProcess QN.
-            question_id = query_id.rsplit("/", 1)[-1]
-            question_name = _qi_question_name(record) or query_id
-
-            process = build_process(
-                connection_qualified_name=input.connection_qualified_name,
-                connection_name=input.connection_name,
-                question_id=question_id,
-                question_name=question_name,
-                sql=sql,
-                source_tables=source_tables,
-            )
-            if process is None:
-                continue
-            processes.append(process)
-
-            cp = build_column_process(
-                connection_qualified_name=input.connection_qualified_name,
-                connection_name=input.connection_name,
-                question_id=question_id,
-                question_name=question_name,
-                sql=sql,
-                source_columns=source_columns,
-                parent_process_hash=process_hash(question_id, sql),
-            )
-            if cp is not None:
-                column_processes.append(cp)
+        # iter_qi_records() is a sync generator that does blocking
+        # Path.read_text() per QI output file, and the per-record
+        # parse/build calls below are pure CPU work — both scale with the
+        # tenant's QI output size. A sync generator can't be handed to
+        # self.run_in_thread mid-iteration, so the whole loop is
+        # materialized in _build_process_records and offloaded in one call.
+        processes, column_processes = await self.run_in_thread(
+            _build_process_records,
+            input.qi_local_path,
+            input.connection_qualified_name,
+            input.connection_name,
+        )
 
         # ARS 2.0 producer-split convention: records carrying arsIdentity
         # MUST land under a ``resolvable/`` subdirectory of the transformed
@@ -814,8 +865,13 @@ class MetabaseApp(App):
         resolvable_dir = os.path.join(stage_dir, "resolvable")
         os.makedirs(os.path.join(resolvable_dir, "PROCESS"), exist_ok=True)
         os.makedirs(os.path.join(resolvable_dir, "COLUMNPROCESS"), exist_ok=True)
-        write_jsonl(os.path.join(resolvable_dir, "PROCESS", "result-0.json"), processes)
-        write_jsonl(
+        await self.run_in_thread(
+            write_jsonl,
+            os.path.join(resolvable_dir, "PROCESS", "result-0.json"),
+            processes,
+        )
+        await self.run_in_thread(
+            write_jsonl,
             os.path.join(resolvable_dir, "COLUMNPROCESS", "result-0.json"),
             column_processes,
         )
