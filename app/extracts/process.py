@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from application_sdk.observability.logger_adaptor import get_logger
 
+from app.qualified_names import dashboard_qn, question_qn
+
 logger = get_logger(__name__)
 
 
@@ -415,14 +417,18 @@ def process_assets(
             question_ref = {
                 "typeName": "MetabaseQuestion",
                 "uniqueAttributes": {
-                    "qualifiedName": f"{connection_qualified_name}/questions/{question['id']}"
+                    "qualifiedName": question_qn(
+                        connection_qualified_name, question["id"]
+                    )
                 },
             }
             dashboard_refs = [
                 {
                     "typeName": "MetabaseDashboard",
                     "uniqueAttributes": {
-                        "qualifiedName": f"{connection_qualified_name}/dashboards/{d['id']}"
+                        "qualifiedName": dashboard_qn(
+                            connection_qualified_name, d["id"]
+                        )
                     },
                 }
                 for d in question["dashboards"]

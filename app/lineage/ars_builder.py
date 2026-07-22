@@ -75,6 +75,10 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from app.qualified_names import column_process_qn as build_column_process_qn
+from app.qualified_names import process_qn as build_process_qn
+from app.qualified_names import question_qn as build_question_qn
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -245,9 +249,9 @@ def build_process(
     if not source_tables:
         return None
 
-    question_qn = f"{connection_qualified_name}/questions/{question_id}"
+    question_qn = build_question_qn(connection_qualified_name, question_id)
     p_hash = _hash(str(question_id), sql)
-    process_qn = f"{connection_qualified_name}/question_tables/{question_id}/{p_hash}"
+    process_qn = build_process_qn(connection_qualified_name, question_id, p_hash)
     process_name = _truncate(question_name or f"Question {question_id}")
 
     inputs = [build_partial_table_ref(**t) for t in source_tables]
@@ -325,13 +329,12 @@ def build_column_process(
     if not source_columns:
         return None
 
-    question_qn = f"{connection_qualified_name}/questions/{question_id}"
-    parent_process_qn = (
-        f"{connection_qualified_name}/question_tables/{question_id}/"
-        f"{parent_process_hash}"
+    question_qn = build_question_qn(connection_qualified_name, question_id)
+    parent_process_qn = build_process_qn(
+        connection_qualified_name, question_id, parent_process_hash
     )
     cp_hash = _hash(str(question_id), sql, "column")
-    cp_qn = f"{connection_qualified_name}/question_columns/{question_id}/{cp_hash}"
+    cp_qn = build_column_process_qn(connection_qualified_name, question_id, cp_hash)
     cp_name = _truncate(question_name or f"Question {question_id} columns")
 
     inputs = [build_partial_column_ref(**c) for c in source_columns]
