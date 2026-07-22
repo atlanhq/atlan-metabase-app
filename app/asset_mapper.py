@@ -364,7 +364,9 @@ def serialize_entity(
                 # in relationshipAttributes too makes Atlas reject the entity on
                 # incremental runs (ATLAS-400-00-108: attribute already exists in
                 # relationshipAttributes).
-                rel.pop(key, None)
+                # pop's default is unreachable — the guard above proves the key
+                # exists — so mutating it is behaviourally equivalent.
+                rel.pop(key, None)  # pragma: no mutate
     # Keep canonical relationshipAttributes for the publish layer's
     # relationship updates (Question→Collection, Question→Dashboards, etc).
     if rel:

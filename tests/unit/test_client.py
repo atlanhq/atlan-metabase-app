@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.client import MetabaseApiClient
-from app.errors import MetabaseSessionAuthError
+from app.contracts import MetabaseCredential
+from app.errors import MetabaseSessionAuthError, MetabaseSessionMissingError
 
 
 class TestMetabaseApiClient:
@@ -113,6 +114,24 @@ class TestMetabaseApiClient:
         assert call_kwargs["json_data"]["username"] == "admin@example.com"
         assert call_kwargs["json_data"]["password"] == "s3cr3t"
 
+    @patch.object(
+        MetabaseApiClient, "execute_http_post_request", new_callable=AsyncMock
+    )
+    async def test_authenticate_posts_exact_url_and_timeout(self, mock_post, client):
+        """The session POST targets host:port/api/session with a 30s timeout."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = {"id": "tok"}
+        mock_post.return_value = mock_response
+
+        await client._authenticate()
+
+        call_kwargs = mock_post.call_args[1]
+        assert (
+            call_kwargs["url"] == "https://myinstance.metabaseapp.com:443/api/session"
+        )
+        assert call_kwargs["timeout"] == 30
+
     # -------------------------------------------------------------------------
     # _authenticate: failure paths
     # -------------------------------------------------------------------------
@@ -161,6 +180,19 @@ class TestMetabaseApiClient:
         assert exc_info.value.failure_reason == "403"
         assert "403" not in exc_info.value.message
 
+    @patch.object(
+        MetabaseApiClient, "execute_http_post_request", new_callable=AsyncMock
+    )
+    async def test_authenticate_none_response_error_details(self, mock_post, client):
+        """None response pins failure_reason='No response' plus auth metadata."""
+        mock_post.return_value = None
+
+        with pytest.raises(MetabaseSessionAuthError) as exc_info:
+            await client._authenticate()
+        assert exc_info.value.failure_reason == "No response"
+        assert exc_info.value.auth_method == "session-token"
+        assert exc_info.value.principal == "admin@example.com"
+
     # -------------------------------------------------------------------------
     # test_connection
     # -------------------------------------------------------------------------
@@ -183,6 +215,18 @@ class TestMetabaseApiClient:
 
         with pytest.raises(Exception):
             await client.test_connection()
+
+    async def test_test_connection_missing_token_error_details(self, client):
+        """The missing-token error pins message, auth_method, and principal."""
+        client.session_token = None
+
+        with pytest.raises(MetabaseSessionMissingError) as exc_info:
+            await client.test_connection()
+        assert exc_info.value.message == (
+            "No session token available — authentication did not succeed"
+        )
+        assert exc_info.value.auth_method == "session-token"
+        assert exc_info.value.principal == "admin@example.com"
 
     # -------------------------------------------------------------------------
     # load() integration (via patches to avoid real HTTP)
@@ -231,3 +275,95 @@ class TestMetabaseApiClient:
         await c.load(credentials={"host": "https://mb.example.com"})
 
         mock_auth.assert_called_once()
+
+    @patch.object(MetabaseApiClient, "_authenticate", new_callable=AsyncMock)
+    async def test_load_prefers_typed_credential_kwarg(self, mock_auth):
+        """load(credential=MetabaseCredential(...)) uses the typed credential."""
+        mock_auth.return_value = None
+
+        c = MetabaseApiClient()
+        await c.load(
+            credential=MetabaseCredential(
+                host="https://typed.example.com",
+                port=8443,
+                username="typed-user",
+                password="typed-pass",
+            )
+        )
+
+        assert c.host == "https://typed.example.com"
+        assert c.port == 8443
+        assert c.username == "typed-user"
+        assert c.password == "typed-pass"
+
+    @patch.object(MetabaseApiClient, "_authenticate", new_callable=AsyncMock)
+    async def test_load_accepts_typed_credential_via_legacy_credentials_kwarg(
+        self, mock_auth
+    ):
+        """A MetabaseCredential passed as `credentials` is used directly."""
+        mock_auth.return_value = None
+
+        c = MetabaseApiClient()
+        await c.load(
+            credentials=MetabaseCredential(
+                host="https://legacy.example.com",
+                port=9443,
+                username="legacy-user",
+                password="legacy-pass",
+            )
+        )
+
+        assert c.host == "https://legacy.example.com"
+        assert c.port == 9443
+        assert c.username == "legacy-user"
+        assert c.password == "legacy-pass"
+
+    @patch.object(MetabaseApiClient, "_authenticate", new_callable=AsyncMock)
+    async def test_load_with_no_kwargs_falls_back_to_empty_defaults(self, mock_auth):
+        """load() with no credential kwargs validates an empty dict → defaults."""
+        mock_auth.return_value = None
+
+        c = MetabaseApiClient()
+        await c.load()
+
+        assert c.host == ""
+        assert c.port == 443
+        assert c.username == ""
+        assert c.password == ""
+
+    @patch.object(MetabaseApiClient, "_authenticate", new_callable=AsyncMock)
+    async def test_load_resets_session_token_to_none_before_authenticate(
+        self, mock_auth
+    ):
+        """load() initialises session_token to exactly None (not '') pre-auth."""
+        mock_auth.return_value = None
+
+        c = MetabaseApiClient()
+        await c.load(credentials={"host": "https://mb.example.com"})
+
+        assert c.session_token is None
+
+    @patch.object(
+        MetabaseApiClient, "execute_http_post_request", new_callable=AsyncMock
+    )
+    async def test_load_sets_exact_http_headers(self, mock_post):
+        """After load(), http_headers is exactly the session + content-type pair."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = {"id": "tok-1"}
+        mock_post.return_value = mock_response
+
+        c = MetabaseApiClient()
+        await c.load(
+            credentials={
+                "host": "https://mb.example.com",
+                "port": 443,
+                "username": "u",
+                "password": "p",
+            }
+        )
+
+        assert c.http_headers == {
+            "X-Metabase-Session": "tok-1",
+            "Content-Type": "application/json",
+        }

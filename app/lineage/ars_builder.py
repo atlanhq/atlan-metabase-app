@@ -88,7 +88,13 @@ def _truncate(s: str, max_len: int = _NAME_MAX_LEN) -> str:
 
 
 def _hash(*parts: str) -> str:
-    return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:12]
+    # no-mutate: the codec-name mutant ("utf-8" → "UTF-8") is provably
+    # equivalent — Python codec lookup is case-insensitive. Every other
+    # aspect of this line (separator, digest length) is pinned by
+    # exact-digest tests in tests/unit/test_lineage_ars.py.
+    return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[
+        :12
+    ]  # pragma: no mutate
 
 
 def _components(**kwargs: str) -> dict[str, str]:

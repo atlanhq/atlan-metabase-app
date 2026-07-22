@@ -17,15 +17,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from application_sdk.contracts.types import ConnectionRef, FileReference
+from application_sdk.contracts.types import ConnectionRef, FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors import InvalidInputError
 
 from app.connector import MetabaseApp, _ref
 from app.contracts import FetchInput, FilterInput, MetabaseInput, MetabaseLineageInput
+from app.errors import MetabaseCredentialInputError
 
 
 class TestRef:
@@ -33,6 +35,9 @@ class TestRef:
         ref = _ref("/tmp/out/raw/collections/result-0.json")
         assert isinstance(ref, FileReference)
         assert ref.local_path == "/tmp/out/raw/collections/result-0.json"
+        # Tier must be RETAINED explicitly — the FileReference default is
+        # TRANSIENT, which would let the SDK garbage-collect task outputs.
+        assert ref.tier is StorageTier.RETAINED
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +98,45 @@ class TestBuildClient:
             InvalidInputError, match="no credential_ref or inline_credentials"
         ):
             await app._build_client(fake_input)
+
+    @pytest.mark.asyncio
+    async def test_input_missing_credential_attributes_entirely(self, app):
+        """Inputs without the credential attributes (not just None-valued)
+        must route through the same paths: getattr defaults, no
+        AttributeError."""
+        # Missing both attributes → clean typed error, not AttributeError.
+        with pytest.raises(MetabaseCredentialInputError):
+            await app._build_client(SimpleNamespace())
+
+        # Missing credential_ref only → inline fallback still works.
+        with patch("app.connector.build_client", new_callable=AsyncMock) as mock_build:
+            mock_build.return_value = MagicMock()
+            await app._build_client(
+                SimpleNamespace(
+                    inline_credentials={
+                        "host": "http://x",
+                        "port": 3000,
+                        "username": "u",
+                        "password": "p",
+                    }
+                )
+            )
+            assert mock_build.call_args[0][0].host == "http://x"
+
+    @pytest.mark.asyncio
+    async def test_no_credentials_error_carries_field_and_message(self, app):
+        """The typed error pins field="credentials" and the exact message —
+        the Automation Engine attributes failures from these fields."""
+        fake_input = MagicMock()
+        fake_input.credential_ref = None
+        fake_input.inline_credentials = {}
+        with pytest.raises(MetabaseCredentialInputError) as excinfo:
+            await app._build_client(fake_input)
+        assert excinfo.value.field == "credentials"
+        assert (
+            excinfo.value.message
+            == "_build_client: no credential_ref or inline_credentials"
+        )
 
 
 # ---------------------------------------------------------------------------

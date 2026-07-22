@@ -159,7 +159,10 @@ def generate_questions_query_map(
     questions_query_map: Dict[Any, Dict] = {}
     for record in question_queries:
         question_id = record["question_id"]
-        raw_query = record.get("query", "")
+        # Equivalent-mutant suppression: when "query" is absent, any falsy
+        # default (None or "") is coerced to "" by the isinstance guard below,
+        # so mutating this default cannot change behavior.
+        raw_query = record.get("query", "")  # pragma: no mutate
         # If query is not a string (e.g. a dict), the downstream SQL parser breaks.
         # Coerce to empty string.
         query_str: str = raw_query if isinstance(raw_query, str) else ""
@@ -333,8 +336,14 @@ def process_assets(
         # Build query_object (mirrors main.py logic exactly)
         dataset_query = question.get("dataset_query", {})
         query_object: Dict[str, Any] = {}
+        # Equivalent-mutant suppression: the first get's default only matters
+        # when "engine" is absent, and then any non-engine lookup key (None,
+        # "", garbage) misses the map alike and returns the second-arg
+        # fallback — mutants of this line cannot change behavior that the
+        # engine-resolution tests don't already pin.
         atlan_compatible_engine = METABASE_ATLAN_SOURCE_ENGINE_MAP.get(
-            database.get("engine", ""), database.get("engine", "")
+            database.get("engine", ""),  # pragma: no mutate
+            database.get("engine", ""),
         )
         # Resolve query kind across Metabase API versions:
         #   pre-v1.50: dataset_query.type = "native" | "query"
@@ -348,7 +357,10 @@ def process_assets(
         if isinstance(stages, list) and stages:
             first = stages[0]
             if isinstance(first, dict):
-                raw_stage_type = first.get("lib/type") or ""
+                # Equivalent-mutant suppression: this fallback is only ever
+                # compared against the two exact mbql.stage/* constants; any
+                # replacement string fails both comparisons just like "".
+                raw_stage_type = first.get("lib/type") or ""  # pragma: no mutate
                 if raw_stage_type == "mbql.stage/native":
                     stage_type = "native"
                 elif raw_stage_type == "mbql.stage/mbql":

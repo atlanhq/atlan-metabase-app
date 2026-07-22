@@ -132,7 +132,12 @@ async def fetch_question_queries_single(
             timeout=60,
         )
         if response is None or not response.is_success:
-            status = response.status_code if response else "No response"
+            # The non-int fallback string only feeds the isinstance() gate below
+            # (http_status=None either way), so mutants of it are behaviourally
+            # equivalent — unlike fetch_questions_summaries, it is never logged.
+            status = (
+                response.status_code if response else "No response"  # pragma: no mutate
+            )
             record_residual_failure(
                 output_path,
                 "question_query_fetch_failed",

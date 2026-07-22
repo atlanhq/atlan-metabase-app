@@ -1,8 +1,38 @@
 """Unit tests for app.utils utility helpers."""
 
 import json
+import os
+import time
+from unittest.mock import call, patch
 
-from app.utils import serialize_complex_columns, strip_html_tags, to_epoch_ms
+import pytest
+
+from app.utils import (
+    read_jsonl,
+    serialize_complex_columns,
+    strip_html_tags,
+    to_epoch_ms,
+)
+
+
+@pytest.fixture
+def force_new_york_tz():
+    """Force a non-UTC local timezone so naive-vs-UTC bugs can't hide.
+
+    ``datetime.timestamp()`` on a naive datetime uses the *local* timezone,
+    so on a UTC machine 'treat naive as UTC' and 'leave naive alone' are
+    indistinguishable. Pinning TZ to America/New_York makes the difference
+    observable regardless of the host machine's timezone.
+    """
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    yield
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
 
 
 class TestToEpochMs:
@@ -70,6 +100,50 @@ class TestToEpochMs:
 
     def test_plain_number_string_returns_none(self):
         assert to_epoch_ms("1705312200000") is None
+
+    # -------------------------------------------------------------------------
+    # Timezone semantics (exact values, non-UTC local tz forced)
+    # -------------------------------------------------------------------------
+
+    def test_naive_string_is_interpreted_as_utc_not_local(self, force_new_york_tz):
+        """A naive datetime must be pinned to UTC, never the local timezone.
+
+        2024-01-15T10:30:00 UTC == 1705314600000 ms. If the naive datetime
+        leaked through to ``timestamp()`` it would be interpreted as
+        America/New_York (UTC-5) and come out 18000000 ms higher.
+        """
+        assert to_epoch_ms("2024-01-15T10:30:00") == 1_705_314_600_000
+
+    def test_explicit_offset_is_respected_not_replaced_with_utc(self):
+        """A +05:30 offset must shift the epoch; replacing it with UTC would
+        yield 1705314600000 instead."""
+        assert to_epoch_ms("2024-01-15T10:30:00+05:30") == 1_705_294_800_000
+
+    # -------------------------------------------------------------------------
+    # Logging contract
+    # -------------------------------------------------------------------------
+
+    def test_debug_logged_for_each_non_matching_format(self):
+        """Each failed format attempt logs the input and format at DEBUG."""
+        dt_str = "2024-01-15T10:30:00"  # matches only the 4th format
+        with patch("app.utils.logger") as mock_logger:
+            result = to_epoch_ms(dt_str)
+        assert result is not None
+        assert mock_logger.debug.call_args_list == [
+            call(
+                "Datetime %r did not match format %r", dt_str, "%Y-%m-%dT%H:%M:%S.%f%z"
+            ),
+            call("Datetime %r did not match format %r", dt_str, "%Y-%m-%dT%H:%M:%S%z"),
+            call("Datetime %r did not match format %r", dt_str, "%Y-%m-%dT%H:%M:%S.%f"),
+        ]
+        mock_logger.warning.assert_not_called()
+
+    def test_warning_logged_when_no_format_matches(self):
+        with patch("app.utils.logger") as mock_logger:
+            assert to_epoch_ms("not-a-date") is None
+        mock_logger.warning.assert_called_once_with(
+            "Failed to parse datetime %r against any known format", "not-a-date"
+        )
 
     # -------------------------------------------------------------------------
     # Edge cases
@@ -207,3 +281,48 @@ class TestSerializeComplexColumns:
         # Original must not be mutated
         assert isinstance(original["dataset_query"], dict)
         assert isinstance(result["dataset_query"], str)
+
+
+class TestReadJsonl:
+    """Tests for read_jsonl() newline-delimited JSON reader."""
+
+    def test_none_path_returns_empty_list(self):
+        assert read_jsonl(None) == []
+
+    def test_nonexistent_path_returns_empty_list(self, tmp_path):
+        """A non-empty path to a missing file must return [], not raise."""
+        assert read_jsonl(str(tmp_path / "does-not-exist.json")) == []
+
+    def test_reads_all_records(self, tmp_path):
+        p = tmp_path / "records.json"
+        p.write_bytes(b'{"a": 1}\n{"b": 2}\n')
+        assert read_jsonl(str(p)) == [{"a": 1}, {"b": 2}]
+
+    def test_blank_lines_are_skipped_not_terminal(self, tmp_path):
+        """A blank line mid-file must not stop the read."""
+        p = tmp_path / "records.json"
+        p.write_bytes(b'{"a": 1}\n\n   \n{"b": 2}\n')
+        assert read_jsonl(str(p)) == [{"a": 1}, {"b": 2}]
+
+    def test_bad_line_is_skipped_not_terminal(self, tmp_path):
+        """An unparseable line is skipped; later records still load."""
+        p = tmp_path / "records.json"
+        p.write_bytes(b'not json at all\n{"b": 2}\n')
+        assert read_jsonl(str(p)) == [{"b": 2}]
+
+    def test_non_utf8_line_is_skipped_via_binary_read(self, tmp_path):
+        """Reading in binary mode tolerates invalid UTF-8 bytes: the line
+        fails JSON parsing and is skipped. A text-mode read would raise
+        UnicodeDecodeError during iteration instead."""
+        p = tmp_path / "records.json"
+        p.write_bytes(b'\x80\x81\xff\n{"ok": true}\n')
+        assert read_jsonl(str(p)) == [{"ok": True}]
+
+    def test_bad_line_logs_warning_with_path_and_traceback(self, tmp_path):
+        p = tmp_path / "records.json"
+        p.write_bytes(b"garbage\n")
+        with patch("app.utils.logger") as mock_logger:
+            assert read_jsonl(str(p)) == []
+        mock_logger.warning.assert_called_once_with(
+            "Skipping unparseable JSONL line in %s", str(p), exc_info=True
+        )

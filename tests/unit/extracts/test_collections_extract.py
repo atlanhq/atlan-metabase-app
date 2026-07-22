@@ -1,7 +1,7 @@
 """Unit tests for app.extracts.collections."""
 
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
@@ -79,6 +79,34 @@ class TestFetchCollectionsSummaries:
         called_url = mock_client.execute_http_get_request.call_args[1]["url"]
         assert "/api/collection" in called_url
 
+    async def test_success_requests_exact_url_and_timeout(self, mock_client, tmp_path):
+        """The URL is exactly host:port/api/collection and timeout is exactly 60."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = []
+        mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
+
+        await fetch_collections_summaries(mock_client, str(tmp_path))
+
+        call_kwargs = mock_client.execute_http_get_request.call_args[1]
+        assert (
+            call_kwargs["url"]
+            == "https://myinstance.metabaseapp.com:443/api/collection"
+        )
+        assert call_kwargs["timeout"] == 60
+
+    async def test_success_logs_fetched_count(self, mock_client, tmp_path):
+        """The success path logs the exact message with the record count."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = [{"id": 1}, {"id": 2}]
+        mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
+
+        with patch("app.extracts.collections.logger") as mock_logger:
+            await fetch_collections_summaries(mock_client, str(tmp_path))
+
+        mock_logger.info.assert_called_once_with("Fetched %d collections", 2)
+
     async def test_empty_response_returns_empty_list(self, mock_client, tmp_path):
         """A successful response with an empty array returns []."""
         mock_response = MagicMock()
@@ -110,6 +138,32 @@ class TestFetchCollectionsSummaries:
         assert len(failures) == 1
         assert failures[0]["category"] == "collections_fetch_failed"
         assert failures[0]["http_status"] == 500
+        assert failures[0]["endpoint"] == "/api/collection"
+
+    async def test_failure_logs_warning_with_status_code(self, mock_client, tmp_path):
+        """A non-success response logs the exact warning with the status code."""
+        mock_response = MagicMock()
+        mock_response.is_success = False
+        mock_response.status_code = 500
+        mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
+
+        with patch("app.extracts.collections.logger") as mock_logger:
+            await fetch_collections_summaries(mock_client, str(tmp_path))
+
+        mock_logger.warning.assert_called_once_with(
+            "Failed to fetch collections: %s", 500
+        )
+
+    async def test_none_response_logs_no_response_sentinel(self, mock_client, tmp_path):
+        """A None response logs the exact 'No response' sentinel string."""
+        mock_client.execute_http_get_request = AsyncMock(return_value=None)
+
+        with patch("app.extracts.collections.logger") as mock_logger:
+            await fetch_collections_summaries(mock_client, str(tmp_path))
+
+        mock_logger.warning.assert_called_once_with(
+            "Failed to fetch collections: %s", "No response"
+        )
 
     async def test_401_response_returns_empty_list_and_records_residual(
         self, mock_client, tmp_path

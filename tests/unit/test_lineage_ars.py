@@ -11,12 +11,15 @@ ARS 2.0 schema is defined in atlan-publish-app
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
 from app.lineage.ars_builder import (
+    _NAME_MAX_LEN,
+    _truncate,
     build_column_process,
     build_partial_column_ref,
     build_partial_table_ref,
@@ -61,6 +64,48 @@ def _column(
         "table_name": table,
         "column_name": column,
     }
+
+
+# ---------------------------------------------------------------------------
+# Helpers — _truncate / process_hash
+# ---------------------------------------------------------------------------
+
+
+class TestTruncate:
+    def test_below_limit_unchanged(self):
+        assert _truncate("short name") == "short name"
+
+    def test_exactly_at_limit_unchanged(self):
+        # Boundary contract: len == max_len is NOT truncated (<=, not <).
+        s = "a" * _NAME_MAX_LEN
+        assert _truncate(s) == s
+
+    def test_one_over_limit_truncates_to_max_len_with_ellipsis(self):
+        s = "a" * (_NAME_MAX_LEN + 1)
+        out = _truncate(s)
+        # Exactly max_len - 1 original chars + a single "…" — the result
+        # never exceeds max_len.
+        assert out == "a" * (_NAME_MAX_LEN - 1) + "…"
+        assert len(out) == _NAME_MAX_LEN
+
+    def test_custom_max_len_boundary(self):
+        assert _truncate("abcde", max_len=5) == "abcde"
+        assert _truncate("abcdef", max_len=5) == "abcd…"
+
+
+class TestProcessHash:
+    def test_is_md5_of_pipe_joined_parts_first_12_hex_chars(self):
+        # The hash is embedded in qualifiedNames shared between Process and
+        # ColumnProcess records — pin the exact recipe (md5 over
+        # "|"-joined parts, utf-8, first 12 hex chars) so the two builders
+        # can never silently diverge.
+        expected = hashlib.md5(f"{_QID}|{_SQL}".encode("utf-8")).hexdigest()[:12]
+        assert process_hash(_QID, _SQL) == expected
+        assert len(expected) == 12
+
+    def test_question_id_and_sql_both_contribute(self):
+        assert process_hash(_QID, _SQL) != process_hash(_QID + 1, _SQL)
+        assert process_hash(_QID, _SQL) != process_hash(_QID, _SQL + " ")
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +176,37 @@ class TestPartialTableRef:
         assert ai["fallbackQualifiedName"] == "db1/sch1/t1"
         assert ai["fallbackTypeName"] == "Table"
 
+    def test_exact_record_shape(self):
+        # Full-record pin. The ref is consumed verbatim by publish-app's
+        # resolver (ARS_IDENTITY_STRUCT_SCHEMA) — every key is contract,
+        # casing included, so assert the whole dict at once.
+        ref = build_partial_table_ref(
+            vendor_name="postgres",
+            database="testdata",
+            schema="analytics",
+            table_name="customers",
+        )
+        assert ref == {
+            "typeName": "Table",
+            "attributes": {
+                "name": "customers",
+                "qualifiedName": "testdata/analytics/customers",
+                "arsIdentity": {
+                    "components": {
+                        "connectorType": "postgres",
+                        "databaseName": "testdata",
+                        "schemaName": "analytics",
+                        "tableName": "customers",
+                    },
+                    "matchTypeNames": ["Table", "View"],
+                    "fallbackQualifiedName": "testdata/analytics/customers",
+                    "fallbackTypeName": "Table",
+                    "noMatchAction": "drop",
+                    "lookupResultHandling": "pick_first",
+                },
+            },
+        }
+
 
 class TestPartialColumnRef:
     def test_carries_ars_2_0_identity_with_column(self):
@@ -184,6 +260,41 @@ class TestPartialColumnRef:
         assert "arsAttributes" not in attrs
         assert "arsParentEntityConfig" not in attrs
         assert "arsParentAttributes" not in attrs
+
+    def test_exact_record_shape(self):
+        # Full-record pin — see TestPartialTableRef.test_exact_record_shape.
+        # The Column ref adds columnName to components and uses the 4-part
+        # "/"-joined qualifiedName.
+        ref = build_partial_column_ref(
+            vendor_name="postgres",
+            database="testdata",
+            schema="analytics",
+            table_name="customers",
+            column_name="customer_name",
+        )
+        assert ref == {
+            "typeName": "Column",
+            "attributes": {
+                "name": "customer_name",
+                "qualifiedName": "testdata/analytics/customers/customer_name",
+                "arsIdentity": {
+                    "components": {
+                        "connectorType": "postgres",
+                        "databaseName": "testdata",
+                        "schemaName": "analytics",
+                        "tableName": "customers",
+                        "columnName": "customer_name",
+                    },
+                    "matchTypeNames": ["Column"],
+                    "fallbackQualifiedName": (
+                        "testdata/analytics/customers/customer_name"
+                    ),
+                    "fallbackTypeName": "Column",
+                    "noMatchAction": "drop",
+                    "lookupResultHandling": "pick_first",
+                },
+            },
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +447,71 @@ class TestBuildProcess:
             "is closing. Let publish-app own the wire-format side."
         )
 
+    def test_exact_record_shape(self):
+        # Full-record pin: every attribute key (casing included) and the
+        # qualifiedName recipe (md5 hash of "<qid>|<sql>", first 12 hex
+        # chars) are contract with publish-app. tenant_id is deliberately
+        # omitted from the call to pin its "default" default.
+        tables = [_table("testdata", "analytics", "customers")]
+        p = build_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_tables=tables,
+        )
+        h = hashlib.md5(f"{_QID}|{_SQL}".encode("utf-8")).hexdigest()[:12]
+        assert p == {
+            "typeName": "Process",
+            "status": "ACTIVE",
+            "attributes": {
+                "name": _QNAME,
+                "qualifiedName": f"{_CONN_QN}/question_tables/{_QID}/{h}",
+                "connectorName": "metabase",
+                "connectionName": _CONN_NAME,
+                "connectionQualifiedName": _CONN_QN,
+                "tenantId": "default",
+                "sql": _SQL,
+                "inputs": [build_partial_table_ref(**tables[0])],
+                "outputs": [
+                    {
+                        "typeName": "MetabaseQuestion",
+                        "uniqueAttributes": {
+                            "qualifiedName": f"{_CONN_QN}/questions/{_QID}"
+                        },
+                    }
+                ],
+                "arsNestedLookupFields": ["inputs", "outputs"],
+                "arsNoNestedMatchAction": "keep",
+            },
+        }
+
+    def test_name_falls_back_when_question_name_empty(self):
+        p = build_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name="",
+            sql=_SQL,
+            source_tables=[_table("testdata", "analytics", "customers")],
+        )
+        assert p is not None
+        assert p["attributes"]["name"] == f"Question {_QID}"
+
+    def test_name_truncated_to_max_len(self):
+        long_name = "n" * (_NAME_MAX_LEN + 50)
+        p = build_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=long_name,
+            sql=_SQL,
+            source_tables=[_table("testdata", "analytics", "customers")],
+        )
+        assert p is not None
+        assert p["attributes"]["name"] == "n" * (_NAME_MAX_LEN - 1) + "…"
+
 
 # ---------------------------------------------------------------------------
 # ColumnProcess record assembly + Process linkage
@@ -410,6 +586,92 @@ class TestBuildColumnProcess:
         )
         assert cp is not None
         assert "relationshipAttributes" not in cp
+
+    def test_exact_record_shape(self):
+        # Full-record pin — companion to
+        # TestBuildProcess.test_exact_record_shape. The ColumnProcess hash
+        # recipe appends a "column" discriminator part
+        # (md5 of "<qid>|<sql>|column") so its qualifiedName can never
+        # collide with the parent Process's, and the parent linkage under
+        # "process" is built from the caller-supplied hash verbatim.
+        cols = [_column("testdata", "analytics", "customers", "customer_name")]
+        cp = build_column_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_columns=cols,
+            parent_process_hash="abc123def456",
+        )
+        cp_h = hashlib.md5(f"{_QID}|{_SQL}|column".encode("utf-8")).hexdigest()[:12]
+        assert cp == {
+            "typeName": "ColumnProcess",
+            "status": "ACTIVE",
+            "attributes": {
+                "name": _QNAME,
+                "qualifiedName": f"{_CONN_QN}/question_columns/{_QID}/{cp_h}",
+                "connectorName": "metabase",
+                "connectionName": _CONN_NAME,
+                "connectionQualifiedName": _CONN_QN,
+                "tenantId": "default",
+                "sql": _SQL,
+                "process": {
+                    "typeName": "Process",
+                    "uniqueAttributes": {
+                        "qualifiedName": (
+                            f"{_CONN_QN}/question_tables/{_QID}/abc123def456"
+                        )
+                    },
+                },
+                "inputs": [build_partial_column_ref(**cols[0])],
+                "outputs": [
+                    {
+                        "typeName": "MetabaseQuestion",
+                        "uniqueAttributes": {
+                            "qualifiedName": f"{_CONN_QN}/questions/{_QID}"
+                        },
+                    }
+                ],
+                "arsNestedLookupFields": ["inputs", "outputs"],
+                "arsNoNestedMatchAction": "keep",
+            },
+        }
+
+    def test_name_falls_back_when_question_name_empty(self):
+        cp = build_column_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name="",
+            sql=_SQL,
+            source_columns=[
+                _column("testdata", "analytics", "customers", "customer_name")
+            ],
+            parent_process_hash="abc",
+        )
+        assert cp is not None
+        assert cp["attributes"]["name"] == f"Question {_QID} columns"
+
+    def test_hash_differs_from_parent_process_hash(self):
+        # The "column" discriminator part is what keeps the ColumnProcess
+        # qualifiedName distinct from the Process one for the same
+        # question + SQL.
+        h = process_hash(_QID, _SQL)
+        cp = build_column_process(
+            connection_qualified_name=_CONN_QN,
+            connection_name=_CONN_NAME,
+            question_id=_QID,
+            question_name=_QNAME,
+            sql=_SQL,
+            source_columns=[
+                _column("testdata", "analytics", "customers", "customer_name")
+            ],
+            parent_process_hash=h,
+        )
+        assert cp is not None
+        cp_hash = cp["attributes"]["qualifiedName"].rsplit("/", 1)[-1]
+        assert cp_hash != h
 
 
 # ---------------------------------------------------------------------------

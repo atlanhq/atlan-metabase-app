@@ -1,5 +1,7 @@
 """Unit tests for app.extracts.filter — pure filter functions."""
 
+from unittest.mock import patch
+
 import pytest
 
 from app.extracts.filter import (
@@ -34,6 +36,18 @@ class TestParseFilterArg:
 
     def test_empty_json_object_string_returns_empty_dict(self):
         assert parse_filter_arg("{}") == {}
+
+    def test_invalid_json_logs_warning_with_value(self):
+        """The invalid-JSON path logs the exact warning with the raw value."""
+        with patch("app.extracts.filter.logger") as mock_logger:
+            result = parse_filter_arg("{invalid json}")
+
+        assert result == {}
+        mock_logger.warning.assert_called_once_with(
+            "Filter arg %r is not valid JSON; treating as empty filter",
+            "{invalid json}",
+            exc_info=True,
+        )
 
 
 class TestFilterCollections:
@@ -120,6 +134,50 @@ class TestFilterCollections:
         assert result[0]["id"] == 1
 
     # -------------------------------------------------------------------------
+    # Missing / None id → treated as 'root'
+    # -------------------------------------------------------------------------
+
+    def test_missing_id_treated_as_root(self):
+        """A collection dict without an 'id' key is treated as the root id."""
+        result = filter_collections([{"name": "No ID"}], {"root": "Root"}, None)
+        assert len(result) == 1
+
+    def test_none_id_treated_as_root(self):
+        """A collection with id=None is treated as the root id."""
+        result = filter_collections([{"id": None}], {"root": "Root"}, None)
+        assert len(result) == 1
+
+    # -------------------------------------------------------------------------
+    # Logging contract
+    # -------------------------------------------------------------------------
+
+    def test_include_only_logs_counts_and_keys(self, all_collections):
+        """Include-only filtering logs exact counts, keys, and 'none' exclude."""
+        with patch("app.extracts.filter.logger") as mock_logger:
+            filter_collections(all_collections, {"1": "Engineering"}, None)
+
+        mock_logger.info.assert_called_once_with(
+            "filter_collections: %d → %d (include=%s, exclude=%s)",
+            3,
+            1,
+            ["1"],
+            "none",
+        )
+
+    def test_exclude_only_logs_all_for_include(self, all_collections):
+        """Exclude-only filtering logs 'all' for the empty include filter."""
+        with patch("app.extracts.filter.logger") as mock_logger:
+            filter_collections(all_collections, None, {"2": "Marketing"})
+
+        mock_logger.info.assert_called_once_with(
+            "filter_collections: %d → %d (include=%s, exclude=%s)",
+            3,
+            2,
+            "all",
+            ["2"],
+        )
+
+    # -------------------------------------------------------------------------
     # Empty collection list
     # -------------------------------------------------------------------------
 
@@ -179,6 +237,23 @@ class TestFilterDashboards:
         dashboards = [{"id": 20, "collection_id": None}]
         result = filter_dashboards(dashboards, {"1"})
         assert result == []
+
+    def test_missing_collection_id_treated_as_root(self):
+        """A dashboard without a 'collection_id' key is treated as root."""
+        dashboards = [{"id": 20}]
+        result = filter_dashboards(dashboards, {"root"})
+        assert len(result) == 1
+
+    # -------------------------------------------------------------------------
+    # Logging contract
+    # -------------------------------------------------------------------------
+
+    def test_logs_exact_counts(self, dashboards):
+        """Filtering logs the exact before/after dashboard counts."""
+        with patch("app.extracts.filter.logger") as mock_logger:
+            filter_dashboards(dashboards, {"1", "2"})
+
+        mock_logger.info.assert_called_once_with("filter_dashboards: %d → %d", 3, 2)
 
     # -------------------------------------------------------------------------
     # Empty dashboard list
@@ -240,6 +315,23 @@ class TestFilterQuestions:
         questions = [{"id": 30, "collection_id": None}]
         result = filter_questions(questions, {"1"})
         assert result == []
+
+    def test_missing_collection_id_treated_as_root(self):
+        """A question without a 'collection_id' key is treated as root."""
+        questions = [{"id": 30}]
+        result = filter_questions(questions, {"root"})
+        assert len(result) == 1
+
+    # -------------------------------------------------------------------------
+    # Logging contract
+    # -------------------------------------------------------------------------
+
+    def test_logs_exact_counts(self, questions):
+        """Filtering logs the exact before/after question counts."""
+        with patch("app.extracts.filter.logger") as mock_logger:
+            filter_questions(questions, {"1", "3"})
+
+        mock_logger.info.assert_called_once_with("filter_questions: %d → %d", 3, 2)
 
     # -------------------------------------------------------------------------
     # Empty question list

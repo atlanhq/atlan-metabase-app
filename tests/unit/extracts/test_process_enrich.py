@@ -18,6 +18,7 @@ but no longer produces Process / ColumnProcess locally.
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -123,6 +124,14 @@ class TestGenerateQuestionsQueryMap:
         Documents the contract — caller must ensure question_id is present."""
         with pytest.raises(KeyError):
             generate_questions_query_map([{"query": "no id"}])
+
+    def test_missing_query_and_params_default_to_empty_string(self):
+        """Records without ``query`` / ``params`` keys must produce exactly
+        ``""`` for both fields — the downstream SQL parser and transformer
+        expect strings, never None or sentinel garbage."""
+        result = generate_questions_query_map([{"question_id": 1}])
+        assert result[1]["query"] == ""
+        assert result[1]["params"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +560,698 @@ class TestProcessAssets:
         )
         # Orphan dashboard is dropped.
         assert dashboards == []
+
+
+class TestProcessAssetsQuestionContract:
+    """Exact-value pins on the enriched-question dict shape."""
+
+    def test_question_enrichment_full_contract(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        q = questions[0]
+        assert q["metabase_host"] == "http://m"
+        assert q["sourceURL"] == "http://m/question/10"
+        # collection_id=1 must resolve to THE Finance collection, not root.
+        assert q["collection"]["id"] == 1
+        assert q["collection"]["name"] == "Finance"
+        # Full query_object contract, exact.
+        assert q["query"] == {
+            "query": "SELECT * FROM analytics.customers",
+            "params": [],
+            "default_database_name": "testdata",
+            "default_schema_name": "analytics",
+            "engine": "postgres",
+        }
+
+    def test_dashboard_gets_collection_attached(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        dashboards, _, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        d = dashboards[0]
+        assert d["collection"]["id"] == 1
+        assert d["collection"]["name"] == "Finance"
+
+    def test_lineage_with_default_connection_qualified_name(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        """When connection_qualified_name is not passed, the default is exactly
+        "" — qualifiedNames must start with "/", no sentinel prefix."""
+        _, _, lineage = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        assert (
+            lineage[0]["inputs"][0]["uniqueAttributes"]["qualifiedName"]
+            == "/questions/10"
+        )
+        assert (
+            lineage[0]["outputs"][0]["uniqueAttributes"]["qualifiedName"]
+            == "/dashboards/200"
+        )
+
+
+class TestProcessAssetsRootFallback:
+    """collection_id=None must fall back to the literal "root" key."""
+
+    def test_dashboard_collection_id_none_falls_back_to_root(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        filtered_questions,
+    ):
+        dash = [{"id": 400, "name": "Rootless", "collection_id": None, "dashcards": []}]
+        dashboards, _, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dash,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        assert len(dashboards) == 1
+        assert dashboards[0]["collection"]["id"] == "root"
+
+    def test_question_collection_id_none_falls_back_to_root(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+    ):
+        qs = [
+            {
+                "id": 10,
+                "name": "Rootless Q",
+                "collection_id": None,
+                "database_id": 100,
+                "dataset_query": {"type": "native"},
+            }
+        ]
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=qs,
+            metabase_host="http://m",
+        )
+        assert len(questions) == 1
+        assert questions[0]["collection"]["id"] == "root"
+
+
+class TestProcessAssetsLoopContinuation:
+    """Skips must be per-item (continue), never abort the whole loop (break)."""
+
+    def test_orphan_dashboard_does_not_abort_loop(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        orphan = {"id": 300, "name": "Orphan", "collection_id": 9999, "dashcards": []}
+        dashboards, _, lineage = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=[orphan] + dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        assert [d["id"] for d in dashboards] == [200]
+        # The valid dashboard's cards must still be mapped for lineage.
+        assert len(lineage) == 1
+
+    def test_orphan_question_does_not_abort_loop(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        orphan = {
+            "id": 99,
+            "name": "Orphan Q",
+            "collection_id": 9999,
+            "database_id": 100,
+            "dataset_query": {"type": "native"},
+        }
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=[orphan] + filtered_questions,
+            metabase_host="http://m",
+        )
+        assert [q["id"] for q in questions] == [10]
+
+    def test_question_missing_database_does_not_abort_loop(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        no_db = {
+            "id": 77,
+            "name": "No DB",
+            "collection_id": 1,
+            "database_id": 999,  # not in databases_map
+            "dataset_query": {"type": "native"},
+        }
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map={
+                **questions_query_map,
+                77: {"query": "x", "params": []},
+            },
+            dashboard_details=dashboard_details,
+            filtered_questions=[no_db] + filtered_questions,
+            metabase_host="http://m",
+        )
+        assert [q["id"] for q in questions] == [10]
+
+    def test_card_without_card_id_does_not_stop_card_mapping(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        filtered_questions,
+    ):
+        dash = [
+            {
+                "id": 200,
+                "name": "D",
+                "collection_id": 1,
+                "dashcards": [
+                    {"note": "text card, no card_id"},
+                    {"card_id": 10, "card": {"id": 10, "name": "Q10"}},
+                ],
+            }
+        ]
+        _, questions, lineage = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dash,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        assert len(questions[0]["dashboards"]) == 1
+        assert len(lineage) == 1
+
+    def test_card_none_does_not_stop_card_mapping(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        filtered_questions,
+    ):
+        dash = [
+            {
+                "id": 200,
+                "name": "D",
+                "collection_id": 1,
+                "dashcards": [
+                    {"card_id": 5, "card": None},
+                    {"card_id": 10, "card": {"id": 10, "name": "Q10"}},
+                ],
+            }
+        ]
+        _, questions, lineage = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dash,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        assert len(questions[0]["dashboards"]) == 1
+        assert len(lineage) == 1
+
+
+class TestProcessAssetsSkipGuards:
+    """query/database missing → skip; the guard is OR, not AND."""
+
+    def test_question_with_missing_database_is_skipped(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+    ):
+        qs = [
+            {
+                "id": 10,
+                "name": "Q",
+                "collection_id": 1,
+                "database_id": 999,  # unknown database
+                "dataset_query": {"type": "native"},
+            }
+        ]
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=qs,
+            metabase_host="http://m",
+        )
+        assert questions == []
+
+    def test_question_with_missing_query_is_skipped(
+        self,
+        collections_map,
+        databases_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map={},  # no query for question 10
+            dashboard_details=dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        assert questions == []
+
+
+class TestProcessAssetsDashcardsCleanup:
+    def test_both_dashcards_and_ordered_cards_present_pops_both(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        filtered_questions,
+    ):
+        """When both field names exist (server straddling v0.49), dashcards
+        wins for the count and BOTH raw fields are removed."""
+        dash = [
+            {
+                "id": 200,
+                "name": "D",
+                "collection_id": 1,
+                "dashcards": [{"card_id": 10, "card": {"id": 10}}],
+                "ordered_cards": [
+                    {"card_id": 1, "card": {"id": 1}},
+                    {"card_id": 2, "card": {"id": 2}},
+                ],
+            }
+        ]
+        dashboards, _, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dash,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        d = dashboards[0]
+        assert d["cards_count"] == 1  # dashcards wins
+        assert "dashcards" not in d
+        assert "ordered_cards" not in d
+
+
+class TestProcessAssetsQueryTypeResolution:
+    def test_missing_dataset_query_key_yields_empty_query_type(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+    ):
+        """A question with no dataset_query at all must still enrich, with
+        query_type exactly ""."""
+        qs = [
+            {
+                "id": 10,
+                "name": "No dataset_query",
+                "collection_id": 1,
+                "database_id": 100,
+            }
+        ]
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=qs,
+            metabase_host="http://m",
+        )
+        assert len(questions) == 1
+        assert questions[0]["query_type"] == ""
+        # Not native → query_object is still built.
+        assert questions[0]["query"] != {}
+
+    def test_empty_stages_list_is_handled(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+    ):
+        """stages=[] must not be indexed; question enriches with query_type ""."""
+        qs = [
+            {
+                "id": 10,
+                "name": "Empty stages",
+                "collection_id": 1,
+                "database_id": 100,
+                "dataset_query": {"stages": []},
+            }
+        ]
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=qs,
+            metabase_host="http://m",
+        )
+        assert len(questions) == 1
+        assert questions[0]["query_type"] == ""
+
+
+class TestProcessAssetsQueryObjectGate:
+    def test_native_question_without_db_details_gets_empty_query_object(
+        self,
+        collections_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        """Native query + database with NO details key → the query_object gate
+        must NOT fire: query stays {} and every flattened field is ""."""
+        dbs = {100: {"id": 100, "name": "no-details", "engine": "postgres"}}
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=dbs,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        q = questions[0]
+        assert q["query_type"] == "native"
+        assert q["query"] == {}
+        assert q["metabase_query"] == ""
+        assert q["metabase_database_name"] == ""
+        assert q["metabase_schema_name"] == ""
+        assert q["metabase_source_engine"] == ""
+
+
+class TestProcessAssetsEngineResolution:
+    def test_unmapped_engine_passes_through_unchanged(
+        self,
+        collections_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        """Engines not in METABASE_ATLAN_SOURCE_ENGINE_MAP fall back to the
+        raw Metabase engine string, not None/""."""
+        dbs = {
+            100: {
+                "id": 100,
+                "name": "rs",
+                "engine": "redshift",
+                "details": {"dbname": "d", "schema": "s"},
+            }
+        }
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=dbs,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        q = questions[0]
+        assert q["metabase_source_engine"] == "redshift"
+        assert q["query"]["engine"] == "redshift"
+
+    def test_database_without_engine_key_yields_empty_engine(
+        self,
+        collections_map,
+        questions_query_map,
+        dashboard_details,
+    ):
+        dbs = {100: {"id": 100, "name": "n", "details": {"dbname": "d"}}}
+        qs = [
+            {
+                "id": 10,
+                "name": "Q",
+                "collection_id": 1,
+                "database_id": 100,
+                "dataset_query": {"type": "query"},
+            }
+        ]
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=dbs,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=qs,
+            metabase_host="http://m",
+        )
+        q = questions[0]
+        assert q["metabase_source_engine"] == ""
+        assert q["query"]["engine"] == ""
+
+
+class TestProcessAssetsNameFallbacks:
+    def test_database_without_name_key_yields_empty_names(
+        self,
+        collections_map,
+        questions_query_map,
+        dashboard_details,
+    ):
+        """No details.dbname / details.db AND no database.name → the stored
+        default_database_name is exactly "" (never None), and the flattened
+        db/schema fields are ""."""
+        dbs = {
+            100: {
+                "id": 100,
+                "engine": "postgres",
+                "details": {"host": "x"},  # no dbname/db/schema, no name key
+            }
+        }
+        qs = [
+            {
+                "id": 10,
+                "name": "Q",
+                "collection_id": 1,
+                "database_id": 100,
+                "dataset_query": {"type": "query"},
+            }
+        ]
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=dbs,
+            questions_query_map=questions_query_map,
+            dashboard_details=dashboard_details,
+            filtered_questions=qs,
+            metabase_host="http://m",
+        )
+        q = questions[0]
+        assert q["query"]["default_database_name"] == ""
+        assert q["metabase_database_name"] == ""
+        assert q["metabase_schema_name"] == ""
+
+    def test_query_map_entry_without_query_key_yields_empty_metabase_query(
+        self,
+        collections_map,
+        databases_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        _, questions, _ = process_assets(
+            collections_map=collections_map,
+            databases_map=databases_map,
+            questions_query_map={10: {"params": []}},  # no "query" key
+            dashboard_details=dashboard_details,
+            filtered_questions=filtered_questions,
+            metabase_host="http://m",
+        )
+        assert questions[0]["metabase_query"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Observability contract — log messages and args are pinned exactly because
+# on-call queries the log store for these strings during incidents.
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichmentLogging:
+    def test_generate_collections_map_logs_entry_count(self):
+        with patch("app.extracts.process.logger") as mock_logger:
+            generate_collections_map([{"id": 1}, {"id": 2}], "http://m")
+        mock_logger.info.assert_called_once_with(
+            "generate_collections_map: built map with %d entries", 2
+        )
+
+    def test_generate_databases_map_logs_entry_count(self):
+        with patch("app.extracts.process.logger") as mock_logger:
+            generate_databases_map([{"id": 1}], "http://m")
+        mock_logger.info.assert_called_once_with(
+            "generate_databases_map: built map with %d entries", 1
+        )
+
+    def test_generate_questions_query_map_logs_entry_count(self):
+        with patch("app.extracts.process.logger") as mock_logger:
+            generate_questions_query_map(
+                [
+                    {"question_id": 1, "query": "SELECT 1"},
+                    {"question_id": 2, "query": "SELECT 2"},
+                ]
+            )
+        mock_logger.info.assert_called_once_with(
+            "generate_questions_query_map: built map with %d entries", 2
+        )
+
+    def test_process_assets_logs_summary_counts(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+        dashboard_details,
+        filtered_questions,
+    ):
+        with patch("app.extracts.process.logger") as mock_logger:
+            process_assets(
+                collections_map=collections_map,
+                databases_map=databases_map,
+                questions_query_map=questions_query_map,
+                dashboard_details=dashboard_details,
+                filtered_questions=filtered_questions,
+                metabase_host="http://m",
+            )
+        mock_logger.info.assert_any_call("process_assets: enriched %d dashboards", 1)
+        mock_logger.info.assert_any_call(
+            "process_assets: enriched %d questions, %d questions-dashboards lineage records",
+            1,
+            1,
+        )
+
+    def test_process_assets_logs_skipped_dashboard(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+    ):
+        orphan = [{"id": 300, "name": "O", "collection_id": 9999, "dashcards": []}]
+        with patch("app.extracts.process.logger") as mock_logger:
+            process_assets(
+                collections_map=collections_map,
+                databases_map=databases_map,
+                questions_query_map=questions_query_map,
+                dashboard_details=orphan,
+                filtered_questions=[],
+                metabase_host="http://m",
+            )
+        mock_logger.debug.assert_called_once_with(
+            "process_assets: skipping dashboard id=%s (collection_id=%s not in collections_map)",
+            300,
+            9999,
+        )
+
+    def test_process_assets_logs_skipped_question(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+    ):
+        orphan = [
+            {
+                "id": 99,
+                "name": "Orphan Q",
+                "collection_id": 9999,
+                "database_id": 100,
+                "dataset_query": {"type": "native"},
+            }
+        ]
+        with patch("app.extracts.process.logger") as mock_logger:
+            process_assets(
+                collections_map=collections_map,
+                databases_map=databases_map,
+                questions_query_map=questions_query_map,
+                dashboard_details=[],
+                filtered_questions=orphan,
+                metabase_host="http://m",
+            )
+        mock_logger.debug.assert_called_once_with(
+            "process_assets: skipping question id=%s (collection_id=%s not in collections_map)",
+            99,
+            9999,
+        )
+
+    def test_process_assets_warns_on_missing_query_or_database(
+        self,
+        collections_map,
+        databases_map,
+        questions_query_map,
+    ):
+        no_db = [
+            {
+                "id": 10,
+                "name": "Top Customers",
+                "collection_id": 1,
+                "database_id": 999,  # unknown database
+                "dataset_query": {"type": "native"},
+            }
+        ]
+        with patch("app.extracts.process.logger") as mock_logger:
+            process_assets(
+                collections_map=collections_map,
+                databases_map=databases_map,
+                questions_query_map=questions_query_map,
+                dashboard_details=[],
+                filtered_questions=no_db,
+                metabase_host="http://m",
+            )
+        mock_logger.warning.assert_called_once_with(
+            "process_assets: missing query or database for question id=%s name=%s — skipping",
+            10,
+            "Top Customers",
+        )

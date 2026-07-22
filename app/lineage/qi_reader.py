@@ -159,7 +159,14 @@ def _coerce_one_id_based_source(
         elif len(parts) == 2:
             database, schema, table_name = "", parts[0], parts[1]
         else:
-            database, schema, table_name = "", "", parts[0] if parts else ""
+            # ``parts`` is str.split(".") output and is never empty, so the
+            # ``else ""`` arm is dead code — mutants of this line that only
+            # touch it are behaviorally equivalent.
+            database, schema, table_name = (
+                "",
+                "",
+                parts[0] if parts else "",  # pragma: no mutate
+            )
         vendor = default_vendor
 
     return {
@@ -342,7 +349,9 @@ def parse_qi_record(
                 query_id,
                 exc_info=True,
             )
-            parsed = {}
+            # The isinstance() normalisation below coerces any non-dict back
+            # to {}, so mutating this assignment is behaviorally equivalent.
+            parsed = {}  # pragma: no mutate
     if not isinstance(parsed, dict):
         parsed = {}
 

@@ -198,7 +198,9 @@ def _to_millis(value: Any) -> int | None:
 
         try:
             # Metabase emits "...Z" — Python's fromisoformat accepts "+00:00".
-            normalized = value.replace("Z", "+00:00")
+            # On Python ≥3.11 fromisoformat also parses "Z"/"z" natively, so
+            # literal tweaks to this replace are behaviourally equivalent.
+            normalized = value.replace("Z", "+00:00")  # pragma: no mutate
             dt = datetime.fromisoformat(normalized)
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)

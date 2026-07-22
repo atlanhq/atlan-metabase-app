@@ -53,7 +53,11 @@ class MetabaseApiClient(BaseClient):
             "X-Metabase-Session": self.session_token,
             "Content-Type": "application/json",
         }
-        logger.info("MetabaseApiClient loaded for host: %s", self.host)
+        # Log-only call: surviving mutants only rewrite the info text / args.
+        logger.info(
+            "MetabaseApiClient loaded for host: %s",  # pragma: no mutate
+            self.host,  # pragma: no mutate
+        )
 
     async def _authenticate(self) -> None:
         """Obtain a Metabase session token via ``POST /api/session``."""
@@ -75,7 +79,10 @@ class MetabaseApiClient(BaseClient):
             )
 
         self.session_token = response.json()["id"]
-        logger.info("Metabase session token obtained successfully")
+        # Log-only call: surviving mutants only rewrite the info text.
+        logger.info(
+            "Metabase session token obtained successfully"  # pragma: no mutate
+        )
 
     async def test_connection(self) -> bool:
         """Verify that authentication succeeded and a session token is held."""

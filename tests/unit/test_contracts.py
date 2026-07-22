@@ -12,10 +12,11 @@ tests can exercise the wire shape the validator is designed to handle.
 from __future__ import annotations
 
 from typing import Any
+from unittest import mock
 
 import pytest
 
-from app.contracts import FilterInput, MetabaseInput
+from app.contracts import FilterInput, MetabaseInput, _coerce_collection_filter
 
 
 class TestCollectionFilterCoercion:
@@ -59,3 +60,30 @@ class TestCollectionFilterCoercion:
         kwargs: dict[str, Any] = {"exclude_collections": "[object Object]"}
         model = FilterInput(**kwargs)
         assert model.exclude_collections == {}
+
+
+class TestCollectionFilterDiagnostics:
+    """The coercion warnings are the only trace of the upstream serializer
+    bug — pin the exact message + args so the diagnostic (and its pointer to
+    the contracts.py write-up) can't silently rot."""
+
+    def test_sentinel_coercion_warns_with_exact_diagnostic(self) -> None:
+        with mock.patch("app.contracts._logger") as logger:
+            assert _coerce_collection_filter("[object Object]") == {}
+        logger.warning.assert_called_once_with(
+            "Coerced stringified collection filter to empty dict "
+            "(upstream serializer emitted %r). This is a workaround "
+            "for a frontend/AE substitution bug — see contracts.py.",
+            "[object Object]",
+        )
+
+    def test_invalid_json_passes_through_and_warns_with_exact_diagnostic(
+        self,
+    ) -> None:
+        with mock.patch("app.contracts._logger") as logger:
+            assert _coerce_collection_filter("{not json") == "{not json"
+        logger.warning.assert_called_once_with(
+            "Collection filter %r is not valid JSON; passing through as-is",
+            "{not json",
+            exc_info=True,
+        )

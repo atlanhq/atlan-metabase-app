@@ -165,7 +165,9 @@ class MetabaseApp(App):
         Raises:
             ValueError: When both fields are absent or empty.
         """
-        raw_creds: dict[str, Any] = {}
+        # Initializer mutants are equivalent: every path below either raises
+        # or reassigns raw_creds before it is read.
+        raw_creds: dict[str, Any] = {}  # pragma: no mutate
         cred_ref = getattr(input, "credential_ref", None)
         if cred_ref is not None:
             raw_creds = await self.context.resolve_credential_raw(cred_ref)

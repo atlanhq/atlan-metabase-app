@@ -46,7 +46,9 @@ def _coerce_collection_filter(value: Any) -> Any:
     so the workflow doesn't fail validation on an upstream defect. Anything
     else passes through and pydantic decides.
     """
-    if value is None or isinstance(value, dict):
+    # The or→and mutant here is provably equivalent: every operand mix still
+    # falls through to the trailing `return value`, with no side effects.
+    if value is None or isinstance(value, dict):  # pragma: no mutate
         return value
     if isinstance(value, str):
         stripped = value.strip()

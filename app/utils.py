@@ -54,7 +54,9 @@ def serialize_complex_columns(record: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in record.items():
         if isinstance(value, (dict, list)):
-            result[key] = orjson.dumps(value).decode("utf-8")
+            # Codec-name mutants ("utf-8" → "UTF-8") are equivalent: Python
+            # codec lookup is case-insensitive.
+            result[key] = orjson.dumps(value).decode("utf-8")  # pragma: no mutate
         else:
             result[key] = value
     return result

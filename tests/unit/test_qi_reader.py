@@ -12,11 +12,20 @@ shared during the metabase-app debugging session.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any, cast
+from unittest.mock import patch
+
 from app.lineage.qi_reader import (
     _build_dbobj_index,
     _coerce_column_refs,
+    _coerce_one_id_based_source,
+    _coerce_one_inline_source,
     _coerce_table_ref,
+    _question_name,
+    _question_qn,
     _unquote_ident,
+    iter_qi_records,
     parse_qi_record,
 )
 
@@ -401,3 +410,380 @@ class TestCoerceColumnRefsIdBased:
         assert len(columns) == 1
         assert columns[0]["column_name"] == "ORDER_ID"
         assert columns[0]["table_name"] == "ORDERS"
+
+
+class TestUnquoteIdentBoundaries:
+    """Boundary and mismatched-quote contracts for _unquote_ident."""
+
+    def test_two_char_quoted_pair_is_stripped_to_empty(self):
+        # len == 2 is the boundary: a bare quote-pair IS a wrapped (empty)
+        # identifier and must be stripped, not returned verbatim.
+        assert _unquote_ident('""') == ""
+        assert _unquote_ident("``") == ""
+
+    def test_three_char_quoted_ident_is_stripped(self):
+        assert _unquote_ident('"a"') == "a"
+
+    def test_mismatched_double_quote_left_untouched(self):
+        # Only a *matched* pair is stripped — a leading or trailing quote
+        # alone is part of the identifier.
+        assert _unquote_ident('"abc') == '"abc'
+        assert _unquote_ident('abc"') == 'abc"'
+
+    def test_mismatched_backtick_left_untouched(self):
+        assert _unquote_ident("`abc") == "`abc"
+        assert _unquote_ident("abc`") == "abc`"
+
+    def test_mixed_quote_styles_left_untouched(self):
+        assert _unquote_ident('"abc`') == '"abc`'
+        assert _unquote_ident('`abc"') == '`abc"'
+
+
+class TestCoerceTableRefFieldFallbacks:
+    """Exact key-fallback and default contracts for _coerce_table_ref."""
+
+    def test_tablename_key_is_the_name_fallback(self):
+        ref = _coerce_table_ref({"tableName": "T1", "type": "table"})
+        assert ref is not None
+        assert ref["table_name"] == "T1"
+
+    def test_missing_type_is_treated_as_table_and_defaults_are_empty(self):
+        # No ``type``/``objectType`` at all → the ref is kept, and every
+        # unset optional field defaults to the empty string; the built-in
+        # default_vendor is "" (not any placeholder).
+        ref = _coerce_table_ref({"name": "T"})
+        assert ref == {
+            "vendor_name": "",
+            "database": "",
+            "schema": "",
+            "table_name": "T",
+        }
+
+    def test_objecttype_key_is_the_type_fallback_for_skipping(self):
+        # ``objectType`` (no ``type``) must still classify the entry —
+        # a subquery is skipped, not coerced.
+        assert _coerce_table_ref({"name": "x", "objectType": "subquery"}) is None
+
+    def test_view_type_is_accepted(self):
+        ref = _coerce_table_ref({"name": "V", "type": "VIEW"})
+        assert ref is not None
+        assert ref["table_name"] == "V"
+
+    def test_vendor_name_snake_key_wins_over_default(self):
+        ref = _coerce_table_ref(
+            {"name": "T", "type": "table", "vendor_name": "postgres"},
+            default_vendor="snowflake",
+        )
+        assert ref is not None
+        assert ref["vendor_name"] == "postgres"
+
+    def test_vendorname_camel_key_wins_over_default(self):
+        ref = _coerce_table_ref(
+            {"name": "T", "type": "table", "vendorName": "mysql"},
+            default_vendor="snowflake",
+        )
+        assert ref is not None
+        assert ref["vendor_name"] == "mysql"
+
+
+class TestBuildDbobjIndex:
+    def test_skips_non_dicts_and_entries_without_id(self):
+        entry = {"id": 7, "name": "y"}
+        # Non-dict entries and dicts without an ``id`` are excluded;
+        # nothing is indexed under a None key.
+        dbobjs = cast("list[dict[str, Any]]", ["junk", {"name": "x"}, entry])
+        assert _build_dbobj_index(dbobjs) == {7: entry}
+
+    def test_empty_input_yields_empty_index(self):
+        assert _build_dbobj_index([]) == {}
+
+
+class TestCoerceOneIdBasedSource:
+    _INDEX = _build_dbobj_index(
+        [
+            {"id": 1, "db": "D", "schema": "S", "name": "T"},
+            {"id": 2, "tableName": "TBL"},
+            {"id": 3},
+            {"id": 4, "database": "D2", "name": "T4", "vendor_name": "postgres"},
+            {"id": 5, "name": "T5", "vendorName": "mysql"},
+        ]
+    )
+
+    def test_returns_none_without_column_or_name(self):
+        assert _coerce_one_id_based_source({"parentId": 1}, self._INDEX, "") is None
+
+    def test_name_key_is_the_column_fallback(self):
+        ref = _coerce_one_id_based_source(
+            {"name": "COL", "parentId": 1}, self._INDEX, ""
+        )
+        assert ref is not None
+        assert ref["column_name"] == "COL"
+
+    def test_parent_db_key_resolves_all_fields(self):
+        ref = _coerce_one_id_based_source(
+            {"column": "C", "parentId": 1}, self._INDEX, "dv"
+        )
+        assert ref == {
+            "vendor_name": "dv",  # parent has no vendor → default_vendor
+            "database": "D",  # parent ``db`` key
+            "schema": "S",
+            "table_name": "T",
+            "column_name": "C",
+        }
+
+    def test_parent_tablename_key_is_the_table_fallback(self):
+        ref = _coerce_one_id_based_source(
+            {"column": "C", "parentId": 2}, self._INDEX, ""
+        )
+        assert ref is not None
+        assert ref["table_name"] == "TBL"
+
+    def test_parent_missing_fields_default_to_empty_strings(self):
+        ref = _coerce_one_id_based_source(
+            {"column": "C", "parentId": 3}, self._INDEX, ""
+        )
+        assert ref == {
+            "vendor_name": "",
+            "database": "",
+            "schema": "",
+            "table_name": "",
+            "column_name": "C",
+        }
+
+    def test_parent_vendor_name_snake_key_wins_over_default(self):
+        ref = _coerce_one_id_based_source(
+            {"column": "C", "parentId": 4}, self._INDEX, "dv"
+        )
+        assert ref is not None
+        assert ref["vendor_name"] == "postgres"
+        assert ref["database"] == "D2"  # parent ``database`` key fallback
+
+    def test_parent_vendorname_camel_key_wins_over_default(self):
+        ref = _coerce_one_id_based_source(
+            {"column": "C", "parentId": 5}, self._INDEX, "dv"
+        )
+        assert ref is not None
+        assert ref["vendor_name"] == "mysql"
+
+    # --- parentName fallback branch (parentId unresolvable) ---
+
+    def test_fallback_four_part_parentname_keeps_dotted_table(self):
+        ref = _coerce_one_id_based_source(
+            {"column": "C", "parentId": 99, "parentName": "A.B.C.D"}, self._INDEX, ""
+        )
+        assert ref is not None
+        assert ref["database"] == "A"
+        assert ref["schema"] == "B"
+        assert ref["table_name"] == "C.D"  # extra dots stay in the table name
+
+    def test_fallback_two_part_parentname_is_schema_table(self):
+        ref = _coerce_one_id_based_source(
+            {"column": "C", "parentId": 99, "parentName": "S.T"}, self._INDEX, ""
+        )
+        assert ref is not None
+        assert ref["database"] == ""
+        assert ref["schema"] == "S"
+        assert ref["table_name"] == "T"
+
+    def test_fallback_one_part_parentname_is_table_only(self):
+        ref = _coerce_one_id_based_source(
+            {"column": "C", "parentId": 99, "parentName": "TBL"}, self._INDEX, ""
+        )
+        assert ref is not None
+        assert ref["database"] == ""
+        assert ref["schema"] == ""
+        assert ref["table_name"] == "TBL"
+
+    def test_fallback_missing_parentname_yields_empty_fields_and_default_vendor(self):
+        ref = _coerce_one_id_based_source({"column": "C"}, {}, "dv")
+        assert ref == {
+            "vendor_name": "dv",
+            "database": "",
+            "schema": "",
+            "table_name": "",
+            "column_name": "C",
+        }
+
+
+class TestCoerceOneInlineSource:
+    def test_returns_none_without_column_or_name(self):
+        assert _coerce_one_inline_source({"table": "T"}, "") is None
+
+    def test_name_key_is_the_column_fallback(self):
+        ref = _coerce_one_inline_source({"name": "C", "table": "T"}, "")
+        assert ref is not None
+        assert ref["column_name"] == "C"
+
+    def test_db_key_resolves_database(self):
+        ref = _coerce_one_inline_source({"column": "C", "db": "D"}, "")
+        assert ref is not None
+        assert ref["database"] == "D"
+
+    def test_database_key_is_the_db_fallback(self):
+        ref = _coerce_one_inline_source({"column": "C", "database": "DBX"}, "")
+        assert ref is not None
+        assert ref["database"] == "DBX"
+
+    def test_tablename_key_is_the_table_fallback(self):
+        ref = _coerce_one_inline_source({"column": "C", "tableName": "TBL"}, "")
+        assert ref is not None
+        assert ref["table_name"] == "TBL"
+
+    def test_missing_fields_default_to_empty_and_vendor_to_default(self):
+        ref = _coerce_one_inline_source({"column": "C"}, "dv")
+        assert ref == {
+            "vendor_name": "dv",
+            "database": "",
+            "schema": "",
+            "table_name": "",
+            "column_name": "C",
+        }
+
+    def test_vendor_name_snake_key_wins_over_default(self):
+        ref = _coerce_one_inline_source(
+            {"column": "C", "vendor_name": "postgres"}, "dv"
+        )
+        assert ref is not None
+        assert ref["vendor_name"] == "postgres"
+
+    def test_vendorname_camel_key_wins_over_default(self):
+        ref = _coerce_one_inline_source({"column": "C", "vendorName": "mysql"}, "dv")
+        assert ref is not None
+        assert ref["vendor_name"] == "mysql"
+
+
+class TestCoerceColumnRefsDefaultsAndKeys:
+    def test_default_vendor_defaults_to_empty_string(self):
+        refs = _coerce_column_refs([{"source": {"column": "C", "table": "T"}}])
+        assert refs[0]["vendor_name"] == ""
+
+    def test_default_vendor_reaches_inline_sources(self):
+        refs = _coerce_column_refs(
+            [{"source": {"column": "C", "table": "T"}}], default_vendor="dv"
+        )
+        assert refs[0]["vendor_name"] == "dv"
+
+    def test_default_vendor_reaches_id_based_sources(self):
+        refs = _coerce_column_refs(
+            [{"sources": [{"column": "C", "parentId": 9, "parentName": "S.T"}]}],
+            default_vendor="dv",
+        )
+        assert len(refs) == 1
+        assert refs[0]["vendor_name"] == "dv"
+
+    def test_legacy_from_key_is_supported(self):
+        refs = _coerce_column_refs([{"from": {"column": "C", "table": "T"}}])
+        assert len(refs) == 1
+        assert refs[0]["column_name"] == "C"
+        assert refs[0]["table_name"] == "T"
+
+
+class TestIterQiRecords:
+    def test_missing_path_yields_nothing(self, tmp_path):
+        assert list(iter_qi_records(tmp_path / "nope")) == []
+
+    def test_directory_entries_matching_glob_are_skipped_not_fatal(self, tmp_path):
+        # rglob("*.json") can match a *directory* named like a json file
+        # (sorts before the real file) — it must be skipped, and the
+        # remaining files still read.
+        (tmp_path / "0_dir.json").mkdir()
+        (tmp_path / "1_rec.json").write_text('{"a": 1}\n')
+        assert list(iter_qi_records(tmp_path)) == [{"a": 1}]
+
+    def test_blank_lines_are_skipped_not_fatal(self, tmp_path):
+        f = tmp_path / "rec.json"
+        f.write_text('\n   \n{"a": 1}\n')
+        assert list(iter_qi_records(f)) == [{"a": 1}]
+
+    def test_unparseable_line_warns_and_continues(self, tmp_path):
+        f = tmp_path / "rec.json"
+        f.write_text('{oops\n{"a": 1}\n')
+        with patch("app.lineage.qi_reader.logger") as mock_logger:
+            records = list(iter_qi_records(f))
+        # The bad line is skipped, the rest of the file is still read.
+        assert records == [{"a": 1}]
+        # Exact observability contract: which file, with the traceback.
+        mock_logger.warning.assert_called_once_with(
+            "Skipping unparseable QI line in %s", Path(f), exc_info=True
+        )
+
+
+class TestQuestionQnAndName:
+    def test_question_qn_empty_record_returns_empty_string(self):
+        assert _question_qn({}) == ""
+
+    def test_question_name_current_shape(self):
+        assert _question_name({"extra": {"attributes": {"name": "N"}}}) == "N"
+
+    def test_question_name_legacy_shape(self):
+        assert _question_name({"QUESTION_NAME": "Legacy"}) == "Legacy"
+
+    def test_question_name_empty_record_returns_empty_string(self):
+        assert _question_name({}) == ""
+
+
+class TestParseQiRecordEdgeCases:
+    def test_empty_record_contract(self):
+        assert parse_qi_record({}) == ("", "", [], [])
+
+    def test_default_vendor_defaults_to_empty_string(self):
+        record = {"gudusoft": {"dbobjs": [{"name": "T", "type": "table"}]}}
+        _, _, tables, _ = parse_qi_record(record)
+        assert tables == [
+            {"vendor_name": "", "database": "", "schema": "", "table_name": "T"}
+        ]
+
+    def test_json_string_parsed_payload_is_decoded(self):
+        # Legacy PARSED_DATA could arrive as a JSON *string* — it must be
+        # decoded and used, not dropped.
+        record = {"gudusoft": '{"dbobjs": [{"name": "T", "type": "table"}]}'}
+        _, _, tables, _ = parse_qi_record(record)
+        assert len(tables) == 1
+        assert tables[0]["table_name"] == "T"
+
+    def test_unparseable_string_payload_warns_and_treats_as_empty(self):
+        record = {
+            "extra": {"attributes": {"qualifiedName": "qn1"}},
+            "gudusoft": "{not json",
+        }
+        with patch("app.lineage.qi_reader.logger") as mock_logger:
+            result = parse_qi_record(record)
+        assert result == ("qn1", "", [], [])
+        # Exact observability contract: which record, with the traceback.
+        mock_logger.warning.assert_called_once_with(
+            "QI record %r has unparseable parsed-SQL payload; treating as empty",
+            "qn1",
+            exc_info=True,
+        )
+
+    def test_non_dict_non_string_payload_treated_as_empty(self):
+        assert parse_qi_record({"gudusoft": 12345}) == ("", "", [], [])
+        assert parse_qi_record({"gudusoft": [1, 2]}) == ("", "", [], [])
+
+    def test_non_dict_dbobjs_entries_skipped_without_aborting(self):
+        record = {"gudusoft": {"dbobjs": ["junk", {"name": "T", "type": "table"}]}}
+        _, _, tables, _ = parse_qi_record(record)
+        assert [t["table_name"] for t in tables] == ["T"]
+
+    def test_effective_vendor_flows_into_column_refs(self):
+        # dbvendor must be applied to *column* refs too (parent dbobj has
+        # no vendor of its own → falls back to the record-level vendor).
+        record = {
+            "gudusoft": {
+                "dbvendor": "dbsnowflake",
+                "dbobjs": [
+                    {
+                        "id": 1,
+                        "name": "T",
+                        "type": "table",
+                        "database": "D",
+                        "schema": "S",
+                    }
+                ],
+                "relationships": [{"sources": [{"column": "C", "parentId": 1}]}],
+            },
+        }
+        _, _, tables, columns = parse_qi_record(record)
+        assert tables[0]["vendor_name"] == "snowflake"
+        assert len(columns) == 1
+        assert columns[0]["vendor_name"] == "snowflake"

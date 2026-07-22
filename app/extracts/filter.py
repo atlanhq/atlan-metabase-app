@@ -89,7 +89,9 @@ def filter_collections(
 
     result: List[Dict] = []
     for collection in collections:
-        cid = str(collection.get("id", "root") or "root")
+        # The `or "root"` fallback normalises any falsy `.get` result, so a
+        # None/omitted `.get` default is behaviourally equivalent (mutation-equivalent).
+        cid = str(collection.get("id", "root") or "root")  # pragma: no mutate
 
         # Exclude takes precedence (matches legacy behaviour).
         if cid in exclude_keys:
@@ -141,7 +143,9 @@ def filter_dashboards(
 
     result: List[Dict] = []
     for dashboard in dashboards:
-        cid = str(dashboard.get("collection_id", "root") or "root")
+        # The `or "root"` fallback normalises any falsy `.get` result, so a
+        # None/omitted `.get` default is behaviourally equivalent (mutation-equivalent).
+        cid = str(dashboard.get("collection_id", "root") or "root")  # pragma: no mutate
         if cid in accepted_collection_ids:
             result.append(dashboard)
 
@@ -175,7 +179,9 @@ def filter_questions(
 
     result: List[Dict] = []
     for question in questions:
-        cid = str(question.get("collection_id", "root") or "root")
+        # The `or "root"` fallback normalises any falsy `.get` result, so a
+        # None/omitted `.get` default is behaviourally equivalent (mutation-equivalent).
+        cid = str(question.get("collection_id", "root") or "root")  # pragma: no mutate
         if cid in accepted_collection_ids:
             result.append(question)
 
@@ -197,4 +203,9 @@ def build_accepted_collection_ids(filtered_collections: List[Dict]) -> Set[str]:
     Returns:
         Set of string collection ids (e.g. ``{"1", "4", "root"}``).
     """
-    return {str(c.get("id", "root") or "root") for c in filtered_collections}
+    # The `or "root"` fallback normalises any falsy `.get` result, so a
+    # None/omitted `.get` default is behaviourally equivalent (mutation-equivalent).
+    return {
+        str(c.get("id", "root") or "root")  # pragma: no mutate
+        for c in filtered_collections
+    }

@@ -23,6 +23,9 @@ dev = [
     # with --no-dev).
     "poethepoet>=0.38.0",
 ]
+mutation = [
+    "mutmut>=3.6.0,<4.0.0",
+]
 test = [
     "pytest>=8.3.3",
     "coverage>=7.6.1",
@@ -162,3 +165,22 @@ fail_under = 85
 [tool.uv.sources]
 # atlan-application-sdk = { path = "../application-sdk", editable = true }
 # atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", rev = "326962d9363d5bc267609282c2862b857149ddac" }
+
+# Mutation testing baseline (advisory measurement — see application-sdk PR #2642).
+[tool.mutmut]
+source_paths = ["app"]
+# Generated from contract/app.pkl — regenerated on every contract change,
+# mirrors the coverage omit; mutating it only produces noise.
+do_not_mutate = ["app/generated/*"]
+# Mutating __file__-based path derivation inside default arguments evaluates
+# at import time and crashes collection; such mutants are noise anyway.
+do_not_mutate_patterns = ['__file__']
+# Only the hermetic unit tier; integration/e2e need containers/tenants.
+pytest_add_cli_args_test_selection = ["tests/unit"]
+also_copy = [
+    "contract/",
+    "main.py",
+    "app.yaml",
+    "atlan.yaml",
+    "contract_schema.lock.json",
+]

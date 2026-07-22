@@ -34,6 +34,16 @@ def test_default_output_path_no_workflow_id(tmp_path, monkeypatch):
     assert Path(result).exists()
 
 
+def test_default_output_path_is_idempotent(tmp_path, monkeypatch):
+    """Calling twice must not raise: mkdir uses exist_ok=True so an existing
+    per-workflow directory (e.g. on activity retry) is reused, not fatal."""
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    first = default_output_path("wf-retry")
+    second = default_output_path("wf-retry")
+    assert first == second
+    assert Path(first).is_dir()
+
+
 def test_raw_file_path_layout():
     assert raw_file("/tmp/out", "collections") == (
         "/tmp/out/raw/collections/result-0.json"

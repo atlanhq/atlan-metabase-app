@@ -1,13 +1,17 @@
 """Unit tests for app.extracts.questions."""
 
 import os
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
 
 from app.client import MetabaseApiClient
-from app.extracts.questions import fetch_question_queries, fetch_questions_summaries
+from app.extracts.questions import (
+    fetch_question_queries,
+    fetch_question_queries_single,
+    fetch_questions_summaries,
+)
 
 
 def _read_residual_failures(output_path):
@@ -58,6 +62,33 @@ class TestFetchQuestionsSummaries:
 
         called_url = mock_client.execute_http_get_request.call_args[1]["url"]
         assert "/api/card" in called_url
+
+    async def test_request_pins_exact_url_and_timeout(self, mock_client, tmp_path):
+        """The GET call uses the exact host:port/api/card URL and a 60s timeout."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = []
+        mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
+
+        await fetch_questions_summaries(mock_client, str(tmp_path))
+
+        assert mock_client.execute_http_get_request.call_args.args == ()
+        assert mock_client.execute_http_get_request.call_args.kwargs == {
+            "url": "https://myinstance.metabaseapp.com:443/api/card",
+            "timeout": 60,
+        }
+
+    async def test_success_logs_summary_count(self, mock_client, tmp_path):
+        """The success path logs the exact record count message."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = [{"id": 20}, {"id": 21}]
+        mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
+
+        with patch("app.extracts.questions.logger") as mock_logger:
+            await fetch_questions_summaries(mock_client, str(tmp_path))
+
+        mock_logger.info.assert_called_once_with("Fetched %d question summaries", 2)
 
     async def test_success_preserves_question_fields(self, mock_client, tmp_path):
         mock_response = MagicMock()
@@ -118,6 +149,43 @@ class TestFetchQuestionsSummaries:
         assert result == []
         failures = _read_residual_failures(str(tmp_path))
         assert len(failures) == 1
+
+    async def test_failure_logs_warning_with_status_code(self, mock_client, tmp_path):
+        """A non-success response logs the exact warning with the HTTP status."""
+        mock_response = MagicMock()
+        mock_response.is_success = False
+        mock_response.status_code = 500
+        mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
+
+        with patch("app.extracts.questions.logger") as mock_logger:
+            await fetch_questions_summaries(mock_client, str(tmp_path))
+
+        mock_logger.warning.assert_called_once_with(
+            "Failed to fetch questions: %s", 500
+        )
+
+    async def test_none_response_logs_no_response_status(self, mock_client, tmp_path):
+        """A missing response logs the literal 'No response' placeholder."""
+        mock_client.execute_http_get_request = AsyncMock(return_value=None)
+
+        with patch("app.extracts.questions.logger") as mock_logger:
+            await fetch_questions_summaries(mock_client, str(tmp_path))
+
+        mock_logger.warning.assert_called_once_with(
+            "Failed to fetch questions: %s", "No response"
+        )
+
+    async def test_failure_residual_records_card_endpoint(self, mock_client, tmp_path):
+        """The residual failure record pins the /api/card endpoint field."""
+        mock_response = MagicMock()
+        mock_response.is_success = False
+        mock_response.status_code = 500
+        mock_client.execute_http_get_request = AsyncMock(return_value=mock_response)
+
+        await fetch_questions_summaries(mock_client, str(tmp_path))
+
+        failures = _read_residual_failures(str(tmp_path))
+        assert failures[0]["endpoint"] == "/api/card"
 
 
 class TestFetchQuestionQueries:
@@ -307,3 +375,121 @@ class TestFetchQuestionQueries:
         failures = _read_residual_failures(str(tmp_path))
         assert len(failures) == 1
         assert failures[0]["record_id"] == 51
+
+    # -------------------------------------------------------------------------
+    # Logging contract
+    # -------------------------------------------------------------------------
+
+    async def test_batch_logs_record_count(self, mock_client, tmp_path):
+        """The batch fetcher logs the exact fetched-record count message."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = {"query": "SELECT 1", "params": None}
+        mock_client.execute_http_post_request = AsyncMock(return_value=mock_response)
+
+        questions = [{"id": 5, "dataset_query": {"type": "query"}}]
+        with patch("app.extracts.questions.logger") as mock_logger:
+            await fetch_question_queries(mock_client, questions, str(tmp_path))
+
+        mock_logger.info.assert_called_once_with("Fetched %d question query records", 1)
+
+
+class TestFetchQuestionQueriesSingle:
+    """Tests for fetch_question_queries_single() — single-question fetcher."""
+
+    @pytest.fixture
+    def mock_client(self):
+        client = MagicMock(spec=MetabaseApiClient)
+        client.host = "https://myinstance.metabaseapp.com"
+        client.port = 443
+        return client
+
+    # -------------------------------------------------------------------------
+    # Request contract: exact URL, POST body, and timeout
+    # -------------------------------------------------------------------------
+
+    async def test_posts_exact_url_body_and_timeout(self, mock_client, tmp_path):
+        """The POST call pins the dataset/native URL, merged body, and timeout."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = {"query": "SELECT 1", "params": None}
+        mock_client.execute_http_post_request = AsyncMock(return_value=mock_response)
+
+        await fetch_question_queries_single(
+            mock_client, 20, {"type": "query", "database": 3}, str(tmp_path)
+        )
+
+        assert mock_client.execute_http_post_request.call_args.args == ()
+        assert mock_client.execute_http_post_request.call_args.kwargs == {
+            "url": "https://myinstance.metabaseapp.com:443/api/dataset/native",
+            "json_data": {"question_id": 20, "type": "query", "database": 3},
+            "timeout": 60,
+        }
+
+    # -------------------------------------------------------------------------
+    # Result contract: exact record shape and values
+    # -------------------------------------------------------------------------
+
+    async def test_returns_exact_record_with_params(self, mock_client, tmp_path):
+        """The returned record propagates the query and the params value."""
+        mock_response = MagicMock()
+        mock_response.is_success = True
+        mock_response.json.return_value = {
+            "query": "SELECT count(*) FROM users",
+            "params": {"limit": 100},
+        }
+        mock_client.execute_http_post_request = AsyncMock(return_value=mock_response)
+
+        result = await fetch_question_queries_single(
+            mock_client, 5, {"type": "native"}, str(tmp_path)
+        )
+
+        assert result == {
+            "question_id": 5,
+            "query": "SELECT count(*) FROM users",
+            "params": {"limit": 100},
+        }
+
+    # -------------------------------------------------------------------------
+    # Failure paths: residual endpoint fields and warning log
+    # -------------------------------------------------------------------------
+
+    async def test_non_success_records_dataset_native_endpoint(
+        self, mock_client, tmp_path
+    ):
+        """A non-success response records the exact endpoint in the residual."""
+        mock_response = MagicMock()
+        mock_response.is_success = False
+        mock_response.status_code = 403
+        mock_client.execute_http_post_request = AsyncMock(return_value=mock_response)
+
+        result = await fetch_question_queries_single(
+            mock_client, 41, {"type": "query"}, str(tmp_path)
+        )
+
+        assert result is None
+        failures = _read_residual_failures(str(tmp_path))
+        assert failures[0]["category"] == "question_query_fetch_failed"
+        assert failures[0]["endpoint"] == "/api/dataset/native"
+        assert failures[0]["record_id"] == 41
+        assert failures[0]["http_status"] == 403
+
+    async def test_error_logs_warning_and_records_endpoint(self, mock_client, tmp_path):
+        """An exception logs the exact skip warning and records the endpoint."""
+        mock_client.execute_http_post_request = AsyncMock(side_effect=Exception("boom"))
+
+        with patch("app.extracts.questions.logger") as mock_logger:
+            result = await fetch_question_queries_single(
+                mock_client, 40, {"type": "query"}, str(tmp_path)
+            )
+
+        assert result is None
+        mock_logger.warning.assert_called_once_with(
+            "fetch_question_query: skipping question_id=%s after error",
+            40,
+            exc_info=True,
+        )
+        failures = _read_residual_failures(str(tmp_path))
+        assert failures[0]["category"] == "question_query_fetch_errored"
+        assert failures[0]["endpoint"] == "/api/dataset/native"
+        assert failures[0]["record_id"] == 40

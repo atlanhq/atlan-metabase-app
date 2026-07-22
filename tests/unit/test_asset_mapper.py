@@ -90,6 +90,23 @@ class TestMapCollection:
         assert attrs["lastSyncRun"] == "run-1"
         assert attrs["lastSyncRunAt"] == 1700000000000
 
+    def test_optional_fields_passthrough(self):
+        rec = CollectionRecord.from_dict(
+            {
+                "id": 7,
+                "name": "Marketing",
+                "description": "All marketing dashboards",
+                "slug": "marketing",
+                "color": "#509EE3",
+                "namespace": "snippets",
+            }
+        )
+        attrs = serialize_entity(map_collection(rec, **CTX))["attributes"]
+        assert attrs["description"] == "All marketing dashboards"
+        assert attrs["metabaseSlug"] == "marketing"
+        assert attrs["metabaseColor"] == "#509EE3"
+        assert attrs["metabaseNamespace"] == "snippets"
+
 
 # ---------------------------------------------------------------------------
 # Dashboard
@@ -132,6 +149,44 @@ class TestMapDashboard:
         out = serialize_entity(map_dashboard(rec, **CTX))
         # No collection_id → no relationship ref emitted.
         assert "metabaseCollection" not in out.get("relationshipAttributes", {})
+
+    def test_connection_qualified_name_stamped(self):
+        rec = DashboardRecord.from_dict({"id": 100, "name": "Sales"})
+        attrs = serialize_entity(map_dashboard(rec, **CTX))["attributes"]
+        assert attrs["connectionQualifiedName"] == CONN_QN
+
+    def test_optional_fields_passthrough(self):
+        rec = DashboardRecord.from_dict(
+            {
+                "id": 100,
+                "name": "Sales",
+                "description": "Sales overview",
+                "sourceURL": "http://m/dashboard/100",
+                "certificate_status": "VERIFIED",
+                "certificate_status_message": "Looks good",
+                "created_at": 1700000000001,
+                "updated_at": 1700000000002,
+                "last_edit_info_user": "alice",
+            }
+        )
+        attrs = serialize_entity(map_dashboard(rec, **CTX))["attributes"]
+        assert attrs["description"] == "Sales overview"
+        assert attrs["sourceURL"] == "http://m/dashboard/100"
+        assert attrs["certificateStatus"] == "VERIFIED"
+        assert attrs["certificateStatusMessage"] == "Looks good"
+        assert attrs["sourceCreatedAt"] == 1700000000001
+        assert attrs["sourceUpdatedAt"] == 1700000000002
+        assert attrs["sourceUpdatedBy"] == "alice"
+
+    def test_sync_metadata_stamped(self):
+        rec = DashboardRecord.from_dict({"id": 100, "name": "Sales"})
+        attrs = serialize_entity(map_dashboard(rec, **CTX))["attributes"]
+        assert attrs["connectorName"] == "metabase"
+        assert attrs["connectionName"] == "local-test"
+        assert attrs["tenantId"] == "default"
+        assert attrs["lastSyncWorkflowName"] == "wf-1"
+        assert attrs["lastSyncRun"] == "run-1"
+        assert attrs["lastSyncRunAt"] == 1700000000000
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +285,67 @@ class TestMapQuestion:
         rel = out.get("relationshipAttributes", {})
         assert "metabaseDashboards" not in rel
 
+    def test_connection_qualified_name_stamped(self):
+        rec = QuestionRecord.from_dict({"id": 200, "name": "Top Customers"})
+        asset, extras = map_question(rec, **CTX)
+        attrs = serialize_entity(asset, extras)["attributes"]
+        assert attrs["connectionQualifiedName"] == CONN_QN
+
+    def test_optional_fields_passthrough(self):
+        rec = QuestionRecord.from_dict(
+            {
+                "id": 200,
+                "name": "Top Customers",
+                "description": "Best customers",
+                "sourceURL": "http://m/question/200",
+                "certificate_status": "VERIFIED",
+                "certificate_status_message": "Reviewed",
+                "created_at": 1700000000001,
+                "updated_at": 1700000000002,
+                "creator_id": 42,
+                "last_edit_info_user": "bob",
+            }
+        )
+        asset, extras = map_question(rec, **CTX)
+        attrs = serialize_entity(asset, extras)["attributes"]
+        assert attrs["description"] == "Best customers"
+        assert attrs["sourceURL"] == "http://m/question/200"
+        assert attrs["certificateStatus"] == "VERIFIED"
+        assert attrs["certificateStatusMessage"] == "Reviewed"
+        assert attrs["sourceCreatedAt"] == 1700000000001
+        assert attrs["sourceUpdatedAt"] == 1700000000002
+        assert attrs["sourceCreatedBy"] == "42"
+        assert attrs["sourceUpdatedBy"] == "bob"
+
+    def test_collection_relationship_ref(self):
+        rec = QuestionRecord.from_dict(
+            {
+                "id": 200,
+                "name": "Top Customers",
+                "collection": {"id": 7, "name": "Marketing"},
+            }
+        )
+        asset, extras = map_question(rec, **CTX)
+        out = serialize_entity(asset, extras)
+        attrs = out["attributes"]
+        assert attrs["metabaseCollectionName"] == "Marketing"
+        assert attrs["metabaseCollectionQualifiedName"] == f"{CONN_QN}/collections/7"
+        # Relation ref carries typeName + uniqueAttributes for Atlas resolution.
+        rel = out["relationshipAttributes"]["metabaseCollection"]
+        assert rel["typeName"] == "MetabaseCollection"
+        assert rel["uniqueAttributes"]["qualifiedName"] == f"{CONN_QN}/collections/7"
+
+    def test_sync_metadata_stamped(self):
+        rec = QuestionRecord.from_dict({"id": 200, "name": "Top Customers"})
+        asset, extras = map_question(rec, **CTX)
+        attrs = serialize_entity(asset, extras)["attributes"]
+        assert attrs["connectorName"] == "metabase"
+        assert attrs["connectionName"] == "local-test"
+        assert attrs["tenantId"] == "default"
+        assert attrs["lastSyncWorkflowName"] == "wf-1"
+        assert attrs["lastSyncRun"] == "run-1"
+        assert attrs["lastSyncRunAt"] == 1700000000000
+
 
 # ---------------------------------------------------------------------------
 # BIProcess
@@ -271,6 +387,21 @@ class TestMapBIProcess:
             f"{CONN_QN}/dashboards/102",
         }
         assert all(o["typeName"] == "MetabaseDashboard" for o in outputs)
+
+    def test_connection_qualified_name_stamped(self):
+        rec = BIProcessLineageRecord(name="Q", question_id=200, dashboard_ids=[100])
+        attrs = serialize_entity(map_bi_process(rec, **CTX))["attributes"]
+        assert attrs["connectionQualifiedName"] == CONN_QN
+
+    def test_sync_metadata_stamped(self):
+        rec = BIProcessLineageRecord(name="Q", question_id=200, dashboard_ids=[100])
+        attrs = serialize_entity(map_bi_process(rec, **CTX))["attributes"]
+        assert attrs["connectorName"] == "metabase"
+        assert attrs["connectionName"] == "local-test"
+        assert attrs["tenantId"] == "default"
+        assert attrs["lastSyncWorkflowName"] == "wf-1"
+        assert attrs["lastSyncRun"] == "run-1"
+        assert attrs["lastSyncRunAt"] == 1700000000000
 
     def test_from_dict_recovers_dashboard_ids_from_atlas_refs(self):
         """process_assets emits Atlas-shaped refs; the record factory must

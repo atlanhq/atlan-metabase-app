@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors import InvalidInputError
@@ -13,6 +15,7 @@ from app.credentials import (
     build_credential_ref,
     parse_metabase_credentials,
 )
+from app.errors import UnsupportedCredentialsPayloadError
 
 
 class TestBuildCredentialRef:
@@ -66,6 +69,24 @@ class TestBuildCredentialRef:
         out_ref, inline = build_credential_ref(MetabaseInput())
         assert out_ref is None
         assert inline == {}
+
+    def test_credentials_list_skips_items_without_key(self):
+        """List items must be dicts AND contain 'key' — others are skipped."""
+        inp = MetabaseInput(
+            credentials=[
+                {"value": "orphan"},  # dict without "key" — must be skipped
+                {"key": "host", "value": "h"},
+            ]
+        )
+        out_ref, inline = build_credential_ref(inp)
+        assert out_ref is None
+        assert inline == {"host": "h"}
+
+    def test_credentials_list_item_missing_value_defaults_to_empty_string(self):
+        inp = MetabaseInput(credentials=[{"key": "password"}])
+        out_ref, inline = build_credential_ref(inp)
+        assert out_ref is None
+        assert inline == {"password": ""}
 
 
 class TestParseMetabaseCredentials:
@@ -153,3 +174,30 @@ class TestParseMetabaseCredentials:
     def test_unsupported_payload_type_raises(self):
         with pytest.raises(InvalidInputError, match="Unsupported credentials payload"):
             parse_metabase_credentials(42)  # type: ignore[arg-type]
+
+    def test_unsupported_payload_error_carries_field_and_type_name(self):
+        """The error pins field='credentials' and names the offending type."""
+        with pytest.raises(UnsupportedCredentialsPayloadError) as exc_info:
+            parse_metabase_credentials(42)  # type: ignore[arg-type]
+        assert exc_info.value.message == "Unsupported credentials payload type: int"
+        assert exc_info.value.field == "credentials"
+
+    def test_missing_port_defaults_to_exactly_443(self):
+        cred = parse_metabase_credentials({"host": "h"})
+        assert cred.port == 443
+
+    def test_empty_string_port_defaults_without_warning(self):
+        """'' is a recognised empty sentinel — defaults to 443 silently,
+        without routing through the invalid-integer warning path."""
+        with patch("app.credentials.logger") as mock_logger:
+            cred = parse_metabase_credentials({"host": "h", "port": ""})
+        assert cred.port == 443
+        mock_logger.warning.assert_not_called()
+
+    def test_missing_fields_default_to_empty_strings(self):
+        """Absent host/username/password come back as '' exactly."""
+        cred = parse_metabase_credentials({"port": 3000})
+        assert cred.host == ""
+        assert cred.username == ""
+        assert cred.password == ""
+        assert cred.port == 3000

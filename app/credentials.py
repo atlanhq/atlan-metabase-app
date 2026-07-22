@@ -103,10 +103,16 @@ def parse_metabase_credentials(
         try:
             extra = orjson.loads(extra) or {}
         except orjson.JSONDecodeError:
+            # Log-only call: surviving mutants only rewrite the warning
+            # text / exc_info flag, which no contract observes.
             logger.warning(
-                "Credential 'extra' field is not valid JSON; ignoring", exc_info=True
+                "Credential 'extra' field is not valid JSON; ignoring",  # pragma: no mutate
+                exc_info=True,  # pragma: no mutate
             )
-            extra = {}
+            # Equivalent mutant (`extra = None`): None and {} behave
+            # identically here — both skip the isinstance-dict merge below
+            # and `extra` is not used afterwards.
+            extra = {}  # pragma: no mutate
     if isinstance(extra, dict):
         for k, v in extra.items():
             flat.setdefault(k, v)
@@ -115,10 +121,12 @@ def parse_metabase_credentials(
     try:
         port = int(port_raw) if port_raw not in (None, "") else 443
     except (TypeError, ValueError):
+        # Log-only call: surviving mutants only rewrite the warning
+        # text / args / exc_info flag, which no contract observes.
         logger.warning(
-            "Credential port %r is not a valid integer; defaulting to 443",
-            port_raw,
-            exc_info=True,
+            "Credential port %r is not a valid integer; defaulting to 443",  # pragma: no mutate
+            port_raw,  # pragma: no mutate
+            exc_info=True,  # pragma: no mutate
         )
         port = 443
 
@@ -162,9 +170,11 @@ def build_credential_ref(
     try:
         return CredentialRef.resolve(input), {}
     except CredentialRoutingError as e:
+        # Log-only call: surviving mutants only rewrite the debug
+        # text / args, which no contract observes.
         logger.debug(
-            "No credential routing fields set, falling through to inline credentials: %s",
-            e,
+            "No credential routing fields set, falling through to inline credentials: %s",  # pragma: no mutate
+            e,  # pragma: no mutate
         )
 
     inline: dict[str, Any] = {}

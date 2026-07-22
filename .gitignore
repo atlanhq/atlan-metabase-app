@@ -121,3 +121,6 @@ remediation/
 
 # Claude Code local worktrees
 .claude/worktrees/
+
+# mutmut mutation-testing working directory
+mutants/
