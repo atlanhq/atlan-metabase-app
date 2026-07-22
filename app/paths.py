@@ -17,9 +17,27 @@ import os
 import tempfile
 from pathlib import Path
 
+from application_sdk.contracts.types import FileReference
+
 RAW_DIR = "raw"
 PROCESSED_DIR = "processed"
 TRANSFORMED_DIR = "transformed"
+
+
+def staging_ref(path: str = "") -> FileReference:
+    """Wrap a per-task LOCAL scratch base path as a typed ``FileReference``.
+
+    ``output_path`` / ``processed_data_path`` / ``qi_local_path`` / ``stage_dir``
+    are each task's local working directory for building JSONL paths — they are
+    NOT the inter-task data channel (records move between tasks via the file
+    ``FileReference`` fields, which the SDK persist/materialize interceptor
+    round-trips). These bases are the deterministic, workflow-relative paths the
+    app owns, so we set ``auto_materialize=False``: the interceptor skips them
+    (see ``application_sdk.storage.file_ref_sync``), leaving the app's existing
+    staging lifecycle untouched while giving the contract a typed path field
+    (conformance P012) instead of a bare ``str``.
+    """
+    return FileReference(local_path=path, auto_materialize=False)
 
 
 def default_output_path(workflow_id: str) -> str:

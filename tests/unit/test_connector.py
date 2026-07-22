@@ -26,6 +26,7 @@ from application_sdk.errors import InvalidInputError
 
 from app.connector import MetabaseApp, _ref
 from app.contracts import FetchInput, FilterInput, MetabaseInput, MetabaseLineageInput
+from app.paths import staging_ref
 
 
 class TestRef:
@@ -110,7 +111,9 @@ def app_with_mock_client():
 
 @pytest.fixture
 def fetch_input(tmp_path):
-    return FetchInput(output_path=str(tmp_path), inline_credentials={"host": "h"})
+    return FetchInput(
+        output_path=staging_ref(str(tmp_path)), inline_credentials={"host": "h"}
+    )
 
 
 class TestExtractTasks:
@@ -204,7 +207,7 @@ class TestFilterDataTask:
 
         app = MetabaseApp()
         input_obj = FilterInput(
-            output_path=str(tmp_path),
+            output_path=staging_ref(str(tmp_path)),
             include_collections={},
             exclude_collections={"2": {}},  # type: ignore[arg-type]
             collections_file=FileReference(local_path=str(cf)),

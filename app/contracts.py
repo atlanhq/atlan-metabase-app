@@ -27,6 +27,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.credentials import MetabaseCredential
+from app.paths import staging_ref
 
 _logger = get_logger(__name__)
 
@@ -165,8 +166,10 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
         "include_collections", "exclude_collections", mode="before"
     )(_coerce_collection_filter)
 
+    # conformance: ignore[P012] @entrypoint boundary field — the platform (Heracles/AE) supplies this as a string prefix via JSONPath manifest substitution; a FileReference would break the wire contract. Task-internal staging paths ARE FileReference (see app.paths.staging_ref).
     output_path: str = ""
     output_prefix: str = ""
+    # conformance: ignore[P012] @entrypoint boundary field — the platform (Heracles/AE) supplies this as a string prefix via JSONPath manifest substitution; a FileReference would break the wire contract. Task-internal staging paths ARE FileReference (see app.paths.staging_ref).
     processed_data_path: str = ""
     chunk_start: int = 0
 
@@ -199,6 +202,7 @@ class MetabaseOutput(Output):
 
     transformed_data_prefix: str = ""
     connection_qualified_name: str = ""
+    # conformance: ignore[P012] @entrypoint Output boundary field — downstream platform nodes (PublishNode/QINode/LineagePublishNode) read this as a string prefix via JSONPath; a FileReference would break the wire contract.
     output_path: str = ""
     view_lineage_output_prefix: str = ""
     publish_state_prefix: str = ""
@@ -236,6 +240,7 @@ class MetabaseLineageInput(Input):
     view_lineage_input_prefix: str = ""
 
     # Where to write the Process / ColumnProcess NDJSON.
+    # conformance: ignore[P012] @entrypoint boundary field — the platform (Heracles/AE) supplies this as a string prefix via JSONPath manifest substitution; a FileReference would break the wire contract. Task-internal staging paths ARE FileReference (see app.paths.staging_ref).
     output_path: str = ""
     output_prefix: str = ""
 
@@ -272,7 +277,7 @@ class FetchInput(Input):
     only be reachable inside one activity context.
     """
 
-    output_path: str = ""
+    output_path: FileReference = Field(default_factory=staging_ref)
     credential_ref: CredentialRef | None = None
     inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
 
@@ -293,7 +298,7 @@ class FilterInput(Input):
     ``FileReference`` referenced here before the task runs.
     """
 
-    output_path: str = ""
+    output_path: FileReference = Field(default_factory=staging_ref)
     include_collections: CollectionFilter = Field(default_factory=dict)
     exclude_collections: CollectionFilter = Field(default_factory=dict)
 
@@ -322,7 +327,7 @@ class FilterOutput(Output):
 class FetchDetailInput(Input):
     """Input for tasks that fetch per-entity detail from a filtered file."""
 
-    output_path: str = ""
+    output_path: FileReference = Field(default_factory=staging_ref)
     source_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
     inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
@@ -336,7 +341,7 @@ class ProcessInput(Input):
     inline) stays consistent with every other task.
     """
 
-    output_path: str = ""
+    output_path: FileReference = Field(default_factory=staging_ref)
     collections_filtered_file: FileReference | None = None
     databases_filtered_file: FileReference | None = None
     question_queries_file: FileReference | None = None
@@ -365,10 +370,10 @@ class BuildLineageInput(Input):
     built-in ``open()``.
     """
 
-    output_path: str = ""
+    output_path: FileReference = Field(default_factory=staging_ref)
     # Local directory holding QI parsed-SQL NDJSON (already downloaded from
     # ``view_lineage_input_prefix`` by the entrypoint).
-    qi_local_path: str = ""
+    qi_local_path: FileReference = Field(default_factory=staging_ref)
     connection_qualified_name: str = ""
     connection_name: str = ""
 
@@ -376,7 +381,7 @@ class BuildLineageInput(Input):
 class BuildLineageOutput(Output):
     """Output for ``build_lineage_records``."""
 
-    stage_dir: str = ""
+    stage_dir: FileReference = Field(default_factory=staging_ref)
     process_count: int = 0
     column_process_count: int = 0
 
@@ -385,8 +390,8 @@ class TransformTaskInput(Input):
     """Input for ``transform_data`` — runs once per asset typename."""
 
     workflow_id: str = ""
-    output_path: str = ""
-    processed_data_path: str = ""
+    output_path: FileReference = Field(default_factory=staging_ref)
+    processed_data_path: FileReference = Field(default_factory=staging_ref)
     connection_qualified_name: str = ""
     connection_name: str = ""
     typename: str = ""
