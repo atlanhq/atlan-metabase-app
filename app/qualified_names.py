@@ -17,8 +17,8 @@ pyatlan_v9 ships no ``.creator()`` for the Metabase asset family yet (see
 BLDX-1558 / atlan-python#975); once it does, these become thin wrappers over the
 creators. The lineage-process QNs (:func:`process_qn`,
 :func:`column_process_qn`) are a bespoke ARS identity grammar with a content
-hash — there is no pyatlan asset factory for them — so they carry a justified
-P028 suppression.
+hash — there is no pyatlan asset factory for them — and are left as P028
+warnings (not suppressed), alongside the asset-QN builders.
 """
 
 from __future__ import annotations
@@ -52,10 +52,14 @@ def bi_process_qn(connection_qn: str, question_id: Any) -> str:
 
 
 def process_qn(connection_qn: str, question_id: Any, process_hash: str) -> str:
-    # conformance: ignore[P028] bespoke lineage-Process qualifiedName (question_tables/{id}/{hash}) — an ARS identity with a content hash, not a pyatlan-owned asset grammar; centralised here as the single source of truth.
+    # Bespoke lineage-Process qualifiedName (question_tables/{id}/{hash}) — an ARS
+    # identity with a content hash, not a pyatlan-owned asset grammar. Left as a
+    # P028 warning (not suppressed) alongside the asset-QN builders.
     return f"{connection_qn}/question_tables/{question_id}/{process_hash}"
 
 
 def column_process_qn(connection_qn: str, question_id: Any, cp_hash: str) -> str:
-    # conformance: ignore[P028] bespoke lineage-ColumnProcess qualifiedName (question_columns/{id}/{hash}) — an ARS identity with a content hash, not a pyatlan-owned asset grammar; centralised here as the single source of truth.
+    # Bespoke lineage-ColumnProcess qualifiedName (question_columns/{id}/{hash}) —
+    # an ARS identity with a content hash, not a pyatlan-owned asset grammar. Left
+    # as a P028 warning (not suppressed) alongside the asset-QN builders.
     return f"{connection_qn}/question_columns/{question_id}/{cp_hash}"
