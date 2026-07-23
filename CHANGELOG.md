@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.2.2 (July 23, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.1...v2.2.2
+
+### Bug Fixes
+
+- log auth-check failure before returning failed PreflightCheck (E009) (#220) (by @vaibhavatlan in [b194313](https://github.com/atlanhq/atlan-metabase-app/commit/b194313))
+- offload sync JSONL/QI file I/O via SDK run_in_thread (heartbeat-timeout fix) (#229) (by @zaman-atlan in [b74e682](https://github.com/atlanhq/atlan-metabase-app/commit/b74e682))
+
+
 ## v2.2.1 (July 16, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.0...v2.2.1
