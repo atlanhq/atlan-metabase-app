@@ -91,10 +91,10 @@ def map_collection(
     last_sync_run_at_ms: int,
     tenant_id: str,
 ) -> MetabaseCollection:
-    asset = MetabaseCollection(
+    asset = MetabaseCollection.creator(
         name=record.name,
-        qualified_name=_collection_qn(connection_qualified_name, record.id),
         connection_qualified_name=connection_qualified_name,
+        metabase_id=str(record.id),
     )
     if record.description is not None:
         asset.description = record.description
@@ -130,10 +130,10 @@ def map_dashboard(
     last_sync_run_at_ms: int,
     tenant_id: str,
 ) -> MetabaseDashboard:
-    asset = MetabaseDashboard(
+    asset = MetabaseDashboard.creator(
         name=record.name,
-        qualified_name=_dashboard_qn(connection_qualified_name, record.id),
         connection_qualified_name=connection_qualified_name,
+        metabase_id=str(record.id),
     )
     if record.description is not None:
         asset.description = record.description
@@ -197,10 +197,10 @@ def map_question(
     None of these fields are in the pyatlan_v9 model, so the transform task
     injects them after :func:`serialize_entity`.
     """
-    asset = MetabaseQuestion(
+    asset = MetabaseQuestion.creator(
         name=record.name,
-        qualified_name=_question_qn(connection_qualified_name, record.id),
         connection_qualified_name=connection_qualified_name,
+        metabase_id=str(record.id),
     )
     if record.description is not None:
         asset.description = record.description
