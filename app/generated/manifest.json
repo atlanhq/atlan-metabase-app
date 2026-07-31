@@ -12,6 +12,7 @@
         "argo_workflow_slug": "",
         "task_queue": "atlan-metabase-{deployment_name}",
         "args": {
+          "app_name": "metabase",
           "credential": "{{credential}}",
           "credential_guid": "{{credential-guid}}",
           "connection": "{{connection}}",
@@ -45,7 +46,8 @@
           "connection_cache_enabled": true,
           "connection_cache_via_app_enabled": true,
           "current_state_enabled": false,
-          "current_state_via_app_enabled": true
+          "current_state_via_app_enabled": true,
+          "app_name": "publish"
         }
       },
       "depends_on": {
@@ -73,7 +75,8 @@
           "timestamp_key": "",
           "mine_output_type": "json",
           "parsing_mode": "competitive",
-          "vendor_key": "attributes.metabaseSourceEngine"
+          "vendor_key": "attributes.metabaseSourceEngine",
+          "app_name": "query-intelligence"
         }
       },
       "depends_on": {
@@ -97,7 +100,8 @@
           "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
           "view_lineage_input_prefix": "$.extract.outputs.view_lineage_output_prefix",
           "extraction_method": "{{extraction-method}}",
-          "agent_json": "{{agent-json}}"
+          "agent_json": "{{agent-json}}",
+          "app_name": "metabase"
         }
       },
       "depends_on": {
@@ -135,7 +139,8 @@
           "connection_entity": "{{connection}}",
           "connection_cache_enabled": false,
           "connection_cache_via_app_enabled": false,
-          "current_state_via_app_enabled": true
+          "current_state_via_app_enabled": true,
+          "app_name": "publish"
         }
       },
       "depends_on": {
