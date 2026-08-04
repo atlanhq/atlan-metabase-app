@@ -119,5 +119,5 @@ coverage.json
 # Conformance remediation runtime output (SARIF reports, run artifacts)
 remediation/
 
-# Claude Code local worktrees
+# ─── Conformance baseline (C003) ─────────────────────────────────────────────
 .claude/worktrees/
