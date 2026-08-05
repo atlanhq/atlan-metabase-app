@@ -187,7 +187,7 @@ extraNodes {
     // MetabaseQuestion; QI reads that via `vendorKey` to pick the right
     // parser. Without this, QI defaults to its Oracle fallback and every
     // Snowflake/Redshift `LIMIT n` clause fails with a syntax error.
-    vendorKey = "attributes.metabaseSourceEngine"
+    vendorKey = "attributes.sqlDialect"
     sqlKey = "attributes.metabaseQuery"
     catalogKey = "attributes.metabaseSourceDatabaseName"
     schemaKey = "attributes.metabaseSourceSchemaName"
