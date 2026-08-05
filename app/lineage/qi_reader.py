@@ -332,7 +332,12 @@ def parse_qi_record(
 
     # Current shape: parsed lives under `gudusoft.{dbobjs,relationships}`.
     # Legacy shape: under `PARSED_DATA.{dbobjs,relationships}`.
-    parsed = record.get("gudusoft") or record.get("PARSED_DATA") or {}
+    parsed = (
+        record.get("parsedData")
+        or record.get("gudusoft")
+        or record.get("PARSED_DATA")
+        or {}
+    )
     if isinstance(parsed, str):
         try:
             parsed = orjson.loads(parsed)
@@ -359,7 +364,8 @@ def parse_qi_record(
     raw_vendor = str(parsed.get("dbvendor") or "")
     if raw_vendor.lower().startswith("db"):
         raw_vendor = raw_vendor[2:]
-    effective_vendor = raw_vendor.lower() or default_vendor
+    record_vendor = record.get("vendor") or record.get("vendorName") or ""
+    effective_vendor = raw_vendor.lower() or record_vendor or default_vendor
 
     dbobjs = parsed.get("dbobjs") or []
     source_tables: list[dict[str, str]] = []
