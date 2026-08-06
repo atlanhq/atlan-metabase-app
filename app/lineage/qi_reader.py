@@ -33,10 +33,20 @@ QI's current output shape (Gudusoft 3.0.6 + sqlglot 28.x dual-parser era)::
         }
     }
 
+The standard QI json output uses ``parsedData`` (in place of
+``gudusoft``) for the parsed ``{dbobjs, relationships}`` block, and
+``vendor`` (in place of ``vendorName``) for the record-level connector.
+We read the new keys first and fall back to the older ones, so both the
+standard and the pre-standard QI output are accepted.
+
 We previously read ``QUERY_ID`` / ``SQL`` / ``PARSED_DATA`` (uppercase) —
-that schema is from an earlier QI generation and no longer matches what
-QI emits on tenant. Accept both shapes so a future QI rev that flips
-back doesn't break us silently.
+that schema is from an even earlier QI generation. Accept every shape so
+a QI rev that flips between them doesn't break us silently.
+
+The record-level ``vendor`` / ``vendorName`` is the emitting connector
+(``"metabase"``), not a SQL dialect, so it is never used as the upstream
+Table ``connectorType`` — that comes from ``dbvendor`` or the caller's
+``default_vendor``.
 
 Each ``dbobjs`` entry is a parsed source-table reference of shape::
 
@@ -330,26 +340,32 @@ def parse_qi_record(
     # `sql` is the current key; `SQL` is the legacy fallback.
     sql = str(record.get("sql") or record.get("SQL") or "")
 
-    # Current shape: parsed lives under `gudusoft.{dbobjs,relationships}`.
-    # Legacy shape: under `PARSED_DATA.{dbobjs,relationships}`.
-    parsed = (
-        record.get("parsedData")
-        or record.get("gudusoft")
-        or record.get("PARSED_DATA")
-        or {}
-    )
-    if isinstance(parsed, str):
-        try:
-            parsed = orjson.loads(parsed)
-        except orjson.JSONDecodeError:
-            logger.warning(
-                "QI record %r has unparseable parsed-SQL payload; treating as empty",
-                query_id,
-                exc_info=True,
-            )
-            parsed = {}
-    if not isinstance(parsed, dict):
-        parsed = {}
+    # Standard shape: parsed lives under `parsedData.{dbobjs,relationships}`.
+    # Pre-standard: under `gudusoft`. Legacy: under `PARSED_DATA`.
+    # A truthy-but-unusable candidate (e.g. a list, or a non-JSON string)
+    # must not suppress a later valid one, so take the first that resolves
+    # to a dict.
+    parsed: dict[str, Any] = {}
+    for candidate in (
+        record.get("parsedData"),
+        record.get("gudusoft"),
+        record.get("PARSED_DATA"),
+    ):
+        if not candidate:
+            continue
+        if isinstance(candidate, str):
+            try:
+                candidate = orjson.loads(candidate)
+            except orjson.JSONDecodeError:
+                logger.warning(
+                    "QI record %r has unparseable parsed-SQL payload; skipping candidate",
+                    query_id,
+                    exc_info=True,
+                )
+                continue
+        if isinstance(candidate, dict) and candidate:
+            parsed = candidate
+            break
 
     # QI emits ``dbvendor`` like ``dbsnowflake``, ``dbbigquery``,
     # ``dbpostgresql``, ``dbmssql`` (Gudusoft's vendor-prefixed enum).
@@ -364,8 +380,7 @@ def parse_qi_record(
     raw_vendor = str(parsed.get("dbvendor") or "")
     if raw_vendor.lower().startswith("db"):
         raw_vendor = raw_vendor[2:]
-    record_vendor = record.get("vendor") or record.get("vendorName") or ""
-    effective_vendor = raw_vendor.lower() or record_vendor or default_vendor
+    effective_vendor = raw_vendor.lower() or default_vendor
 
     dbobjs = parsed.get("dbobjs") or []
     source_tables: list[dict[str, str]] = []

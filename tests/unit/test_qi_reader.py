@@ -160,6 +160,81 @@ class TestParseQiRecordLegacyShape:
         assert tables[0]["table_name"] == "ORDERS"  # unquoted
 
 
+class TestParseQiRecordStandardShape:
+    """Standard QI json output: parsedData / vendor. Read ahead of the
+    pre-standard gudusoft / vendorName keys."""
+
+    def _standard_record(self) -> dict:
+        gudusoft = CURRENT_SHAPE_RECORD["gudusoft"]
+        rec = {
+            k: v
+            for k, v in CURRENT_SHAPE_RECORD.items()
+            if k not in ("gudusoft", "vendorName")
+        }
+        rec["parsedData"] = gudusoft
+        rec["vendor"] = "metabase"
+        return rec
+
+    def test_dbobjs_resolve_from_parsed_data_block(self):
+        _, _, tables, _ = parse_qi_record(self._standard_record())
+        assert len(tables) == 1
+        assert tables[0]["database"] == "ATLANDBTQA"
+        assert tables[0]["schema"] == "PRODUCTION"
+        assert tables[0]["table_name"] == "ORDERS"
+
+    def test_dbvendor_from_parsed_data_propagates_as_vendor_name(self):
+        _, _, tables, _ = parse_qi_record(self._standard_record())
+        assert tables[0]["vendor_name"] == "snowflake"
+
+    def test_parsed_data_wins_over_legacy_gudusoft(self):
+        rec = self._standard_record()
+        # A stale pre-standard block must be ignored when parsedData exists.
+        rec["gudusoft"] = {
+            "dbobjs": [
+                {
+                    "displayName": "STALE.STALE.STALE",
+                    "type": "table",
+                    "name": '"STALE"',
+                    "database": "STALE",
+                    "schema": '"STALE"',
+                }
+            ],
+            "relationships": [],
+            "dbvendor": "dbredshift",
+        }
+        _, _, tables, _ = parse_qi_record(rec)
+        assert tables[0]["table_name"] == "ORDERS"
+        assert tables[0]["vendor_name"] == "snowflake"
+
+    def test_record_vendor_does_not_override_default_vendor(self):
+        # Top-level ``vendor`` is the emitting connector ("metabase"), not a
+        # SQL dialect — it must never win over the caller's default_vendor
+        # for upstream Table refs.
+        rec = self._standard_record()
+        rec["parsedData"] = {
+            k: v for k, v in rec["parsedData"].items() if k != "dbvendor"
+        }
+        _, _, tables, _ = parse_qi_record(rec, default_vendor="redshift")
+        assert tables[0]["vendor_name"] == "redshift"
+
+    def test_malformed_parsed_data_falls_through_to_gudusoft(self):
+        # A truthy-but-unusable parsedData must not suppress a valid
+        # pre-standard gudusoft block.
+        rec = {k: v for k, v in CURRENT_SHAPE_RECORD.items() if k != "vendorName"}
+        rec["parsedData"] = ["not", "a", "mapping"]
+        _, _, tables, _ = parse_qi_record(rec)
+        assert len(tables) == 1
+        assert tables[0]["table_name"] == "ORDERS"
+        assert tables[0]["vendor_name"] == "snowflake"
+
+    def test_unparseable_parsed_data_string_falls_through(self):
+        rec = {k: v for k, v in CURRENT_SHAPE_RECORD.items() if k != "vendorName"}
+        rec["parsedData"] = "{not valid json"
+        _, _, tables, _ = parse_qi_record(rec)
+        assert len(tables) == 1
+        assert tables[0]["table_name"] == "ORDERS"
+
+
 class TestUnquoteIdent:
     def test_strips_double_quotes(self):
         assert _unquote_ident('"PRODUCTION"') == "PRODUCTION"
