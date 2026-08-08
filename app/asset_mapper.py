@@ -264,6 +264,7 @@ def map_question(
         extras["metabaseSourceSchemaName"] = record.metabase_schema_name
     if record.metabase_source_engine:
         extras["metabaseSourceEngine"] = record.metabase_source_engine
+        extras["sqlDialect"] = record.metabase_source_engine
     return asset, extras
 
 

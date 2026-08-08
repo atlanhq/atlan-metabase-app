@@ -75,7 +75,7 @@
           "timestamp_key": "",
           "mine_output_type": "json",
           "parsing_mode": "competitive",
-          "vendor_key": "attributes.metabaseSourceEngine",
+          "vendor_key": "attributes.sqlDialect",
           "app_name": "query-intelligence"
         }
       },
