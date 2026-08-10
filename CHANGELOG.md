@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.2.3 (August 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.2...v2.2.3
+
+### Bug Fixes
+
+- resolve Pkl lockfile to app-contract-toolkit 0.20.0 (#305) (by @vaibhavatlan in [df0f603](https://github.com/atlanhq/atlan-metabase-app/commit/df0f603))
+
+
 ## v2.2.2 (August 09, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.1...v2.2.2
