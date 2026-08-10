@@ -27,17 +27,23 @@ from application_sdk.errors import InvalidInputError
 from app.connector import (
     MetabaseApp,
     _build_process_records,
+    _map_one_record,
     _ref,
+    _write_transformed_records,
     read_jsonl,
     write_jsonl,
 )
 from app.contracts import (
     BuildLineageInput,
+    FetchDetailInput,
     FetchInput,
     FilterInput,
     MetabaseInput,
     MetabaseLineageInput,
+    ProcessInput,
+    TransformTaskInput,
 )
+from app.errors import MissingOutputPathInputError, MissingTypenameInputError
 
 
 class TestRef:
@@ -241,6 +247,477 @@ class TestFilterDataTask:
         assert out.databases_filtered_file.local_path is not None
         db_text = Path(out.databases_filtered_file.local_path).read_text()
         assert "db" in db_text
+
+
+# ---------------------------------------------------------------------------
+# Detail-fetch @tasks — extract_individual_dashboards / _databases,
+# fetch_question_queries_activity
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def source_file(tmp_path):
+    """A filtered-records source file for the *_detail tasks to read."""
+    p = tmp_path / "raw" / "source_filtered" / "result-0.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"id": 1, "name": "s1"}) + "\n")
+    return FileReference(local_path=str(p))
+
+
+@pytest.fixture
+def detail_input(tmp_path, source_file):
+    return FetchDetailInput(
+        output_path=str(tmp_path),
+        source_file=source_file,
+        inline_credentials={"host": "h"},
+    )
+
+
+class TestDetailFetchTasks:
+    @pytest.mark.asyncio
+    async def test_extract_individual_dashboards(
+        self, app_with_mock_client, detail_input
+    ):
+        records = [{"id": 1, "name": "d1", "ordered_cards": []}]
+        with patch(
+            "app.connector.fetch_dashboards_details",
+            new_callable=AsyncMock,
+            return_value=records,
+        ) as mock_fetch:
+            out = await app_with_mock_client.extract_individual_dashboards(detail_input)
+        assert out.typename == "dashboard_details"
+        assert out.record_count == 1
+        assert out.output_file is not None
+        written = Path(out.output_file.local_path).read_text().splitlines()
+        assert json.loads(written[0]) == records[0]
+        # The filtered source file's single record was passed through.
+        passed_records = mock_fetch.call_args[0][1]
+        assert passed_records == [{"id": 1, "name": "s1"}]
+
+    @pytest.mark.asyncio
+    async def test_extract_individual_databases(
+        self, app_with_mock_client, detail_input
+    ):
+        records = [{"id": 1, "name": "db1", "tables": []}]
+        with patch(
+            "app.connector.fetch_databases_details",
+            new_callable=AsyncMock,
+            return_value=records,
+        ):
+            out = await app_with_mock_client.extract_individual_databases(detail_input)
+        assert out.typename == "database_metadata"
+        assert out.record_count == 1
+        written = Path(out.output_file.local_path).read_text().splitlines()
+        assert json.loads(written[0]) == records[0]
+
+    @pytest.mark.asyncio
+    async def test_fetch_question_queries_activity(
+        self, app_with_mock_client, detail_input
+    ):
+        records = [{"question_id": 1, "query": "SELECT 1", "params": []}]
+        with patch(
+            "app.connector.fetch_question_queries",
+            new_callable=AsyncMock,
+            return_value=records,
+        ):
+            out = await app_with_mock_client.fetch_question_queries_activity(
+                detail_input
+            )
+        assert out.typename == "question_queries"
+        assert out.record_count == 1
+        written = Path(out.output_file.local_path).read_text().splitlines()
+        assert json.loads(written[0]) == records[0]
+
+    @pytest.mark.asyncio
+    async def test_extract_individual_dashboards_no_source_file(
+        self, app_with_mock_client, tmp_path
+    ):
+        """``source_file=None`` degrades to reading zero records (read_jsonl
+        guard), not a crash — matches the ``if input.source_file else ""``
+        pattern used at every detail-fetch call site."""
+        empty_input = FetchDetailInput(
+            output_path=str(tmp_path), source_file=None, inline_credentials={"h": "1"}
+        )
+        with patch(
+            "app.connector.fetch_dashboards_details",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_fetch:
+            out = await app_with_mock_client.extract_individual_dashboards(empty_input)
+        assert out.record_count == 0
+        assert mock_fetch.call_args[0][1] == []
+
+
+# ---------------------------------------------------------------------------
+# process_metabaseprocess @task — enrich filtered records
+# ---------------------------------------------------------------------------
+
+
+def _seed_process_inputs(tmp_path):
+    """Write the five source files ``process_metabaseprocess`` reads."""
+    raw_dir = tmp_path / "raw"
+    collections_f = raw_dir / "collections_filtered" / "result-0.json"
+    databases_f = raw_dir / "databases_filtered" / "result-0.json"
+    queries_f = raw_dir / "question_queries" / "result-0.json"
+    dashboard_details_f = raw_dir / "dashboard_details" / "result-0.json"
+    questions_f = raw_dir / "questions_filtered" / "result-0.json"
+    for p in (
+        collections_f,
+        databases_f,
+        queries_f,
+        dashboard_details_f,
+        questions_f,
+    ):
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+    collections_f.write_text(json.dumps({"id": 1, "name": "Marketing"}) + "\n")
+    databases_f.write_text(json.dumps({"id": 5, "name": "warehouse"}) + "\n")
+    queries_f.write_text(
+        json.dumps({"question_id": 20, "query": "SELECT 1", "params": []}) + "\n"
+    )
+    dashboard_details_f.write_text(
+        json.dumps({"id": 10, "name": "d1", "collection_id": 1, "ordered_cards": []})
+        + "\n"
+    )
+    questions_f.write_text(
+        json.dumps(
+            {
+                "id": 20,
+                "name": "q1",
+                "collection_id": 1,
+                "database_id": 5,
+                "dataset_query": {"type": "query"},
+            }
+        )
+        + "\n"
+    )
+    return {
+        "collections_file": FileReference(local_path=str(collections_f)),
+        "databases_file": FileReference(local_path=str(databases_f)),
+        "queries_file": FileReference(local_path=str(queries_f)),
+        "dashboard_details_file": FileReference(local_path=str(dashboard_details_f)),
+        "questions_file": FileReference(local_path=str(questions_f)),
+    }
+
+
+class TestProcessMetabaseProcessTask:
+    @pytest.mark.asyncio
+    async def test_enriches_and_writes_four_processed_files(self, tmp_path):
+        refs = _seed_process_inputs(tmp_path)
+        app = MetabaseApp()
+        fake_client = MagicMock(host="http://metabase.local")
+        app._build_client = AsyncMock(return_value=fake_client)
+
+        input_obj = ProcessInput(
+            output_path=str(tmp_path),
+            collections_filtered_file=refs["collections_file"],
+            databases_filtered_file=refs["databases_file"],
+            question_queries_file=refs["queries_file"],
+            dashboard_details_file=refs["dashboard_details_file"],
+            questions_filtered_file=refs["questions_file"],
+            inline_credentials={"host": "h"},
+            connection_qualified_name="default/metabase/test",
+        )
+        out = await app.process_metabaseprocess(input_obj)
+
+        assert out.total_records > 0
+        for ref in (
+            out.collections_processed_file,
+            out.dashboards_processed_file,
+            out.questions_processed_file,
+            out.questions_dashboards_processed_file,
+        ):
+            assert ref is not None
+            assert ref.local_path is not None
+            assert Path(ref.local_path).exists()
+
+        # Collections pass through untouched by this task (enrichment happens
+        # in transform_data's mapper, not here).
+        assert out.collections_processed_file is not None
+        assert out.collections_processed_file.local_path is not None
+        collections_out = json.loads(
+            Path(out.collections_processed_file.local_path).read_text().splitlines()[0]
+        )
+        assert collections_out["name"] == "Marketing"
+
+        # sourceURL enrichment used the resolved metabase_host.
+        assert out.dashboards_processed_file is not None
+        assert out.dashboards_processed_file.local_path is not None
+        dashboards_out = Path(out.dashboards_processed_file.local_path).read_text()
+        assert "http://metabase.local" in dashboards_out
+
+    @pytest.mark.asyncio
+    async def test_empty_metabase_host_still_completes(self, tmp_path):
+        """When the client resolves no host (e.g. bad credential shape),
+        the task must still complete and just log rather than raise —
+        sourceURL fields end up empty instead of failing the activity."""
+        refs = _seed_process_inputs(tmp_path)
+        app = MetabaseApp()
+        fake_client = MagicMock(host="")
+        app._build_client = AsyncMock(return_value=fake_client)
+
+        input_obj = ProcessInput(
+            output_path=str(tmp_path),
+            collections_filtered_file=refs["collections_file"],
+            databases_filtered_file=refs["databases_file"],
+            question_queries_file=refs["queries_file"],
+            dashboard_details_file=refs["dashboard_details_file"],
+            questions_filtered_file=refs["questions_file"],
+            inline_credentials={"host": "h"},
+        )
+        out = await app.process_metabaseprocess(input_obj)
+        assert out.total_records > 0
+        assert out.dashboards_processed_file is not None
+        assert out.dashboards_processed_file.local_path is not None
+        dashboards_out = json.loads(
+            Path(out.dashboards_processed_file.local_path).read_text().splitlines()[0]
+        )
+        # sourceURL is still built with an empty host prefix — a
+        # well-formed (if not useful) string, not omitted or raised.
+        assert dashboards_out["sourceURL"] == "/dashboard/10"
+
+
+# ---------------------------------------------------------------------------
+# transform_data @task — validation + per-typename Atlas JSON write
+# ---------------------------------------------------------------------------
+
+
+class TestTransformDataTask:
+    @pytest.mark.asyncio
+    async def test_missing_typename_raises(self, tmp_path):
+        app = MetabaseApp()
+        input_obj = TransformTaskInput(
+            output_path=str(tmp_path), typename="", workflow_id="wf-1"
+        )
+        with pytest.raises(MissingTypenameInputError, match="'typename' is required"):
+            await app.transform_data(input_obj)
+
+    @pytest.mark.asyncio
+    async def test_missing_output_path_raises(self):
+        app = MetabaseApp()
+        input_obj = TransformTaskInput(
+            output_path="", typename="METABASECOLLECTION", workflow_id="wf-1"
+        )
+        with pytest.raises(
+            MissingOutputPathInputError, match="'output_path' is required"
+        ):
+            await app.transform_data(input_obj)
+
+    @pytest.mark.asyncio
+    async def test_no_records_returns_zero_count_without_writing(self, tmp_path):
+        """No processed file present for this typename → early-return with
+        record_count=0; no transformed/ directory is created."""
+        app = MetabaseApp()
+        input_obj = TransformTaskInput(
+            output_path=str(tmp_path),
+            typename="METABASECOLLECTION",
+            workflow_id="wf-1",
+        )
+        out = await app.transform_data(input_obj)
+        assert out.record_count == 0
+        assert out.typename == "METABASECOLLECTION"
+        assert not (tmp_path / "transformed").exists()
+
+    @pytest.mark.asyncio
+    async def test_writes_transformed_atlas_json_for_known_typename(self, tmp_path):
+        processed_dir = tmp_path / "processed" / "collections"
+        processed_dir.mkdir(parents=True)
+        (processed_dir / "result-0.json").write_text(
+            json.dumps({"id": 1, "name": "Marketing"}) + "\n"
+        )
+        app = MetabaseApp()
+        input_obj = TransformTaskInput(
+            output_path=str(tmp_path),
+            typename="METABASECOLLECTION",
+            workflow_id="wf-1",
+            connection_qualified_name="default/metabase/test",
+            connection_name="metabase-test",
+            chunk_start=0,
+        )
+        out = await app.transform_data(input_obj)
+        assert out.record_count == 1
+        out_file = tmp_path / "transformed" / "METABASECOLLECTION" / "result-0.json"
+        assert out_file.exists()
+        entity = json.loads(out_file.read_text().splitlines()[0])
+        assert entity["typeName"] == "MetabaseCollection"
+        assert (
+            entity["attributes"]["qualifiedName"]
+            == "default/metabase/test/collections/1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_typename_falls_back_to_lowercased_subdir(self, tmp_path):
+        """Typenames outside ``TYPENAME_TO_PROCESS_DIR`` (not part of the
+        orchestrator's 4-typename fan-out, but reachable via direct task
+        invocation) resolve their processed-file subdir from
+        ``input.typename.lower()`` instead of raising."""
+        processed_dir = tmp_path / "processed" / "widget"
+        processed_dir.mkdir(parents=True)
+        (processed_dir / "result-0.json").write_text(
+            json.dumps({"id": 1, "name": "w1"}) + "\n"
+        )
+        app = MetabaseApp()
+        input_obj = TransformTaskInput(
+            output_path=str(tmp_path), typename="WIDGET", workflow_id="wf-1"
+        )
+        out = await app.transform_data(input_obj)
+        # Read the record (subdir resolved), but no mapper exists for
+        # WIDGET — _map_one_record skips it, so record_count is 0.
+        assert out.record_count == 0
+        assert out.typename == "WIDGET"
+
+
+# ---------------------------------------------------------------------------
+# _map_one_record / _write_transformed_records — per-record transform dispatch
+# ---------------------------------------------------------------------------
+
+_MAP_CTX: dict = dict(
+    connection_qualified_name="default/metabase/123",
+    connection_name="local-test",
+    connector_name="metabase",
+    workflow_id="wf-1",
+    workflow_run_id="run-1",
+    last_sync_run_at_ms=1700000000000,
+    tenant_id="default",
+)
+
+
+class TestMapOneRecordDispatch:
+    """Each typename must route to its own typed mapper; unknown typenames
+    are skipped (logged, not raised) so one bad typename can't fail the
+    whole batch."""
+
+    def test_collection_dispatch(self):
+        out = _map_one_record(
+            "METABASECOLLECTION", {"id": 1, "name": "Marketing"}, _MAP_CTX
+        )
+        assert out is not None
+        assert out["typeName"] == "MetabaseCollection"
+        assert out["attributes"]["name"] == "Marketing"
+
+    def test_dashboard_dispatch(self):
+        out = _map_one_record(
+            "METABASEDASHBOARD", {"id": 2, "name": "Sales Dash"}, _MAP_CTX
+        )
+        assert out is not None
+        assert out["typeName"] == "MetabaseDashboard"
+        assert out["attributes"]["name"] == "Sales Dash"
+
+    def test_question_dispatch(self):
+        out = _map_one_record(
+            "METABASEQUESTION", {"id": 3, "name": "Top Customers"}, _MAP_CTX
+        )
+        assert out is not None
+        assert out["typeName"] == "MetabaseQuestion"
+        assert out["attributes"]["name"] == "Top Customers"
+
+    def test_bi_process_dispatch(self):
+        out = _map_one_record(
+            "BIPROCESS",
+            {
+                "name": "Q1 -> Dash",
+                "question_id": 3,
+                "outputs": [
+                    {
+                        "uniqueAttributes": {
+                            "qualifiedName": "default/metabase/123/dashboards/2"
+                        }
+                    }
+                ],
+            },
+            _MAP_CTX,
+        )
+        assert out is not None
+        assert out["typeName"] == "BIProcess"
+
+    def test_unknown_typename_returns_none(self):
+        """Unrecognized typenames are skipped, not raised — callers log and
+        move on to the next record rather than failing the whole batch."""
+        assert _map_one_record("METABASEWIDGET", {"id": 1}, _MAP_CTX) is None
+
+
+class TestWriteTransformedRecords:
+    def test_writes_only_mapped_records_and_returns_count(self, tmp_path):
+        out_file = str(tmp_path / "result-0.json")
+        records = [{"id": 1, "name": "c1"}, {"id": 2, "name": "c2"}]
+        count = _write_transformed_records(
+            out_file, records, "METABASECOLLECTION", _MAP_CTX
+        )
+        assert count == 2
+        lines = Path(out_file).read_text().splitlines()
+        assert len(lines) == 2
+        assert json.loads(lines[0])["attributes"]["name"] == "c1"
+
+    def test_unknown_typename_writes_nothing(self, tmp_path):
+        """An unmapped typename drops every record — file exists (opened for
+        write) but is empty, and the count reflects zero written entities."""
+        out_file = str(tmp_path / "result-0.json")
+        records = [{"id": 1, "name": "x"}]
+        count = _write_transformed_records(
+            out_file, records, "METABASEWIDGET", _MAP_CTX
+        )
+        assert count == 0
+        assert Path(out_file).read_text() == ""
+
+
+# ---------------------------------------------------------------------------
+# _build_process_records — QI record edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestBuildProcessRecordsEdgeCases:
+    def test_missing_query_id_is_skipped(self, tmp_path):
+        """A QI record with no resolvable question qualifiedName/QUERY_ID
+        can't build a Process (no identity to key it on) — must be skipped,
+        not raise, even though it otherwise carries parseable source-table
+        data (so the guard is exercised, not masked by an empty
+        dbobjs/relationships list)."""
+        qi_dir = tmp_path / "qi"
+        qi_dir.mkdir()
+        # Neither `extra.attributes.qualifiedName` nor legacy `QUERY_ID`, but
+        # otherwise a fully-parseable record.
+        record = {
+            "sql": "SELECT customer_name FROM analytics.customers",
+            "PARSED_DATA": {
+                "dbobjs": [
+                    {
+                        "name": "customers",
+                        "db": "testdata",
+                        "schema": "analytics",
+                        "type": "table",
+                        "vendor_name": "postgres",
+                    }
+                ],
+                "relationships": [],
+            },
+        }
+        (qi_dir / "out.json").write_text(json.dumps(record) + "\n")
+
+        processes, column_processes = _build_process_records(
+            str(qi_dir), "default/metabase/test", "metabase-test"
+        )
+        assert processes == []
+        assert column_processes == []
+
+    def test_empty_source_tables_yields_no_process(self, tmp_path):
+        """build_process() returns None when source_tables is empty (no
+        upstream tables were parsed) — _build_process_records must skip
+        that record rather than append None."""
+        qi_dir = tmp_path / "qi"
+        qi_dir.mkdir()
+        record = {
+            "QUERY_ID": "default/metabase/test/questions/40",
+            "SQL": "SELECT 1",
+            "QUESTION_NAME": "No Tables",
+            "PARSED_DATA": {"dbobjs": [], "relationships": []},
+        }
+        (qi_dir / "out.json").write_text(json.dumps(record) + "\n")
+
+        processes, column_processes = _build_process_records(
+            str(qi_dir), "default/metabase/test", "metabase-test"
+        )
+        assert processes == []
+        assert column_processes == []
 
 
 # ---------------------------------------------------------------------------
@@ -559,6 +1036,64 @@ class TestExtractMetadataOrchestration:
         out = await app.extract_metadata(inp)  # type: ignore[call-arg]
         # output_path defaulted under our patched tempdir.
         assert str(tmp_path) in out.output_path
+
+    @pytest.mark.asyncio
+    async def test_uploads_transformed_dir_when_transform_wrote_output(
+        self, metabase_input, tmp_path
+    ):
+        """When ``transformed/`` exists on disk after the transform fan-out,
+        it must be uploaded and ``transformed_data_prefix`` set from the
+        upload's storage_path — the counterpart to the residual-dir upload
+        test above, for the primary (non-residual) output tree."""
+        app = MetabaseApp()
+        fake_fetch = MagicMock(
+            output_file=FileReference(local_path="/tmp/x.json"),
+            record_count=0,
+            typename="t",
+        )
+        fake_filter = MagicMock(
+            collections_filtered_file=FileReference(local_path="/tmp/c.json"),
+            dashboards_filtered_file=FileReference(local_path="/tmp/d.json"),
+            questions_filtered_file=FileReference(local_path="/tmp/q.json"),
+            databases_filtered_file=FileReference(local_path="/tmp/db.json"),
+            total_records=0,
+        )
+        app.extract_collections = AsyncMock(return_value=fake_fetch)
+        app.extract_dashboards = AsyncMock(return_value=fake_fetch)
+        app.extract_questions = AsyncMock(return_value=fake_fetch)
+        app.extract_databases = AsyncMock(return_value=fake_fetch)
+        app.filter_data = AsyncMock(return_value=fake_filter)
+        app.extract_individual_dashboards = AsyncMock(return_value=fake_fetch)
+        app.extract_individual_databases = AsyncMock(return_value=fake_fetch)
+        app.fetch_question_queries_activity = AsyncMock(return_value=fake_fetch)
+        app.process_metabaseprocess = AsyncMock(return_value=MagicMock(total_records=0))
+
+        transformed_dir = tmp_path / "transformed"
+
+        async def fake_transform_data(input):
+            # Real side effect: write one Atlas JSON file, same as the real
+            # @task would for a typename that had processed records.
+            typename_dir = transformed_dir / input.typename
+            typename_dir.mkdir(parents=True, exist_ok=True)
+            (typename_dir / "result-0.json").write_text('{"typeName": "x"}\n')
+            return MagicMock(record_count=1)
+
+        app.transform_data = AsyncMock(side_effect=fake_transform_data)
+        type(app).run_id = property(lambda _self: "run-xyz")  # type: ignore[misc]
+
+        async def fake_upload(input):
+            if input.local_path == str(transformed_dir):
+                return MagicMock(ref=MagicMock(storage_path="artifacts/transformed"))
+            return MagicMock(ref=MagicMock(storage_path=""))
+
+        app.upload = AsyncMock(side_effect=fake_upload)
+
+        out = await app.extract_metadata(metabase_input)  # type: ignore[call-arg]
+
+        assert transformed_dir.is_dir()
+        assert out.transformed_data_prefix == "artifacts/transformed"
+        uploaded_paths = {c.args[0].local_path for c in app.upload.await_args_list}
+        assert str(transformed_dir) in uploaded_paths
 
 
 # ---------------------------------------------------------------------------
