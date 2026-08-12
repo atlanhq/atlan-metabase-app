@@ -51,7 +51,8 @@
         }
       },
       "depends_on": {
-        "node_id": "extract"
+        "node_id": "extract",
+        "tag": "success"
       },
       "error_handling": {
         "start_to_close_timeout_seconds": 86400
@@ -80,7 +81,8 @@
         }
       },
       "depends_on": {
-        "node_id": "extract"
+        "node_id": "extract",
+        "tag": "success"
       },
       "error_handling": {
         "start_to_close_timeout_seconds": 86400
