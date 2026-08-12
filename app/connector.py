@@ -215,6 +215,10 @@ class MetabaseApp(App):
     through every task input.
     """
 
+    # Preflight gate posture. Hard: the checks are trusted to block real runs, so a
+    # NOT_READY verdict aborts the workflow instead of only being reported.
+    preflight_gate_mode = "hard"
+
     name = "metabase"
     passthrough_modules = {"app.lineage"}
 

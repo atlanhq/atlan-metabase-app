@@ -279,7 +279,7 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "atlan-application-sdk", extras = ["iam-auth", "pandas", "tests", "workflows"], specifier = ">=3.15.1,<4.0.0" }]
+requires-dist = [{ name = "atlan-application-sdk", extras = ["iam-auth", "pandas", "tests", "workflows"], specifier = ">=3.27.1,<4.0.0" }]
 
 [package.metadata.requires-dev]
 dev = [
