@@ -224,6 +224,12 @@
     },
     {
       "contract": "MetabaseInput",
+      "field": "app_name",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "MetabaseInput",
       "field": "chunk_start",
       "status": "active",
       "type": "int"
@@ -297,6 +303,12 @@
     {
       "contract": "MetabaseInput",
       "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "MetabaseLineageInput",
+      "field": "app_name",
       "status": "active",
       "type": "str"
     },
