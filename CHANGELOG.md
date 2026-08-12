@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.3.0 (August 12, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.3...v2.3.0
+
+### Features
+
+- enforce hard gate mode and bump application-sdk to 3.27.1 (#318) (by @fyzanshaik-atlan in [3181635](https://github.com/atlanhq/atlan-metabase-app/commit/3181635))
+
+
 ## v2.2.3 (August 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.2...v2.2.3
