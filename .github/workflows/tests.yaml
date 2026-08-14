@@ -116,19 +116,4 @@ jobs:
       # the first adopter + confirmed end-to-end proof of the boundary
       # crossing.
       two-store: true
-
-      # FND-128, closing FND-31. Deploys the PR-built image onto each cloud's
-      # e2e tenant before the legs run, so the DAG they exercise is the one
-      # under test rather than whatever was last hand-deployed there. Heracles
-      # re-fetches the manifest from the tenant-deployed pod at AE submit and
-      # THAT graph executes, so without this the full-DAG suite tests two
-      # versions at once — and on the tenants where metabase is absent entirely,
-      # every leg dies on a DNS lookup for
-      # metabase.metabase-app.svc.cluster.local (FND-6's first cross-CSP run).
-      #
-      # The trade this accepts: tenant health becomes a gate. A tenant that
-      # cannot be installed to now reds the leg instead of quietly testing the
-      # wrong version. Piloted on atlan-openapi-app#320 (run 31196955525, both
-      # suites green against the Azure tenant); this is the fleet adoption.
-      install-app-to-tenant: true
     secrets: inherit
