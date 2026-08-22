@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.3.1 (August 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.3.0...v2.3.1
+
+### Bug Fixes
+
+- unpin the yanked pytest-timeout 2.5.0 (FND-379) (#350) (by @cmgrote in [760f161](https://github.com/atlanhq/atlan-metabase-app/commit/760f161))
+
+
 ## v2.3.0 (August 12, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.3...v2.3.0
