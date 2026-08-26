@@ -121,3 +121,4 @@ remediation/
 
 # ─── Conformance baseline (C003) ─────────────────────────────────────────────
 .claude/worktrees/
+.mothership/.cache/
