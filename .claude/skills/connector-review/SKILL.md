@@ -32,19 +32,72 @@ to widen scope.
 
 ## 3. L1 — conformance suite
 
-Run: `uv sync --quiet && uvx atlan-application-sdk-conformance detect --repo . --series CEPODLTIBKS`
+Run:
 
-This is the local equivalent of this repo's `suite / Conformance Gate` check
-(`.github/workflows/conformance.yaml` → the shared
-`atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main` →
-`run-conformance-detect` composite action). CI runs one series per matrix leg
-for per-check status reporting; locally all series run together in one pass.
-CI-only flags (`--exit-zero`, SARIF-per-leg filenames) are stripped; SARIF
-output still writes to `conformance.sarif` in the repo root.
+```bash
+uv sync --quiet && uv run --with "atlan-application-sdk-conformance" -- \
+  atlan-application-sdk-conformance detect --repo . \
+  --output /tmp/conformance.sarif --exit-zero > /dev/null
+```
 
-Any BLOCK-tier failure is a BLOCKER finding (cite the check id). Surface WARN-tier
-flags that intersect changed lines as observations. Never re-derive or restate the
-suite's checks as review opinions — consume its output.
+Every flag here is load-bearing:
+- Omitting `--series` runs every registered check (the CLI default). NEVER pass a
+  concatenated series string like `CEPODLTIBKS` — `--series` takes comma-separated
+  letters, and an unknown string silently matches ZERO checks and exits 0.
+- `uv run --with ...` (NOT `uvx`) runs the detector inside the project's synced
+  environment — the same form CI's needs-env legs use. `uvx` is an isolated env,
+  so dependency-resolution checks (D-series) silently see zero project
+  dependencies and under-report.
+- `> /dev/null` is required: even with `--output`, the CLI prints its full human
+  report to stdout (hundreds of findings, tens of thousands of tokens on a real
+  connector repo). The SARIF file is the only output you read; stderr stays
+  visible for real errors.
+- `--exit-zero` is deliberate: the exit code covers the whole repo, but this
+  review gates on the diff (below), so the SARIF is the signal, not the exit
+  code.
+
+Never print the SARIF — it can be hundreds of KB. Extract only what the review
+scope needs:
+
+```bash
+python3 - <<'EOF'
+import json, subprocess
+changed = set(subprocess.run(
+    "git diff HEAD --name-only; git diff --cached --name-only",
+    shell=True, capture_output=True, text=True).stdout.split())
+if not changed:
+    changed = set(subprocess.run(
+        "git diff origin/main...HEAD --name-only",
+        shell=True, capture_output=True, text=True).stdout.split())
+sarif = json.load(open("/tmp/conformance.sarif"))
+run = sarif["runs"][0]
+levels = {r["id"]: (r.get("defaultConfiguration") or {}).get("level", "warning")
+          for r in run["tool"]["driver"].get("rules", [])}
+in_scope, outside = [], 0
+for res in run.get("results", []):
+    locs = res.get("locations") or [{}]
+    uri = ((locs[0].get("physicalLocation") or {}).get("artifactLocation") or {}).get("uri", "")
+    line = ((locs[0].get("physicalLocation") or {}).get("region") or {}).get("startLine")
+    if uri in changed:
+        level = res.get("level") or levels.get(res.get("ruleId"), "warning")
+        in_scope.append((res.get("ruleId"), level,
+                         uri, line, (res.get("message") or {}).get("text", "")[:200]))
+    else:
+        outside += 1
+for row in in_scope:
+    print("L1 %s [%s] %s:%s — %s" % row)
+print(f"L1 summary: {len(in_scope)} finding(s) in changed files; "
+      f"{outside} pre-existing finding(s) outside this change — not blocking.")
+EOF
+```
+
+Gate semantics (mirrors CI, which scopes each series to changed paths):
+- `error`-level findings in CHANGED files → BLOCKER findings (cite the check id).
+- `warning`-level findings in changed files → observations.
+- Findings in unchanged files → the single summary line only. Never itemize them,
+  never block on them.
+Never re-derive or restate the suite's checks as review opinions — consume the
+SARIF output.
 
 ## 4. Pass A — rule-guided
 

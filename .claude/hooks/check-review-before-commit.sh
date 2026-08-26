@@ -6,7 +6,12 @@ set -uo pipefail
 input="$(cat)"
 cmd="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tool_input",{}).get("command",""))' 2>/dev/null)"
 
-case "$cmd" in *"git commit"*) ;; *) exit 0 ;; esac
+# Match a real `git commit` invocation in command position (start of command
+# or after ; & | && || or a subshell open), including through common wrappers
+# (VAR=val prefixes, env, sudo, command, nohup and their simple flags) — but
+# not mere mentions of the words, otherwise `grep -rn "git commit" docs/`
+# gets blocked and costs a full review.
+printf '%s' "$cmd" | grep -qE '(^|[;&|(]|&&|\|\|)[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|sudo[[:space:]]+|command[[:space:]]+|env[[:space:]]+|nohup[[:space:]]+|-[A-Za-z-]+(=[^[:space:]]+)?([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*git([[:space:]]+-[A-Za-z-]+([=][^[:space:]]*)?([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+commit([[:space:]]|$)' || exit 0
 [ "${SKIP_CONNECTOR_REVIEW:-0}" = "1" ] && exit 0
 case "$(git branch --show-current 2>/dev/null)" in wip/*) exit 0 ;; esac
 
