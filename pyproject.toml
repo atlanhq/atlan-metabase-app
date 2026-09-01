@@ -163,6 +163,5 @@ exclude_lines = [
 fail_under = 85
 
 [tool.uv.sources]
-atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", rev = "41bc051f04912f50c6f7737e3454c5e9d8df06d2" }
 # atlan-application-sdk = { path = "../application-sdk", editable = true }
 # atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", rev = "326962d9363d5bc267609282c2862b857149ddac" }
