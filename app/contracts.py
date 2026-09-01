@@ -115,8 +115,7 @@ BoundedCredentialList = Annotated[list[BoundedCredentialDict], MaxItems(50)]
 # ---------------------------------------------------------------------------
 
 
-# conformance: ignore[P001] 'credentials' is an entrypoint field (B005-guarded) — narrowing its dict value type away from Any to satisfy payload-safety bounding would be a breaking contract-type change; see BoundedCredentialDict's docstring note.
-class MetabaseInput(Input, allow_unbounded_fields=True):
+class MetabaseInput(Input):
     """Input for the ``extract_metadata`` @entrypoint.
 
     Credentials can arrive via three paths (mirrors sigma/looker pattern):
@@ -128,15 +127,8 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
     is re-run against a pre-existing ``processed/`` tree (e.g. for
     debugging); when empty it defaults to ``output_path``.
 
-    ``allow_unbounded_fields`` is required for ``credentials: list[dict[str,
-    Any]] | dict[str, Any]`` — this is an ``@entrypoint`` contract, so B005
-    (NonAdditiveContractChange) blocks narrowing an existing field's value
-    type away from ``Any`` even just to satisfy payload-safety bounding
-    (``Any`` is unconditionally forbidden regardless of ``MaxItems``). Unlike
-    the ``@task``-only ``inline_credentials`` fields elsewhere in this module
-    (safe to bound — task contracts aren't B005-guarded), this field cannot
-    be narrowed in place; only a new, additively-added field could carry a
-    bounded type.
+    The inline credential channel is bounded to the realistic cardinality of a
+    credential payload so it remains safe to pass across task boundaries.
     """
 
     workflow_id: str = ""
@@ -155,7 +147,9 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
     agent_json: AgentCredentialSpec | None = None
 
     metabase_credential: CredentialRef | None = None
-    credentials: list[dict[str, Any]] | dict[str, Any] = Field(default_factory=list)
+    credentials: BoundedCredentialList | BoundedCredentialDict = Field(
+        default_factory=list
+    )
     connection: ConnectionRef = Field(default_factory=ConnectionRef)
 
     include_collections: CollectionFilter = Field(default_factory=dict)
