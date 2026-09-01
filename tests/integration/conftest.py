@@ -1,141 +1,90 @@
-"""Fixtures for integration tests — Metabase testcontainer + embedded Temporal.
+"""Fixtures for integration tests — Metabase testcontainer + the SDK integration kit.
 
-Tests run entirely in-process:
-  - Temporal starts as an embedded dev server via the SDK's
-    ``embedded_runtime()``.
-  - State / storage infrastructure is mocked.
-  - **Metabase runs as a session-scoped Docker testcontainer** brought up
-    via testcontainers; a minimal seed (2 collections + 2 questions + 2
-    dashboards) is applied via the Metabase HTTP API before tests start.
-    The seed shares code with the e2e compose overlay's one-shot service
-    (``tests/e2e/seed_metabase.py``) — same shape, just different counts.
+Tests run entirely in-process. The embedded Temporal dev server, mocked
+state/secret/storage infrastructure, the in-process worker and the executor shim
+all come from :mod:`application_sdk.testing.integration.fixtures`; the only
+genuinely per-connector parts left here are the App class and the fixture that
+brings up the source, supplied by overriding ``integration_app_cls`` and
+``integration_source``.
 
-Pattern mirrors ``atlan-mysql-app/tests/integration/conftest.py`` which
-boots a ``MySqlContainer`` and seeds it from ``fixtures/seed.sql``. The
-Metabase image is pinned to the version the full-DAG e2e overlay uses
-(``.github/e2e/e2e-full-docker-compose.yaml``) — bump them together.
+**Metabase runs as a session-scoped Docker testcontainer** brought up via
+testcontainers; a minimal seed (2 collections + 2 questions + 2 dashboards) is
+applied via the Metabase HTTP API before tests start. The seed shares code with
+the e2e compose overlay's one-shot service (``tests/e2e/seed_metabase.py``) —
+same shape, just different counts. The Metabase image is pinned to the version
+the full-DAG e2e overlay uses (``.github/e2e/e2e-full-docker-compose.yaml``) —
+bump them together.
 
-The workflow input passes credentials INLINE (``credentials=[...]``)
-rather than via a ``CredentialRef`` so the test bypasses secret-store
-resolution entirely — keeps the integration assertion focused on the
-extraction workflow itself, independent of credential plumbing (which is
-unit-tested in ``tests/unit/test_credentials.py``).
+The workflow input passes credentials INLINE (``credentials=[...]``) rather than
+via a ``CredentialRef``, so the test bypasses secret-store resolution entirely —
+keeps the integration assertion focused on the extraction workflow itself,
+independent of credential plumbing (which is unit-tested in
+``tests/unit/test_credentials.py``).
 
-Integration tests ALWAYS use a local testcontainer — there's no external-
-Metabase escape hatch. If Docker isn't available the suite skips with
-a clear message; that's the only mode aside from container-backed.
+Integration tests ALWAYS use a local testcontainer — there's no external-Metabase
+escape hatch. If Docker isn't available the suite skips with a clear message.
 
 Run with: uv run pytest tests/integration/ -v
 """
 
 from __future__ import annotations
 
-import os
-import time
-from collections.abc import Iterator
-from pathlib import Path
-from typing import Any
-
 # ---------------------------------------------------------------------------
 # SDK-affecting env vars MUST be set BEFORE any application_sdk import — the
-# SDK reads them at module load to populate APPLICATION_NAME / DEPLOYMENT_NAME
-# module-level constants. Matches atlan-mysql-app's conftest pattern.
+# SDK snapshots them into module-level constants on first import. The fixtures
+# module verifies this ordering and raises IntegrationEnvOrderingError if wrong.
 # ---------------------------------------------------------------------------
+import os
+
 os.environ.setdefault("ATLAN_APPLICATION_NAME", "metabase")
 os.environ.setdefault("ATLAN_DEPLOYMENT_NAME", "ci")
-# Preserve workflow artifacts (raw + transformed) under the LocalStore so
-# tests can assert against them. Without this the SDK's cleanup interceptor
-# deletes FileReference-tracked files after each workflow completes.
-os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
 
-import pytest
-import pytest_asyncio
-from application_sdk.dev import embedded_runtime
-from application_sdk.execution import (
-    TemporalClient,
-    TemporalExecutorBackend,
-    create_data_converter_for_app,
-    create_temporal_client,
-    create_worker,
-)
-from application_sdk.infrastructure.context import (
-    InfrastructureContext,
-    set_infrastructure,
-)
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.observability import AtlanObservability
-from application_sdk.storage import create_local_store, create_memory_store
-from application_sdk.testing.mocks import MockSecretStore, MockStateStore
+import time  # noqa: E402
+from collections.abc import Iterator  # noqa: E402
+from typing import Any  # noqa: E402
 
-# Trigger MetabaseApp registration before create_worker is called.
-from app.connector import MetabaseApp  # noqa: F401
+import pytest  # noqa: E402
+from application_sdk.observability.logger_adaptor import get_logger  # noqa: E402
+from application_sdk.testing.integration.fixtures import *  # noqa: E402, F403
+from application_sdk.testing.integration.fixtures import AppExecutor  # noqa: E402
 
-# Pre-wire a memory store as the deployment objectstore so the periodic
-# observability flush does not keep retrying and spamming warnings in tests.
-AtlanObservability._deployment_store = create_memory_store()
+from app.connector import MetabaseApp  # noqa: E402
 
 logger = get_logger("integration")
 
-_TASK_QUEUE = "metabase-queue"
-
-# Pin matches .github/e2e/e2e-full-docker-compose.yaml — keep in sync.
 _METABASE_IMAGE = "metabase/metabase:v0.61.2.3"
 _METABASE_PORT = 3000
 
-# Same admin convention as the e2e compose overlay. Overridable via
-# MB_E2E_USERNAME / MB_E2E_PASSWORD so CI can inject from secrets.
 _ADMIN_EMAIL = os.environ.get("MB_E2E_USERNAME", "e2e@example.com")
 _ADMIN_PASSWORD = os.environ.get("MB_E2E_PASSWORD", "e2etestpw123")
 
-# Integration count profile: 2 / 2 / 2. Light enough to keep boot+seed
-# under ~25 s on CI; rich enough that the connector emits ≥1 record per
-# typename and BIProcess (dashboard→question pairings).
+# Integration count profile: 2 / 2 / 2. Light enough to keep boot+seed under
+# ~25 s on CI; rich enough that the connector emits >=1 record per typename and
+# BIProcess (dashboard->question pairings).
 _INTEGRATION_N_COLLECTIONS = 2
 _INTEGRATION_N_QUESTIONS = 2
 _INTEGRATION_N_DASHBOARDS = 2
 
 
-class AppExecutor:
-    """Compatibility shim wrapping TemporalExecutorBackend for integration tests.
+# ---------------------------------------------------------------------------
+# SDK integration fixtures — embedded Temporal, mock infra, worker, executor
+# ---------------------------------------------------------------------------
 
-    Critical detail for multi-entry-point apps (like MetabaseApp, which has
-    both ``extract-metadata`` and ``extract-lineage``): the underlying
-    ``TemporalExecutorBackend.execute`` derives the workflow name from
-    ``f"{app_name}:{entry_point}"`` when ``entry_point`` is passed, but
-    falls back to just ``app_name`` when it isn't. Single-entry-point
-    apps (mysql) happen to register a workflow at the bare ``app_name``,
-    so omitting ``entry_point`` works there. Multi-entry-point apps don't —
-    the bare name is never registered, so submissions to it sit in the
-    Temporal queue forever with no listener. Always pass ``entry_point``.
-    """
 
-    def __init__(self, backend: TemporalExecutorBackend) -> None:
-        self._backend = backend
+@pytest.fixture(scope="session")
+def integration_app_cls() -> type[MetabaseApp]:
+    return MetabaseApp
 
-    async def execute_app(
-        self,
-        app_cls: Any,
-        input_data: Any,
-        *,
-        execution_id_prefix: str = "",
-        entry_point: str | None = None,
-    ) -> Any:
-        from application_sdk.app.context import AppContext
-        from application_sdk.execution.retry import RetryPolicy
 
-        app_name = getattr(app_cls, "_app_name", execution_id_prefix or "app")
-        context = AppContext(
-            app_name=app_name,
-            app_version="0.0.0",
-            run_id=execution_id_prefix or app_name,
-        )
-        return await self._backend.execute(
-            app_cls,
-            input_data,
-            context=context,
-            retry_policy=RetryPolicy(),
-            entry_point=entry_point,
-        )
+@pytest.fixture(scope="session")
+def integration_source(metabase_credentials: dict[str, Any]) -> dict[str, Any]:
+    return metabase_credentials
+
+
+@pytest.fixture(scope="session")
+def metabase_executor(executor: AppExecutor) -> AppExecutor:
+    """Alias keeping the existing test signatures intact."""
+    return executor
 
 
 # ---------------------------------------------------------------------------
@@ -164,10 +113,10 @@ def _docker_available() -> bool:
 def metabase_credentials() -> Iterator[dict[str, Any]]:
     """Bring up Metabase as a testcontainer and return the credential bundle.
 
-    Starts ``metabase/metabase`` via testcontainers, applies the shared
-    light seed from ``tests/e2e/seed_metabase.py`` with counts 2/2/2,
-    yields ``{host, port, username, password}`` for the workflow to
-    authenticate against. ``host`` carries the protocol prefix because
+    Starts ``metabase/metabase`` via testcontainers, applies the shared light
+    seed from ``tests/e2e/seed_metabase.py`` with counts 2/2/2, yields
+    ``{host, port, username, password}`` for the workflow to authenticate
+    against. ``host`` carries the protocol prefix because
     ``MetabaseCredential.host`` is documented to.
 
     Skips the integration suite when Docker is unreachable.
@@ -226,90 +175,3 @@ def metabase_credentials() -> Iterator[dict[str, Any]]:
     finally:
         logger.info("Stopping Metabase container")
         container.stop()
-
-
-# ---------------------------------------------------------------------------
-# Infrastructure fixture — wires mock secret / state / storage
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def store_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Root directory for the session-scoped LocalStore.
-
-    RETAINED-tier files survive here after cleanup_storage runs, because
-    cleanup_storage skips RETAINED refs. Tests can resolve a durable
-    FileReference to a local path via ``store_root / ref.storage_path``.
-    """
-    return tmp_path_factory.mktemp("sdk-store")
-
-
-@pytest.fixture(scope="session")
-def infrastructure(
-    store_root: Path,
-    metabase_credentials: dict[str, Any],  # noqa: ARG001 — gates on container readiness
-) -> InfrastructureContext:
-    """Wire mock infrastructure for the session using a LocalStore.
-
-    MockSecretStore is empty — tests pass credentials inline through the
-    workflow input, not via CredentialRef + secret-store lookup. Keeps
-    integration scope on the extraction workflow, not credential plumbing
-    (which has its own unit coverage).
-    """
-    ctx = InfrastructureContext(
-        state_store=MockStateStore(),
-        secret_store=MockSecretStore({}),
-        storage=create_local_store(store_root),
-    )
-    set_infrastructure(ctx)
-    return ctx
-
-
-# ---------------------------------------------------------------------------
-# Embedded Temporal runtime
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="session")
-async def embedded_temporal():
-    """Boot an in-process Temporal dev server for the test session."""
-    async with embedded_runtime(log_level="error") as rt:
-        yield rt
-
-
-# ---------------------------------------------------------------------------
-# Temporal client and in-process worker fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="session")
-async def temporal_client(embedded_temporal) -> TemporalClient:
-    """Connect to the embedded Temporal dev server."""
-    data_converter = create_data_converter_for_app(MetabaseApp)
-    return await create_temporal_client(
-        host=embedded_temporal.host, data_converter=data_converter
-    )
-
-
-@pytest_asyncio.fixture(scope="session")
-async def metabase_worker(
-    temporal_client: TemporalClient,
-    infrastructure: InfrastructureContext,  # noqa: ARG001 — ensures infra is wired first
-) -> Any:
-    """Start the MetabaseApp worker in-process."""
-    w = create_worker(temporal_client, task_queue=_TASK_QUEUE)
-    async with w:
-        yield
-
-
-@pytest.fixture(scope="session")
-def metabase_executor(
-    temporal_client: TemporalClient,
-    metabase_worker: Any,  # noqa: ARG001 — ensures worker is running
-) -> AppExecutor:
-    """Executor for MetabaseApp integration tests."""
-    backend = TemporalExecutorBackend(
-        client=temporal_client,
-        task_queue=_TASK_QUEUE,
-    )
-    return AppExecutor(backend=backend)

@@ -293,7 +293,7 @@ requires-dist = [{ name = "atlan-application-sdk", extras = ["iam-auth", "pandas
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "atlan-application-sdk-conformance", specifier = "<=1.0.0" },
+    { name = "atlan-application-sdk-conformance", specifier = ">=0.17.0,<1.0.0" },
     { name = "poethepoet", specifier = ">=0.38.0" },
     { name = "pre-commit", specifier = ">=3.8.0" },
     { name = "pyright", specifier = ">=1.1.403" },

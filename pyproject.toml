@@ -16,7 +16,7 @@ dev = [
     "requests",
     "pyright>=1.1.403",
     "ruff>=0.12.7",
-    "atlan-application-sdk-conformance<=1.0.0",
+    "atlan-application-sdk-conformance>=0.17.0,<1.0.0",
     # Drives the `poe` task runner (local-dev tasks: generate, start-dapr,
     # download-components, …). Not imported by app/ source, only invoked as
     # a CLI, and not needed in the production image (Dockerfile installs
@@ -111,8 +111,11 @@ reportMissingTypeStubs = false
 asyncio_mode = "auto"
 # Session-scoped default loop so the conftest's session-scoped embedded
 # Temporal + worker fixtures share the same loop with per-test async tests.
-# Matches atlan-openapi-app/pyproject.toml.
+# Matches atlan-openapi-app/pyproject.toml. The test scope must match too:
+# an async test awaiting executor.execute_app on a function-scoped loop
+# submits to a loop the worker never polls and hangs until the timeout.
 asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
