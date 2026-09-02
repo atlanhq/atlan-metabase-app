@@ -50,7 +50,7 @@ async def fetch_collections_summaries(
             endpoint="/api/collection",
             http_status=status if isinstance(status, int) else None,
         )
-        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow.
+        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow; the run declares the resulting gap as OutputStatus.PARTIAL_SUCCESS (connector.py step 10), so a tolerated failure is never published as a complete run.
         return []
     records = response.json()
     logger.info("Fetched %d collections", len(records))

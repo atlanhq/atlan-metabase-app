@@ -30,15 +30,36 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 
+# The three grammars below are byte-identical to the ones pyatlan_v9's own
+# creators build — MetabaseCollection.creator (metabase_collection.py:328),
+# MetabaseDashboard.creator (metabase_dashboard.py:335) and
+# MetabaseQuestion.creator (metabase_question.py:343) — so asset identity here
+# already matches the pyatlan-owned grammar; these are not a divergent
+# invention. Verify that pairing before editing either side.
+#
+# Not routed through those creators, for two reasons. Most callers need the
+# qualifiedName STRING, not an asset: a parent reference
+# (`metabase_collection_qualified_name`), a Related*(qualified_name=...) edge,
+# or a "qualifiedName" key in ARS JSON — and `.creator()` demands a `name` the
+# caller does not have for an asset it is only referencing. And at the four
+# sites that DO construct assets, `.creator()` calls
+# validate_required_fields, which raises on a blank name; api_types.py defaults
+# a missing Metabase name to "" on purpose, so adopting the creator there would
+# convert a source data quirk into a failed run.
+
+
 def collection_qn(connection_qn: str, collection_id: Any) -> str:
+    # conformance: ignore[P028] matches MetabaseCollection.creator's grammar byte-for-byte (pyatlan_v9 metabase_collection.py:328); callers need the string, not an asset — see the note above.
     return f"{connection_qn}/collections/{collection_id}"
 
 
 def dashboard_qn(connection_qn: str, dashboard_id: Any) -> str:
+    # conformance: ignore[P028] matches MetabaseDashboard.creator's grammar byte-for-byte (pyatlan_v9 metabase_dashboard.py:335); callers need the string, not an asset — see the note above.
     return f"{connection_qn}/dashboards/{dashboard_id}"
 
 
 def question_qn(connection_qn: str, question_id: Any) -> str:
+    # conformance: ignore[P028] matches MetabaseQuestion.creator's grammar byte-for-byte (pyatlan_v9 metabase_question.py:343); callers need the string, not an asset — see the note above.
     return f"{connection_qn}/questions/{question_id}"
 
 

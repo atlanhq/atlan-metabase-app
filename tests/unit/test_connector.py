@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.types import ConnectionRef, FileReference
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors import InvalidInputError
@@ -801,12 +802,12 @@ class TestRunInThreadOffload:
             await app.filter_data(input_obj)
 
         offloaded = [c.args[0] for c in mock_run_in_thread.call_args_list]
-        assert (
-            offloaded.count(read_jsonl) == 4
-        ), "filter_data must read all four raw files via self.run_in_thread"
-        assert (
-            offloaded.count(write_jsonl) == 4
-        ), "filter_data must write all four filtered files via self.run_in_thread"
+        assert offloaded.count(read_jsonl) == 4, (
+            "filter_data must read all four raw files via self.run_in_thread"
+        )
+        assert offloaded.count(write_jsonl) == 4, (
+            "filter_data must write all four filtered files via self.run_in_thread"
+        )
 
     @pytest.mark.asyncio
     async def test_build_lineage_records_offloads_qi_parsing(self, tmp_path):
@@ -939,6 +940,8 @@ class TestExtractMetadataOrchestration:
         assert app.transform_data.await_count == 4
         # No residual/ dir was ever created — no upload, no reference.
         assert out.residual_failures is None
+        # Nothing was tolerated, so the run is complete and says so.
+        assert out.status is OutputStatus.SUCCESS
 
     @pytest.mark.asyncio
     async def test_uploads_residual_dir_when_failures_were_recorded(
@@ -995,6 +998,10 @@ class TestExtractMetadataOrchestration:
         assert residual_ref.storage_path == "artifacts/residual"
         uploaded_paths = {c.args[0].local_path for c in app.upload.await_args_list}
         assert str(tmp_path / RESIDUAL_DIR) in uploaded_paths
+        # A tolerated failure means entities are missing from this run's
+        # output, so the run must NOT report itself complete — otherwise
+        # downstream diffing reads the gap as an intentional delete.
+        assert out.status is OutputStatus.PARTIAL_SUCCESS
 
     @pytest.mark.asyncio
     async def test_default_output_path_used_when_none_supplied(

@@ -21,6 +21,7 @@ from typing import Any
 
 import orjson
 from application_sdk.app import App, entrypoint, task
+from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.observability.logger_adaptor import get_logger
@@ -808,7 +809,20 @@ class MetabaseApp(App):
         )
 
         # --- 10. Return -------------------------------------------------
+        # Declare the degradation. `residual_failures` is set only when at
+        # least one tolerated failure was recorded, which means some entities
+        # are absent from this run's output. Reporting SUCCESS with a gap is
+        # how downstream diffing comes to read that gap as an intentional
+        # delete: the `# conformance: ignore[E020]` directives at each call
+        # site sanction *tolerating* the failure, not *claiming the run was
+        # complete*. PARTIAL_SUCCESS is the SDK's channel for exactly this
+        # ("some entities were skipped or degraded" — OutputStatus).
         return MetabaseOutput(
+            status=(
+                OutputStatus.PARTIAL_SUCCESS
+                if residual_failures is not None
+                else OutputStatus.SUCCESS
+            ),
             transformed_data_prefix=transformed_data_prefix,
             connection_qualified_name=connection_qn,
             output_path=output_path,

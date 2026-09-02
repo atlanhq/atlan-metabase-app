@@ -260,6 +260,6 @@ class TestMetabaseExtraction:
                 f"BIProcess duplicates outputs into relationshipAttributes "
                 f"(ATLAS-400-00-108 trigger): {r}"
             )
-            assert (
-                "inputs" not in rel
-            ), f"BIProcess duplicates inputs into relationshipAttributes: {r}"
+            assert "inputs" not in rel, (
+                f"BIProcess duplicates inputs into relationshipAttributes: {r}"
+            )
