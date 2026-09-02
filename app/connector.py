@@ -21,6 +21,7 @@ from typing import Any
 
 import orjson
 from application_sdk.app import App, entrypoint, task
+from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.observability.logger_adaptor import get_logger
@@ -41,7 +42,6 @@ from app.asset_mapper import (
 from app.client import MetabaseApiClient, build_client
 from app.contracts import (
     TRANSFORM_ASSET_TYPES,
-    TYPENAME_TO_PROCESS_DIR,
     BuildLineageInput,
     BuildLineageOutput,
     FetchDetailInput,
@@ -84,13 +84,7 @@ from app.handler import MetabaseHandler  # noqa: F401 — registers handler
 from app.lineage.ars_builder import build_column_process, build_process, process_hash
 from app.lineage.qi_reader import _question_name as _qi_question_name
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
-from app.paths import (
-    PROCESSED_DIR,
-    TRANSFORMED_DIR,
-    default_output_path,
-    processed_file,
-    raw_file,
-)
+from app.paths import TRANSFORMED_DIR, default_output_path, processed_file, raw_file
 from app.residuals import RESIDUAL_DIR
 from app.utils import read_jsonl, write_jsonl
 
@@ -567,10 +561,12 @@ class MetabaseApp(App):
     async def transform_data(self, input: TransformTaskInput) -> TransformTaskOutput:
         """Transform processed JSONL data into Atlas JSON for one asset typename.
 
-        Reads ``<processed_data_path>/processed/<subdir>/result-0.json``,
-        runs each record through a typed pyatlan_v9 asset mapper, and
-        writes the serialized entities to
-        ``<output_path>/transformed/<typename>/result-<chunk>.json``.
+        Reads the enriched records through ``input.processed_file`` — the
+        reference ``process_metabaseprocess`` returned — runs each one
+        through a typed pyatlan_v9 asset mapper, writes the serialized
+        entities to ``<output_path>/transformed/<typename>/result-<chunk>``
+        on this pod, and hands that tree back as a ``FileReference`` for the
+        entrypoint to publish.
 
         Asset-mapper migration: this used to consume YAML + Daft via
         ``MetabaseTransformer``. The new path is pure Python — each
@@ -590,15 +586,19 @@ class MetabaseApp(App):
                 field="output_path",
             )
 
-        subdir = TYPENAME_TO_PROCESS_DIR.get(typename, input.typename.lower())
-        processed_root = input.processed_data_path or input.output_path
-        input_file = os.path.join(
-            processed_root, PROCESSED_DIR, subdir, "result-0.json"
-        )
+        # Read through the reference the producer handed us, not a path
+        # rebuilt from output_path. process_metabaseprocess runs as its own
+        # activity, so its `processed/` tree lives on that activity's pod;
+        # rebuilding the path here found an empty directory — and returned
+        # zero records under a SUCCESS status — whenever the two activities
+        # landed on different pods.
+        input_file = (
+            input.processed_file.local_path if input.processed_file else ""
+        ) or ""
 
         logger.info("transform_data: typename=%s, input_file=%s", typename, input_file)
 
-        records = await self.run_in_thread(read_jsonl, input_file)
+        records = await self.run_in_thread(read_jsonl, input_file) if input_file else []
         if not records:
             logger.info("transform_data: no records found for %s", typename)
             return TransformTaskOutput(typename=typename, record_count=0)
@@ -622,7 +622,14 @@ class MetabaseApp(App):
         )
 
         logger.info("transform_data complete: typename=%s, records=%d", typename, count)
-        return TransformTaskOutput(typename=typename, record_count=count)
+        # Hand the tree back as a reference. The interceptor persists it on
+        # task completion, which is what lets the entrypoint assemble the
+        # published `transformed/` prefix without needing this pod's disk.
+        return TransformTaskOutput(
+            typename=typename,
+            record_count=count,
+            output_file=FileReference.from_local(out_dir, tier=StorageTier.RETAINED),
+        )
 
     # ==================================================================
     # @entrypoint methods
@@ -718,10 +725,12 @@ class MetabaseApp(App):
         )
 
         # --- 6. Enrich --------------------------------------------------
-        # Output (processed/*) is read by transform_data via its
-        # processed_data_path argument; the FetchOutput returned here is
-        # informational.
-        await self.process_metabaseprocess(
+        # The returned ProcessOutput is load-bearing, not informational: its
+        # four `*_processed_file` references are what transform_data reads.
+        # This result used to be discarded and transform_data rebuilt the
+        # path from processed_data_path instead, which only worked while
+        # every activity happened to share one pod's filesystem.
+        processed = await self.process_metabaseprocess(
             ProcessInput(
                 output_path=output_path,
                 collections_filtered_file=filtered.collections_filtered_file,
@@ -746,14 +755,21 @@ class MetabaseApp(App):
         # --- 7. Transform (fan-out) ------------------------------------
         connection_qn = input.connection.attributes.qualified_name
         connection_name = input.connection.attributes.name
-        processed_data_path = input.processed_data_path or output_path
+        # Each typename reads the enriched file its own producer wrote.
+        processed_by_typename: dict[str, FileReference | None] = {
+            "METABASECOLLECTION": processed.collections_processed_file,
+            "METABASEDASHBOARD": processed.dashboards_processed_file,
+            "METABASEQUESTION": processed.questions_processed_file,
+            "BIPROCESS": processed.questions_dashboards_processed_file,
+        }
         total_transformed = 0
+        transformed_refs: list[tuple[str, FileReference]] = []
         for typename in TRANSFORM_ASSET_TYPES:
             stats = await self.transform_data(
                 TransformTaskInput(
                     workflow_id=input.workflow_id,
                     output_path=output_path,
-                    processed_data_path=processed_data_path,
+                    processed_file=processed_by_typename.get(typename),
                     connection_qualified_name=connection_qn,
                     connection_name=connection_name,
                     typename=typename,
@@ -761,15 +777,41 @@ class MetabaseApp(App):
                 )
             )
             total_transformed += stats.record_count
+            if stats.output_file is not None and stats.record_count:
+                transformed_refs.append((typename, stats.output_file))
 
         # --- 8. Upload transformed/ tree -------------------------------
-        transformed_dir = os.path.join(output_path, TRANSFORMED_DIR)
-        transformed_data_prefix = ""
-        if os.path.isdir(transformed_dir):
-            upload = await self.upload(
-                UploadInput(local_path=transformed_dir, tier=StorageTier.RETAINED)
+        # Assembled from what each transform activity actually produced,
+        # rather than from `os.path.join(output_path, TRANSFORMED_DIR)` on
+        # this pod. That directory is written by the transform activities, so
+        # scanning it here saw only the subset that happened to run locally —
+        # and on a fully fanned-out run, nothing at all. An empty
+        # transformed_data_prefix is not a quiet no-op: it is what PublishNode
+        # diffs the tenant against, so it publishes as "delete everything".
+        #
+        # Each ref is re-uploaded under one canonical prefix so PublishNode
+        # still receives a single tree. Passing `ref=` lets the SDK stream
+        # from the deployment store when the local directory is absent on
+        # this pod, which is the normal case once activities are distributed.
+        transformed_data_prefix = (
+            f"artifacts/apps/metabase/workflows/{input.workflow_id}/"
+            f"{self.run_id}/transformed"
+        )
+        for typename, ref in transformed_refs:
+            await self.upload(
+                UploadInput(
+                    ref=ref,
+                    local_path=ref.local_path or "",
+                    storage_path=f"{transformed_data_prefix}/{typename}",
+                    tier=StorageTier.RETAINED,
+                    # A typename that transformed records but uploaded zero
+                    # files is a bug, not a quiet day — fail loudly instead
+                    # of contributing a hole to the published tree.
+                    raise_on_empty=True,
+                )
             )
-            transformed_data_prefix = upload.ref.storage_path or ""
+        if not transformed_refs:
+            transformed_data_prefix = ""
 
         # Upload residual/ (tolerated-failure records — see app/residuals.py)
         # so they survive pod teardown instead of being stranded on ephemeral
@@ -808,7 +850,20 @@ class MetabaseApp(App):
         )
 
         # --- 10. Return -------------------------------------------------
+        # Declare the degradation. `residual_failures` is set only when at
+        # least one tolerated failure was recorded, which means some entities
+        # are absent from this run's output. Reporting SUCCESS with a gap is
+        # how downstream diffing comes to read that gap as an intentional
+        # delete: the `# conformance: ignore[E020]` directives at each call
+        # site sanction *tolerating* the failure, not *claiming the run was
+        # complete*. PARTIAL_SUCCESS is the SDK's channel for exactly this
+        # ("some entities were skipped or degraded" — OutputStatus).
         return MetabaseOutput(
+            status=(
+                OutputStatus.PARTIAL_SUCCESS
+                if residual_failures is not None
+                else OutputStatus.SUCCESS
+            ),
             transformed_data_prefix=transformed_data_prefix,
             connection_qualified_name=connection_qn,
             output_path=output_path,
@@ -848,7 +903,7 @@ class MetabaseApp(App):
         # materialized in _build_process_records and offloaded in one call.
         processes, column_processes = await self.run_in_thread(
             _build_process_records,
-            input.qi_local_path,
+            (input.qi_records.local_path if input.qi_records else "") or "",
             input.connection_qualified_name,
             input.connection_name,
         )
@@ -881,7 +936,7 @@ class MetabaseApp(App):
         )
 
         return BuildLineageOutput(
-            stage_dir=stage_dir,
+            stage=FileReference.from_local(stage_dir, tier=StorageTier.RETAINED),
             process_count=len(processes),
             column_process_count=len(column_processes),
         )
@@ -944,12 +999,17 @@ class MetabaseApp(App):
         # (``$.extract.outputs.view_lineage_output_prefix``); iter_qi_records
         # needs a local path. download() handles a missing prefix gracefully
         # (returns an empty local dir, file_count=0).
-        qi_local_path = ""
+        # Hand the download's reference straight to the task instead of
+        # unwrapping it to a local path here. download() is itself an
+        # activity, so `dl.ref.local_path` names a directory on that
+        # activity's pod; build_lineage_records may run on another, where
+        # the path resolves to nothing and lineage silently comes out empty.
+        qi_records = None
         if input.view_lineage_input_prefix:
             dl = await self.download(
                 DownloadInput(storage_path=input.view_lineage_input_prefix)
             )
-            qi_local_path = dl.ref.local_path or ""
+            qi_records = dl.ref
 
         # File I/O (read QI NDJSON, write Process/ColumnProcess staging) is
         # delegated to build_lineage_records — the workflow sandbox forbids
@@ -957,17 +1017,29 @@ class MetabaseApp(App):
         build = await self.build_lineage_records(
             BuildLineageInput(
                 output_path=output_path,
-                qi_local_path=qi_local_path,
+                qi_records=qi_records,
                 connection_qualified_name=connection_qn,
                 connection_name=connection_name,
             )
         )
 
         # Upload lineage-stage/ to object store at the canonical prefix.
+        # Passing `ref=` lets the SDK stream from the deployment store when
+        # the staging directory is not on this pod — the task that wrote it
+        # is a separate activity.
         lineage_stage_prefix = ""
-        if build.stage_dir:
+        if build.stage is not None and (
+            build.process_count or build.column_process_count
+        ):
             upload = await self.upload(
-                UploadInput(local_path=build.stage_dir, tier=StorageTier.RETAINED)
+                UploadInput(
+                    ref=build.stage,
+                    local_path=build.stage.local_path or "",
+                    tier=StorageTier.RETAINED,
+                    # Records were built, so an empty upload means they never
+                    # reached the store — a hole in lineage, not a quiet day.
+                    raise_on_empty=True,
+                )
             )
             lineage_stage_prefix = upload.ref.storage_path or ""
 

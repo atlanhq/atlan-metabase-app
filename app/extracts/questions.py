@@ -53,7 +53,7 @@ async def fetch_questions_summaries(
             endpoint="/api/card",
             http_status=status if isinstance(status, int) else None,
         )
-        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow.
+        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow; the run declares the resulting gap as OutputStatus.PARTIAL_SUCCESS (connector.py step 10), so a tolerated failure is never published as a complete run.
         return []
     records = response.json()
     logger.info("Fetched %d question summaries", len(records))
@@ -140,7 +140,7 @@ async def fetch_question_queries_single(
                 record_id=question_id,
                 http_status=status if isinstance(status, int) else None,
             )
-            # conformance: ignore[E020] deliberate best-effort per-question skip (FailureHandler.NONE equivalent), recorded to residual/failures.jsonl — one bad question must not abort the whole batch.
+            # conformance: ignore[E020] deliberate best-effort per-question skip (FailureHandler.NONE equivalent), recorded to residual/failures.jsonl — one bad question must not abort the whole batch; the run declares the resulting gap as OutputStatus.PARTIAL_SUCCESS (connector.py step 10), so a tolerated failure is never published as a complete run.
             return None
         data = response.json()
         query = data.get("query")

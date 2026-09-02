@@ -55,7 +55,7 @@ async def fetch_databases_summaries(
             endpoint="/api/database",
             http_status=status if isinstance(status, int) else None,
         )
-        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow.
+        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow; the run declares the resulting gap as OutputStatus.PARTIAL_SUCCESS (connector.py step 10), so a tolerated failure is never published as a complete run.
         return []
     records = response.json().get("data", [])
     logger.info("Fetched %d databases", len(records))
@@ -130,7 +130,7 @@ async def fetch_database_metadata(
             record_id=database_id,
             http_status=status if isinstance(status, int) else None,
         )
-        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the batch.
+        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the batch; the run declares the resulting gap as OutputStatus.PARTIAL_SUCCESS (connector.py step 10), so a tolerated failure is never published as a complete run.
         return None
     return response.json()
 

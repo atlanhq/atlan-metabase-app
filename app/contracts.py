@@ -124,10 +124,6 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
       2. ``credential_guid`` (str) — legacy GUID, resolved from secret store.
       3. ``credentials`` (list[{key,value}] or dict) — inline local-dev path.
 
-    ``processed_data_path`` is retained for the rare case where transform
-    is re-run against a pre-existing ``processed/`` tree (e.g. for
-    debugging); when empty it defaults to ``output_path``.
-
     ``allow_unbounded_fields`` is required for ``credentials: list[dict[str,
     Any]] | dict[str, Any]`` — this is an ``@entrypoint`` contract, so B005
     (NonAdditiveContractChange) blocks narrowing an existing field's value
@@ -165,8 +161,15 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
         "include_collections", "exclude_collections", mode="before"
     )(_coerce_collection_filter)
 
+    # conformance: ignore[P012] local scratch base for the run's own writes, not a cross-worker reference; every task-to-task hand-off travels as a FileReference. Not supplied by the orchestrator either — see the manifest's extract args.
     output_path: str = ""
     output_prefix: str = ""
+    # Vestigial. Nothing reads this any more: transform_data takes the
+    # producer's `processed_file` reference instead of rebuilding a path
+    # under here. It stays declared only because B005 blocks removing an
+    # active field from an @entrypoint contract's ledger — verified by
+    # deleting it and watching the check fail. Do not thread it anywhere.
+    # conformance: ignore[P012] vestigial and unread; retained solely because B005 forbids removing an active entrypoint-contract field. See the note above.
     processed_data_path: str = ""
     chunk_start: int = 0
 
@@ -199,6 +202,7 @@ class MetabaseOutput(Output):
 
     transformed_data_prefix: str = ""
     connection_qualified_name: str = ""
+    # conformance: ignore[P012] echoed back for debugging only — no DAG node reads it (see app/generated/manifest.json for the fields that are JSONPath-threaded) and nothing resolves it as a path.
     output_path: str = ""
     view_lineage_output_prefix: str = ""
     publish_state_prefix: str = ""
@@ -236,6 +240,7 @@ class MetabaseLineageInput(Input):
     view_lineage_input_prefix: str = ""
 
     # Where to write the Process / ColumnProcess NDJSON.
+    # conformance: ignore[P012] local scratch base for this task's own writes. A task needs *a* writable directory on its own pod, not the producer's; every task-to-task hand-off in this module travels as a FileReference.
     output_path: str = ""
     output_prefix: str = ""
 
@@ -272,6 +277,7 @@ class FetchInput(Input):
     only be reachable inside one activity context.
     """
 
+    # conformance: ignore[P012] local scratch base for this task's own writes. A task needs *a* writable directory on its own pod, not the producer's; every task-to-task hand-off in this module travels as a FileReference.
     output_path: str = ""
     credential_ref: CredentialRef | None = None
     inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
@@ -293,6 +299,7 @@ class FilterInput(Input):
     ``FileReference`` referenced here before the task runs.
     """
 
+    # conformance: ignore[P012] local scratch base for this task's own writes. A task needs *a* writable directory on its own pod, not the producer's; every task-to-task hand-off in this module travels as a FileReference.
     output_path: str = ""
     include_collections: CollectionFilter = Field(default_factory=dict)
     exclude_collections: CollectionFilter = Field(default_factory=dict)
@@ -322,6 +329,7 @@ class FilterOutput(Output):
 class FetchDetailInput(Input):
     """Input for tasks that fetch per-entity detail from a filtered file."""
 
+    # conformance: ignore[P012] local scratch base for this task's own writes. A task needs *a* writable directory on its own pod, not the producer's; every task-to-task hand-off in this module travels as a FileReference.
     output_path: str = ""
     source_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
@@ -336,6 +344,7 @@ class ProcessInput(Input):
     inline) stays consistent with every other task.
     """
 
+    # conformance: ignore[P012] local scratch base for this task's own writes. A task needs *a* writable directory on its own pod, not the producer's; every task-to-task hand-off in this module travels as a FileReference.
     output_path: str = ""
     collections_filtered_file: FileReference | None = None
     databases_filtered_file: FileReference | None = None
@@ -365,10 +374,17 @@ class BuildLineageInput(Input):
     built-in ``open()``.
     """
 
+    # Local scratch base for this task's own writes. A bare str is correct
+    # here: the task needs *a* writable directory on its own pod, not the
+    # producer's. Nothing reads across pods through this field.
+    # conformance: ignore[P012] local scratch base for this task's own writes. A task needs *a* writable directory on its own pod, not the producer's; every task-to-task hand-off in this module travels as a FileReference.
     output_path: str = ""
-    # Local directory holding QI parsed-SQL NDJSON (already downloaded from
-    # ``view_lineage_input_prefix`` by the entrypoint).
-    qi_local_path: str = ""
+    # QI parsed-SQL NDJSON, downloaded by the entrypoint from
+    # ``view_lineage_input_prefix``. Carried as a FileReference, not a local
+    # path string: the download runs as its own activity, so its local
+    # directory exists on that activity's pod and this task may run on
+    # another. The interceptor materialises the ref before the task body runs.
+    qi_records: FileReference | None = None
     connection_qualified_name: str = ""
     connection_name: str = ""
 
@@ -376,7 +392,11 @@ class BuildLineageInput(Input):
 class BuildLineageOutput(Output):
     """Output for ``build_lineage_records``."""
 
-    stage_dir: str = ""
+    # The staged lineage tree, as a reference rather than a local path: the
+    # entrypoint uploads it, and the entrypoint does not share this task's
+    # filesystem. The interceptor persists the ref when the task completes,
+    # so the upload has a durable source even cross-pod.
+    stage: FileReference | None = None
     process_count: int = 0
     column_process_count: int = 0
 
@@ -385,8 +405,16 @@ class TransformTaskInput(Input):
     """Input for ``transform_data`` — runs once per asset typename."""
 
     workflow_id: str = ""
+    # Local scratch base for this task's own writes — see BuildLineageInput.
+    # conformance: ignore[P012] local scratch base for this task's own writes. A task needs *a* writable directory on its own pod, not the producer's; every task-to-task hand-off in this module travels as a FileReference.
     output_path: str = ""
-    processed_data_path: str = ""
+    # The enriched records this typename transforms, produced by
+    # ``process_metabaseprocess``. Carried as a FileReference because that is
+    # a different activity on a possibly different pod; reconstructing
+    # ``<processed_data_path>/processed/<subdir>/result-0.json`` read the
+    # producer's local path and silently found nothing whenever the two
+    # activities did not share a filesystem.
+    processed_file: FileReference | None = None
     connection_qualified_name: str = ""
     connection_name: str = ""
     typename: str = ""
@@ -398,6 +426,13 @@ class TransformTaskOutput(Output):
 
     typename: str = ""
     record_count: int = 0
+    # This typename's transformed tree. Returned as a reference so the
+    # interceptor persists it when the task completes; the entrypoint then
+    # consolidates every typename's ref into the single ``transformed/``
+    # prefix PublishNode reads. Previously the entrypoint uploaded whatever
+    # happened to be on its OWN pod, which is empty when the transform
+    # activities ran elsewhere.
+    output_file: FileReference | None = None
 
 
 # Mapping from transformer typename to subdirectory under ``processed/``.

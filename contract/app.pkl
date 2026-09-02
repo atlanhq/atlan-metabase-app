@@ -148,6 +148,63 @@ deploy = new DeployConfig {
 // (default-on in App.pkl@0.10.0).
 workflowType = "metabase:extract-metadata"
 
+// ---- Artifact schemas -------------------------------------------------
+//
+// Declares the shape of each FileReference an entrypoint contract hands
+// off, so a producer/consumer disagreement fails loudly at the hand-off
+// instead of silently reporting success (conformance K016).
+//
+// Declared at the TOP LEVEL because this app deliberately stays in
+// single-entrypoint contract mode — no `entrypoints` listing, see the
+// Entrypoints note at the top of this file. App.pkl throws if
+// `artifactSchemas` is set on a multi-entrypoint bundle root, so this
+// placement and that decision are coupled: adopting an explicit
+// `entrypoints {}` listing means moving this onto the entrypoint's
+// `contract`.
+//
+// The field list is read off the artifact's only writer —
+// `record_residual_failure` (app/residuals.py) — and all nine of its call
+// sites under app/extracts/, NOT inferred from the contract class. The
+// three optional/absent cases below are each a real call site, not a
+// hedge.
+artifactSchemas {
+  ["residual_failures"] = new ArtifactSchema {
+    // One orjson record per line (app/residuals.py). This is the content
+    // format; the SDK conventionally writes NDJSON with a .json suffix.
+    format = "ndjson"
+    description = "One record per tolerated (non-fatal) extract failure, written alongside raw/processed/transformed so tolerated failures are reviewable after the run instead of only appearing in pod logs."
+    fields {
+      new ArtifactField {
+        name = "timestamp"
+        type = "timestamp"
+        description = "UTC instant the failure was recorded, as ISO-8601 from datetime.now(timezone.utc).isoformat()."
+      }
+      new ArtifactField {
+        name = "category"
+        type = "string"
+        description = "Machine-readable failure category, e.g. dashboard_detail_fetch_failed — the key a reviewer groups and counts by."
+      }
+      new ArtifactField {
+        name = "endpoint"
+        type = "string"
+        description = "Metabase API path whose call failed, e.g. /api/dashboard. Passed by every call site."
+      }
+      new ArtifactField {
+        name = "http_status"
+        type = "int"
+        required = false
+        description = "HTTP status when the response carried one; null when there was no usable response, and absent entirely for question_query_fetch_errored, which records no status."
+      }
+      new ArtifactField {
+        name = "record_id"
+        type = "int"
+        required = false
+        description = "Metabase integer ID of the one record that failed; absent for list-level failures (collections/dashboards/questions/databases fetch) where no single record is to blame."
+      }
+    }
+  }
+}
+
 // ---- Pipeline (5-node DAG, ARS 2.0 publish) ---------------------------
 //
 //   extract            (this app's `extract_metadata` @entrypoint)
