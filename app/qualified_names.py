@@ -43,6 +43,7 @@ def question_qn(connection_qn: str, question_id: Any) -> str:
 
 
 def bi_process_qn(connection_qn: str, question_id: Any) -> str:
+    # conformance: ignore[P028] bespoke BIProcess qualifiedName (questions_dashboards/{id}) — no pyatlan_v9 creator owns this grammar (the string appears nowhere in pyatlan_v9); centralised here as the single source of truth.
     return f"{connection_qn}/questions_dashboards/{question_id}"
 
 

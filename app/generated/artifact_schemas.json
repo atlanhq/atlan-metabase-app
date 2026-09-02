@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "schemas": {
+    "residual_failures": {
+      "format": "ndjson",
+      "description": "One record per tolerated (non-fatal) extract failure, written alongside raw/processed/transformed so tolerated failures are reviewable after the run instead of only appearing in pod logs.",
+      "fields": [
+        {
+          "name": "timestamp",
+          "type": "timestamp",
+          "required": true,
+          "description": "UTC instant the failure was recorded, as ISO-8601 from datetime.now(timezone.utc).isoformat()."
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "Machine-readable failure category, e.g. dashboard_detail_fetch_failed — the key a reviewer groups and counts by."
+        },
+        {
+          "name": "endpoint",
+          "type": "string",
+          "required": true,
+          "description": "Metabase API path whose call failed, e.g. /api/dashboard. Passed by every call site."
+        },
+        {
+          "name": "http_status",
+          "type": "int",
+          "required": false,
+          "description": "HTTP status when the response carried one; null when there was no usable response, and absent entirely for question_query_fetch_errored, which records no status."
+        },
+        {
+          "name": "record_id",
+          "type": "int",
+          "required": false,
+          "description": "Metabase integer ID of the one record that failed; absent for list-level failures (collections/dashboards/questions/databases fetch) where no single record is to blame."
+        }
+      ]
+    }
+  }
+}
