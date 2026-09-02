@@ -47,8 +47,6 @@ from app.contracts import (
     TransformTaskInput,
     TransformTaskOutput,
 )
-
-
 from app.errors import MissingOutputPathInputError, MissingTypenameInputError
 
 
@@ -870,12 +868,12 @@ class TestRunInThreadOffload:
             await app.filter_data(input_obj)
 
         offloaded = [c.args[0] for c in mock_run_in_thread.call_args_list]
-        assert offloaded.count(read_jsonl) == 4, (
-            "filter_data must read all four raw files via self.run_in_thread"
-        )
-        assert offloaded.count(write_jsonl) == 4, (
-            "filter_data must write all four filtered files via self.run_in_thread"
-        )
+        assert (
+            offloaded.count(read_jsonl) == 4
+        ), "filter_data must read all four raw files via self.run_in_thread"
+        assert (
+            offloaded.count(write_jsonl) == 4
+        ), "filter_data must write all four filtered files via self.run_in_thread"
 
     @pytest.mark.asyncio
     async def test_build_lineage_records_offloads_qi_parsing(self, tmp_path):

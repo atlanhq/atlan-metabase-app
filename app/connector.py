@@ -84,12 +84,7 @@ from app.handler import MetabaseHandler  # noqa: F401 — registers handler
 from app.lineage.ars_builder import build_column_process, build_process, process_hash
 from app.lineage.qi_reader import _question_name as _qi_question_name
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
-from app.paths import (
-    TRANSFORMED_DIR,
-    default_output_path,
-    processed_file,
-    raw_file,
-)
+from app.paths import TRANSFORMED_DIR, default_output_path, processed_file, raw_file
 from app.residuals import RESIDUAL_DIR
 from app.utils import read_jsonl, write_jsonl
 
