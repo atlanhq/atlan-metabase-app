@@ -46,6 +46,7 @@ deploy:
     ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS: '86400'
     ATLAN_TENANT_ID: default
     APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR: 'false'
+  terminationGracePeriodSeconds: 86400
 pools:
   default:
     replicaCount: 1
