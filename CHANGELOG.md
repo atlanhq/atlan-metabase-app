@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.3.1 (September 04, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.3.0...v2.3.1
+
+### Bug Fixes
+
+- unpin the yanked pytest-timeout 2.5.0 (FND-379) (#350) (by @cmgrote in [760f161](https://github.com/atlanhq/atlan-metabase-app/commit/760f161))
+- report Release Gate on merge-queue branches (FND-851) (#361) (by @cmgrote in [f5c1adb](https://github.com/atlanhq/atlan-metabase-app/commit/f5c1adb))
+- local review kit v2 — real L1 run, diff-scoped gate, precise commit match (#368) (by @chetanchoudhary-atlan in [a489134](https://github.com/atlanhq/atlan-metabase-app/commit/a489134))
+- set terminationGracePeriodSeconds to 24h to cover longest activity (#413) (by @SanilK2108 in [0fa52ea](https://github.com/atlanhq/atlan-metabase-app/commit/0fa52ea))
+
+
 ## v2.3.0 (August 12, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.3...v2.3.0
