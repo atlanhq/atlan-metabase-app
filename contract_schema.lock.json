@@ -307,6 +307,12 @@
       "type": "str"
     },
     {
+      "contract": "MetabaseInput",
+      "field": "workflow_slug",
+      "status": "active",
+      "type": "str"
+    },
+    {
       "contract": "MetabaseLineageInput",
       "field": "app_name",
       "status": "active",
@@ -351,6 +357,12 @@
     {
       "contract": "MetabaseLineageInput",
       "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "MetabaseLineageInput",
+      "field": "workflow_slug",
       "status": "active",
       "type": "str"
     },
