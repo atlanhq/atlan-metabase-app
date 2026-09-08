@@ -141,7 +141,7 @@ def build_credential_ref(
       SDK, which inspects ``input.extraction_method`` + ``input.agent_json``
       + ``input.credential_guid`` and returns the right ref for either
       direct or agent mode. Mysql gets this same routing for free via its
-      SDK base class (:meth:`SQLAppE2ETest._resolve_credential_ref`);
+      SDK base class (:meth:`SQLAppE2ETest.resolve_credential_ref`);
       metabase wires it in explicitly here because the REST connector has
       no equivalent SDK base. Also handles the PKL-contract path
       (``input.metabase_credential``) for backward compat.
