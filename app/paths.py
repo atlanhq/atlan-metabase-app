@@ -43,3 +43,23 @@ def raw_file(output_path: str, name: str) -> str:
 def processed_file(output_path: str, name: str) -> str:
     """Return the path of a ``processed/<name>/result-0.json`` JSONL file."""
     return os.path.join(output_path, PROCESSED_DIR, name, "result-0.json")
+
+
+def transformed_leaf(typename: str, chunk_start: int) -> str:
+    """Return the ``<TYPENAME>/result-<chunk>.json`` leaf of a transformed file.
+
+    This is the key shape PublishNode reads, expressed once.
+    ``transform_data`` joins it under ``<output_path>/transformed/`` to
+    write the file; ``extract_metadata`` reuses it verbatim as the
+    ``DeclaredFile`` label so the delivered object-store key matches the
+    local tree. Built with an explicit ``/`` rather than ``os.path.join``
+    because it is an object-store key, not a filesystem path.
+    """
+    return f"{typename}/result-{chunk_start}.json"
+
+
+def transformed_file(output_path: str, typename: str, chunk_start: int) -> str:
+    """Return the local path of one ``transformed/<TYPENAME>/result-<chunk>.json``."""
+    return os.path.join(
+        output_path, TRANSFORMED_DIR, typename, f"result-{chunk_start}.json"
+    )

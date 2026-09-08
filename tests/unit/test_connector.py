@@ -19,11 +19,20 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import obstore
 import pytest
+from application_sdk.app.context import AppContext
 from application_sdk.contracts.base import OutputStatus
-from application_sdk.contracts.types import ConnectionRef, FileReference
+from application_sdk.contracts.storage import (
+    DeclaredFile,
+    UploadRefsInput,
+    UploadRefsOutput,
+)
+from application_sdk.contracts.types import ConnectionRef, FileReference, StorageTier
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors import InvalidInputError
+from application_sdk.storage.errors import StorageNotFoundError
+from obstore.store import MemoryStore
 
 from app.connector import (
     MetabaseApp,
@@ -48,6 +57,31 @@ from app.contracts import (
     TransformTaskOutput,
 )
 from app.errors import MissingOutputPathInputError, MissingTypenameInputError
+from app.paths import transformed_file, transformed_leaf
+
+
+def _fake_upload_refs(input: UploadRefsInput) -> UploadRefsOutput:
+    """Stand in for the SDK's ``App.upload_refs`` fan-in task.
+
+    A real ``UploadRefsOutput`` rather than a MagicMock: the entrypoint
+    hands ``prefix`` straight into ``MetabaseOutput.transformed_data_prefix``,
+    and the behaviour that matters at this seam is the empty-declaration
+    case answering with an **empty** prefix — a present-but-empty tree is
+    what PublishNode diffs as "delete everything". The per-file rules
+    (``raise_on_empty``, verifying the delivery back against the
+    declaration) live in the SDK task and are covered by its own tests;
+    what these tests own is the declaration this app hands it.
+    """
+    if not input.files:
+        return UploadRefsOutput()
+    return UploadRefsOutput(
+        prefix=input.prefix,
+        refs=[
+            FileReference(storage_path=f"{input.prefix}/{declared.label}", file_count=1)
+            for declared in input.files
+        ],
+        file_count=len(input.files),
+    )
 
 
 def _fake_process_output() -> ProcessOutput:
@@ -565,12 +599,15 @@ class TestTransformDataTask:
             entity["attributes"]["qualifiedName"]
             == "default/metabase/test/collections/1"
         )
-        # The tree is handed back as a reference so the interceptor can
-        # persist it; the entrypoint must not have to find it on disk.
+        # The FILE this task wrote is handed back as a reference so the
+        # interceptor can persist it, and so the entrypoint's fan-in can
+        # verify the delivery against it. A directory reference would
+        # over-declare — ``transformed/<typename>/`` accumulates every chunk
+        # that ran on this pod — and names a prefix, which a HEAD cannot
+        # confirm.
         assert out.output_file is not None
-        assert out.output_file.local_path == str(
-            tmp_path / "transformed" / "METABASECOLLECTION"
-        )
+        assert out.output_file.local_path == str(out_file)
+        assert out.output_file.file_count == 1
 
     @pytest.mark.asyncio
     async def test_reads_processed_file_from_reference_not_a_derived_path(
@@ -996,6 +1033,7 @@ class TestExtractMetadataOrchestration:
         type(app).run_id = property(lambda _self: "run-xyz")  # type: ignore[misc]
         # Bypass self.upload() context dependency.
         app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
+        app.upload_refs = AsyncMock(side_effect=_fake_upload_refs)
 
         out = await app.extract_metadata(metabase_input)  # type: ignore[call-arg]
 
@@ -1061,6 +1099,7 @@ class TestExtractMetadataOrchestration:
             return MagicMock(ref=MagicMock(storage_path=""))
 
         app.upload = AsyncMock(side_effect=fake_upload)
+        app.upload_refs = AsyncMock(side_effect=_fake_upload_refs)
 
         out = await app.extract_metadata(metabase_input)  # type: ignore[call-arg]
 
@@ -1118,6 +1157,7 @@ class TestExtractMetadataOrchestration:
                 ),
             )
         app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
+        app.upload_refs = AsyncMock(side_effect=_fake_upload_refs)
         inp = MetabaseInput(workflow_id="wf-1", connection=connection)
         out = await app.extract_metadata(inp)  # type: ignore[call-arg]
         # output_path defaulted under our patched tempdir.
@@ -1167,20 +1207,23 @@ class TestExtractMetadataOrchestration:
         elsewhere = tmp_path / "another-pod" / "transformed"
 
         async def fake_transform_data(input):
-            # Real side effect: write one Atlas JSON file, same as the real
-            # @task would for a typename that had processed records.
+            # Real side effect: write one Atlas JSON file and declare it, same
+            # as the real @task would for a typename that had processed
+            # records.
             typename_dir = elsewhere / input.typename
             typename_dir.mkdir(parents=True, exist_ok=True)
-            (typename_dir / "result-0.json").write_text('{"typeName": "x"}\n')
+            written = typename_dir / f"result-{input.chunk_start}.json"
+            written.write_text('{"typeName": "x"}\n')
             return TransformTaskOutput(
                 typename=input.typename,
                 record_count=1,
-                output_file=FileReference(local_path=str(typename_dir)),
+                output_file=FileReference(local_path=str(written)),
             )
 
         app.transform_data = AsyncMock(side_effect=fake_transform_data)
         type(app).run_id = property(lambda _self: "run-xyz")  # type: ignore[misc]
         app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
+        app.upload_refs = AsyncMock(side_effect=_fake_upload_refs)
 
         out = await app.extract_metadata(metabase_input)  # type: ignore[call-arg]
 
@@ -1189,22 +1232,189 @@ class TestExtractMetadataOrchestration:
         assert not (Path(metabase_input.output_path) / "transformed").exists()
         assert out.transformed_data_prefix.endswith("/run-xyz/transformed")
 
-        # Every typename that produced records was uploaded, each under the
-        # one canonical prefix so PublishNode still receives a single tree.
-        destinations = {
-            c.args[0].storage_path
-            for c in app.upload.await_args_list
-            if c.args[0].storage_path
+        # The declaration handed to the framework fan-in task is exactly what
+        # the transform tasks returned: one entry per typename that produced
+        # records, each labelled with the leaf its producer wrote, so
+        # ``upload_refs`` lands it at
+        # ``{prefix}/{typename}/result-{chunk}.json`` — the same tree
+        # PublishNode has always read.
+        app.upload_refs.assert_awaited_once()
+        declaration = app.upload_refs.await_args_list[0].args[0]
+        assert declaration.prefix == out.transformed_data_prefix
+        chunk = metabase_input.chunk_start
+        assert {d.label for d in declaration.files} == {
+            f"{t}/result-{chunk}.json" for t in TRANSFORM_ASSET_TYPES
         }
-        assert destinations == {
-            f"{out.transformed_data_prefix}/{t}" for t in TRANSFORM_ASSET_TYPES
+        # The refs are the objects the tasks handed back, not paths rebuilt
+        # from output_path — that rebuild is the cross-pod hole this test
+        # exists to hold shut.
+        assert {d.ref.local_path for d in declaration.files} == {
+            str(elsewhere / t / f"result-{chunk}.json") for t in TRANSFORM_ASSET_TYPES
         }
-        # An empty upload here would be a hole in the published tree.
-        assert all(
-            c.args[0].raise_on_empty
-            for c in app.upload.await_args_list
-            if c.args[0].storage_path
+        # ``raise_on_empty`` per file and verifying the delivery back against
+        # the declaration are now the SDK task's job, not this app's — see
+        # ``App.upload_refs`` and its tests in application-sdk. This app is
+        # no longer able to forget them.
+
+    @pytest.mark.asyncio
+    async def test_empty_transform_declaration_yields_empty_prefix(
+        self, metabase_input, tmp_path
+    ):
+        """No transformed records must surface as an **absent** prefix.
+
+        PublishNode diffs the tenant against ``transformed_data_prefix``, so
+        a prefix naming an empty tree publishes as "delete every asset". The
+        app therefore hands ``upload_refs`` an empty declaration and returns
+        the empty prefix it answers with, rather than the prefix it computed.
+        """
+        app = MetabaseApp()
+        fake_fetch = MagicMock(
+            output_file=FileReference(local_path="/tmp/x.json"),
+            record_count=0,
+            typename="t",
         )
+        fake_filter = MagicMock(
+            collections_filtered_file=FileReference(local_path="/tmp/c.json"),
+            dashboards_filtered_file=FileReference(local_path="/tmp/d.json"),
+            questions_filtered_file=FileReference(local_path="/tmp/q.json"),
+            databases_filtered_file=FileReference(local_path="/tmp/db.json"),
+            total_records=0,
+        )
+        app.extract_collections = AsyncMock(return_value=fake_fetch)
+        app.extract_dashboards = AsyncMock(return_value=fake_fetch)
+        app.extract_questions = AsyncMock(return_value=fake_fetch)
+        app.extract_databases = AsyncMock(return_value=fake_fetch)
+        app.filter_data = AsyncMock(return_value=fake_filter)
+        app.extract_individual_dashboards = AsyncMock(return_value=fake_fetch)
+        app.extract_individual_databases = AsyncMock(return_value=fake_fetch)
+        app.fetch_question_queries_activity = AsyncMock(return_value=fake_fetch)
+        app.process_metabaseprocess = AsyncMock(return_value=_fake_process_output())
+        # Every typename transformed zero records, so nothing is declared.
+        app.transform_data = AsyncMock(
+            side_effect=lambda input: TransformTaskOutput(
+                typename=input.typename, record_count=0
+            )
+        )
+        type(app).run_id = property(lambda _self: "run-empty")  # type: ignore[misc]
+        app.upload = AsyncMock(return_value=MagicMock(ref=MagicMock(storage_path="")))
+        app.upload_refs = AsyncMock(side_effect=_fake_upload_refs)
+
+        out = await app.extract_metadata(metabase_input)  # type: ignore[call-arg]
+
+        assert app.upload_refs.await_args_list[0].args[0].files == []
+        assert out.transformed_data_prefix == ""
+        assert out.total_records == 0
+
+
+# ---------------------------------------------------------------------------
+# transformed/ fan-in through the REAL App.upload_refs
+# ---------------------------------------------------------------------------
+
+
+class TestTransformedFanInAgainstARealStore:
+    """The one test that does NOT mock ``App.upload_refs``.
+
+    Every other orchestration test stubs the framework task, so none of them
+    can see whether the declaration this app builds is one the task can
+    actually deliver and verify. ``upload_refs`` checks its delivery back
+    against the declaration by ``storage_path``, and a declared *directory*
+    (a prefix, not an object) is not something that check can confirm — so a
+    declaration of the wrong shape fails the whole run at the handoff, with
+    every mocked test still green.
+
+    An in-process ``MemoryStore`` makes that seam cheap enough to assert here
+    rather than only in the Docker-gated integration leg.
+    """
+
+    @staticmethod
+    def _app(store):
+        app = MetabaseApp()
+        app._context = AppContext(
+            app_name="metabase",
+            app_version="1",
+            run_id="run-1",
+            workflow_id="wf-1",
+            _storage=store,
+        )
+        return app
+
+    @pytest.mark.asyncio
+    async def test_declaration_lands_and_verifies_at_the_published_key_shape(
+        self, tmp_path
+    ):
+        store = MemoryStore()
+        app = self._app(store)
+
+        # Exactly what transform_data produces: one file per typename, at the
+        # leaf both sides name through app.paths.transformed_leaf.
+        typenames = ("METABASECOLLECTION", "METABASEQUESTION")
+        declared = []
+        for typename in typenames:
+            local = Path(transformed_file(str(tmp_path), typename, 0))
+            local.parent.mkdir(parents=True, exist_ok=True)
+            local.write_text('{"typeName": "x"}\n')
+            declared.append(
+                DeclaredFile(
+                    ref=FileReference.from_local(str(local), tier=StorageTier.RETAINED),
+                    label=transformed_leaf(typename, 0),
+                )
+            )
+
+        prefix = "artifacts/apps/metabase/workflows/wf-1/run-1/transformed"
+        # No exception here IS the assertion: upload_refs verifies its own
+        # delivery against the declaration before returning.
+        out = await app.upload_refs(
+            UploadRefsInput(files=declared, prefix=prefix, tier=StorageTier.RETAINED)
+        )
+
+        assert out.prefix == prefix
+        assert out.file_count == len(typenames)
+
+        keys = sorted(
+            str(entry["path"])
+            for page in await obstore.list(store).collect_async()
+            for entry in (page if isinstance(page, list) else [page])
+        )
+        # The typename segment survives: publish walks
+        # <prefix>/<TYPENAME>/result-<chunk>.json, and a flattened or
+        # reshaped tree is the failure this shape exists to prevent.
+        assert [k for k in keys if k.endswith(".json")] == [
+            f"{prefix}/{t}/result-0.json" for t in typenames
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_declared_file_that_was_never_written_fails_the_handoff(
+        self, tmp_path
+    ):
+        """A declaration the store cannot satisfy fails loudly.
+
+        The hand-rolled loop this replaced made no such assertion: a ref
+        pointing at a key nothing wrote contributed nothing and the run
+        returned a populated prefix anyway — a tree short by one entity,
+        indistinguishable to publish from a run that had one fewer.
+        """
+        app = self._app(MemoryStore())
+        # Neither on this pod's disk nor in the store — the shape a lost
+        # transform output takes by the time the fan-in reads it.
+        missing = FileReference(
+            local_path=str(tmp_path / "never-written.json"),
+            storage_path="file_refs/never-written.json",
+            file_count=1,
+        )
+
+        with pytest.raises(StorageNotFoundError, match="never-written.json"):
+            await app.upload_refs(
+                UploadRefsInput(
+                    files=[
+                        DeclaredFile(
+                            ref=missing,
+                            label=transformed_leaf("METABASECOLLECTION", 0),
+                        )
+                    ],
+                    prefix="artifacts/apps/metabase/workflows/wf-1/run-1/transformed",
+                    tier=StorageTier.RETAINED,
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
