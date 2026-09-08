@@ -180,3 +180,5 @@ docker build --no-cache -t atlan-metabase-app:latest .
 ```
 
 In production the SDK runtime is invoked via `ATLAN_APP_MODULE=app.connector:MetabaseApp` (set in `atlan.yaml` → `deploy.env`); the image is built from `Dockerfile` by the shared build-and-publish workflow.
+
+<!-- endor scan smoke test 2026-09-08T12:49:32Z -->
