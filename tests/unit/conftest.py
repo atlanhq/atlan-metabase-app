@@ -1,6 +1,17 @@
 """Shared pytest fixtures and configuration for unit tests."""
 
-from unittest.mock import patch
+import os
+
+# Unit tests must never attempt an object-store metric flush. The SDK's
+# observability store sink resolves a Dapr ``objectstore`` component, which
+# does not exist in a unit run; its retry warning is emitted from a background
+# thread after pytest has closed its streams, and surfaces as a "Logging error
+# in Loguru Handler" traceback that reads like a test failure. The flag is read
+# into a module constant on first ``application_sdk`` import, so it has to be
+# set here at conftest import time rather than in a fixture.
+os.environ.setdefault("ATLAN_ENABLE_OBSERVABILITY_STORE_SINK", "false")
+
+from unittest.mock import patch  # noqa: E402 — must follow the env var above
 
 import pytest
 

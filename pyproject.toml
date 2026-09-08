@@ -7,7 +7,9 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
-    "atlan-application-sdk[iam-auth,pandas,tests,workflows]>=3.27.1,<4.0.0",
+    # >=3.33.2 for App.upload_refs — the framework fan-in task that replaced
+    # this app's hand-rolled transformed/ upload loop (application-sdk #3700).
+    "atlan-application-sdk[iam-auth,pandas,tests,workflows]>=3.33.2,<4.0.0",
 ]
 
 [dependency-groups]

@@ -78,7 +78,8 @@ deploy = new DeployConfig {
   // Dapr sidecars enabled (app-wide, not per-pool). secretstore is needed for
   // credential resolution (CredentialRef → raw creds via
   // self.context.resolve_credential_raw). objectstore is enabled because
-  // the app uploads transformed/ + lineage-stage/ via self.upload(...).
+  // the app uploads transformed/ via self.upload_refs(...) and
+  // lineage-stage/ + residual/ via self.upload(...).
   dapr {
     objectstore = true
     secretstore = true

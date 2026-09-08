@@ -22,7 +22,12 @@ from typing import Any
 import orjson
 from application_sdk.app import App, entrypoint, task
 from application_sdk.contracts.base import OutputStatus
-from application_sdk.contracts.storage import DownloadInput, UploadInput
+from application_sdk.contracts.storage import (
+    DeclaredFile,
+    DownloadInput,
+    UploadInput,
+    UploadRefsInput,
+)
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -84,7 +89,13 @@ from app.handler import MetabaseHandler  # noqa: F401 — registers handler
 from app.lineage.ars_builder import build_column_process, build_process, process_hash
 from app.lineage.qi_reader import _question_name as _qi_question_name
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
-from app.paths import TRANSFORMED_DIR, default_output_path, processed_file, raw_file
+from app.paths import (
+    default_output_path,
+    processed_file,
+    raw_file,
+    transformed_file,
+    transformed_leaf,
+)
 from app.residuals import RESIDUAL_DIR
 from app.utils import read_jsonl, write_jsonl
 
@@ -603,9 +614,8 @@ class MetabaseApp(App):
             logger.info("transform_data: no records found for %s", typename)
             return TransformTaskOutput(typename=typename, record_count=0)
 
-        out_dir = os.path.join(input.output_path, TRANSFORMED_DIR, typename)
-        os.makedirs(out_dir, exist_ok=True)
-        out_file = os.path.join(out_dir, f"result-{input.chunk_start}.json")
+        out_file = transformed_file(input.output_path, typename, input.chunk_start)
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
 
         ctx = dict(
             connection_qualified_name=input.connection_qualified_name,
@@ -622,13 +632,21 @@ class MetabaseApp(App):
         )
 
         logger.info("transform_data complete: typename=%s, records=%d", typename, count)
-        # Hand the tree back as a reference. The interceptor persists it on
-        # task completion, which is what lets the entrypoint assemble the
-        # published `transformed/` prefix without needing this pod's disk.
+        # Declare the FILE this task wrote, not the directory it sits in. The
+        # interceptor persists the reference on task completion, which is what
+        # lets the entrypoint assemble the published `transformed/` prefix
+        # without needing this pod's disk.
+        #
+        # A directory reference would over-declare: `transformed/<typename>/`
+        # accumulates every chunk that ran on this pod, so the ref would claim
+        # files this invocation did not produce. It also reads as a prefix
+        # rather than an object, which is not something a HEAD can confirm —
+        # and `App.upload_refs` checks its delivery back against exactly these
+        # references before handing the prefix downstream.
         return TransformTaskOutput(
             typename=typename,
             record_count=count,
-            output_file=FileReference.from_local(out_dir, tier=StorageTier.RETAINED),
+            output_file=FileReference.from_local(out_file, tier=StorageTier.RETAINED),
         )
 
     # ==================================================================
@@ -654,7 +672,9 @@ class MetabaseApp(App):
           5. Detail fetch: per-dashboard, per-database, per-question SQL
           6. Enrich: inject sourceURL, source DB/schema, BIProcess records
           7. Transform: fan out across the 4 owned asset typenames
-          8. Upload ``transformed/`` tree to object store
+          8. Deliver the ``transformed/`` declaration to one object-store
+             prefix via ``App.upload_refs`` (verified against the refs the
+             transform tasks returned)
           9. Compute lineage-publish state prefixes for the downstream
              LineagePublishNode (no upload yet — that's extract_lineage's job)
          10. Return MetabaseOutput
@@ -778,40 +798,62 @@ class MetabaseApp(App):
             )
             total_transformed += stats.record_count
             if stats.output_file is not None and stats.record_count:
-                transformed_refs.append((typename, stats.output_file))
+                # ``stats.typename`` rather than the loop variable: the task
+                # normalises the typename before choosing its output directory,
+                # so the producer's value is the one that matches the key the
+                # fan-in below labels the ref with.
+                transformed_refs.append((stats.typename, stats.output_file))
 
-        # --- 8. Upload transformed/ tree -------------------------------
-        # Assembled from what each transform activity actually produced,
-        # rather than from `os.path.join(output_path, TRANSFORMED_DIR)` on
-        # this pod. That directory is written by the transform activities, so
-        # scanning it here saw only the subset that happened to run locally —
-        # and on a fully fanned-out run, nothing at all. An empty
-        # transformed_data_prefix is not a quiet no-op: it is what PublishNode
-        # diffs the tenant against, so it publishes as "delete everything".
+        # --- 8. Deliver transformed/ tree ------------------------------
+        # ``App.upload_refs`` is the SDK's fan-in task (application-sdk
+        # #3700 / FND-1790). It takes the declaration the transform
+        # activities returned and lands every ref under one destination
+        # prefix *by reference*, so PublishNode still receives a single
+        # tree. This used to be a hand-rolled ``self.upload(...)`` loop
+        # here; the framework task is the same shape with the correctness
+        # rules made non-optional rather than remembered:
         #
-        # Each ref is re-uploaded under one canonical prefix so PublishNode
-        # still receives a single tree. Passing `ref=` lets the SDK stream
-        # from the deployment store when the local directory is absent on
-        # this pod, which is the normal case once activities are distributed.
-        transformed_data_prefix = (
-            f"artifacts/apps/metabase/workflows/{input.workflow_id}/"
-            f"{self.run_id}/transformed"
-        )
-        for typename, ref in transformed_refs:
-            await self.upload(
-                UploadInput(
-                    ref=ref,
-                    local_path=ref.local_path or "",
-                    storage_path=f"{transformed_data_prefix}/{typename}",
-                    tier=StorageTier.RETAINED,
-                    # A typename that transformed records but uploaded zero
-                    # files is a bug, not a quiet day — fail loudly instead
-                    # of contributing a hole to the published tree.
-                    raise_on_empty=True,
-                )
+        #   * every file uploaded with ``raise_on_empty=True`` — a
+        #     typename that transformed records but contributed zero
+        #     objects is a hole in the published tree, not a quiet day;
+        #   * an empty declaration comes back as an **empty prefix**,
+        #     never one naming an empty tree — PublishNode diffs the
+        #     tenant against this prefix, so present-but-empty publishes
+        #     as "delete everything";
+        #   * new here: the delivered tree is verified back against the
+        #     declaration before the prefix is returned, so a partial
+        #     delivery raises ``StorageHandoffIncompleteError`` instead of
+        #     being handed on as a short prefix nobody can distinguish
+        #     from a small run.
+        #
+        # What it does not do is scan ``<output_path>/transformed/``. That
+        # directory is written by the transform activities, so this pod holds
+        # only the subset that happened to run locally — and on a fully
+        # fanned-out run, nothing at all.
+        #
+        # The label is the full ``<TYPENAME>/result-<chunk>.json`` leaf, from
+        # the same ``transformed_leaf`` the producing task wrote to, so the
+        # delivered key equals the local key and PublishNode sees the tree it
+        # has always seen. Naming it explicitly is required: the SDK refuses
+        # to guess a leaf, because a rule that recovers the typename segment
+        # from four refs and flattens it from one reshapes the tree on
+        # exactly the small runs nobody inspects.
+        delivered = await self.upload_refs(
+            UploadRefsInput(
+                files=[
+                    DeclaredFile(
+                        ref=ref, label=transformed_leaf(typename, input.chunk_start)
+                    )
+                    for typename, ref in transformed_refs
+                ],
+                prefix=(
+                    f"artifacts/apps/metabase/workflows/{input.workflow_id}/"
+                    f"{self.run_id}/transformed"
+                ),
+                tier=StorageTier.RETAINED,
             )
-        if not transformed_refs:
-            transformed_data_prefix = ""
+        )
+        transformed_data_prefix = delivered.prefix
 
         # Upload residual/ (tolerated-failure records — see app/residuals.py)
         # so they survive pod teardown instead of being stranded on ephemeral
