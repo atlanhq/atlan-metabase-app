@@ -217,8 +217,9 @@ artifactSchemas {
 //   ├──► qi            (QueryIntelligenceNode; parses metabaseQuery SQL,
 //   │                   reads inputs from transformed_data_prefix,
 //   │                   writes parsed-SQL output to view_lineage_output_prefix)
-//   ├──► publish       (PublishNode; publishes Collection/Dashboard/Question/
-//   │                   BIProcess to Atlan via the publish-app)
+//   ├──► publish       (typed `pipeline.publish` / PublishStep; publishes
+//   │                   Collection/Dashboard/Question/BIProcess to Atlan via
+//   │                   the publish-app)
 //   └──► extract-lineage (this app's `extract_lineage` @entrypoint —
 //                         replaces the shared LineageNode because Metabase
 //                         is a BI connector and the lineage is cross-connector;
@@ -240,6 +241,57 @@ artifactSchemas {
 // which is too tight for any non-trivial publish on a large tenant
 // (matches the canonical `ErrorHandlingConfig` default in the toolkit's
 // `PublishStep`).
+//
+// `publish` comes from the TYPED `pipeline.publish` step below — it is the one
+// node whose typed and direct forms carry different defaults. The other three
+// stay in `extraNodes`:
+//   - `extract-lineage` — no typed step exists; it dispatches this app's own
+//     `metabase:extract-lineage` workflow.
+//   - `lineage-publish` — a typed step exists and is exactly equivalent, but
+//     using it would list the node ahead of `extract-lineage`, which it
+//     depends on; see that node's note.
+//   - `qi` — a typed step exists (`pipeline.parseQueries`) and would express
+//     this node exactly, `vendorKey` included. Left here so this change stays
+//     scoped to the publish regression; moving it is behaviour-neutral
+//     (`ParseQueriesStep` is an empty subclass of `QueryIntelligenceNode`)
+//     but shifts node order, so it belongs in its own change.
+//
+// `generateDAG()` appends every `extraNodes` entry AFTER the typed slots, in
+// declaration order — so the order these are declared in is the order they
+// appear in the generated manifest, following `extract` and `publish`.
+
+// ---- Publish (typed pipeline step) ------------------------------------
+//
+// `pipeline.publish` is default-on (`publish: PublishStep? = new
+// PublishStep {}`), so declaring the publish node under `extraNodes` was
+// never additive — the toolkit resolves the collision by letting
+// `extraNodes["publish"]` WIN over the typed step, which is what this app
+// used to rely on.
+//
+// That override is what broke the current-state snapshot. The toolkit
+// deliberately carries different defaults per publish role: `PublishStep`
+// (asset publish) defaults all four write gates to `true`, while a bare
+// `PublishNode` used directly under `extraNodes` defaults them to `false`
+// as a conservative base. Overriding therefore opted this app out of the
+// asset-publish defaults, and when contract-toolkit PR #1866 began
+// emitting `current_state_enabled` explicitly, the app started shipping
+// `false` — silently skipping `update_current_state`, because publish-app
+// treats an ABSENT `current_state_enabled` as `true`.
+//
+// Using the typed step restores the intended asset-publish role defaults
+// (connection cache + current state, both gates each, all `true`) with no
+// per-app pinning — the fleet-standard shape, matching atlan-mysql-app.
+pipeline {
+  publish = new PublishStep {
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
+
+    // `lineagePublish` is intentionally left unset — the lineage-publish node
+    // is declared in `extraNodes` instead. See its note there.
+  }
+}
+
 extraNodes {
   ["qi"] = new QueryIntelligenceNode {
     displayName = "Parse Metabase Question SQL"
@@ -261,16 +313,6 @@ extraNodes {
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
     errorHandling = new ErrorHandlingConfig {
       startToCloseTimeoutSeconds = 86400
-    }
-  }
-  ["publish"] = new PublishNode {
-    errorHandling = new ErrorHandlingConfig {
-      startToCloseTimeoutSeconds = 86400
-    }
-    args {
-      ["connection_cache_enabled"] = true
-      ["connection_cache_via_app_enabled"] = true
-      ["current_state_via_app_enabled"] = true
     }
   }
   ["extract-lineage"] = new DAGNode {
@@ -309,28 +351,50 @@ extraNodes {
       }
     }
   }
+  // ARS 2.0 lineage publish — a PublishNode-class read of the
+  // Process/ColumnProcess records emitted by `extract-lineage`, resolved via
+  // publish-app's modern ARS resolver (the shared `lineage-app` is
+  // intentionally skipped).
+  //
+  // Declared HERE, after `extract-lineage`, so the generated manifest lists
+  // the nodes in dependency order. The typed `pipeline.publish.lineagePublish`
+  // form is exactly equivalent — `LineagePublishStep` is an empty subclass of
+  // `LineagePublishNode`, so both emit an identical node — but `generateDAG()`
+  // renders the nested form in a fixed slot immediately after `publish`, ahead
+  // of the trailing `extraNodes` loop. Because `extract-lineage` is a custom
+  // node and can only live in `extraNodes`, a nested lineage-publish would
+  // ALWAYS be listed before the node it depends on; the two cannot both be
+  // satisfied. Listing order is presentational — AE resolves execution from
+  // `depends_on`, and the chain qi+publish → extract-lineage → lineage-publish
+  // is unaffected either way — so this is readability, not correctness.
+  //
+  // Contrast with `publish` above, which HAD to move to the typed step:
+  // `PublishStep` is the toolkit's one non-subclass step, re-declaring
+  // `PublishNode`'s fields with inverted defaults.
+  //
+  // The prefixes are repointed off the toolkit defaults
+  // (`$.extract.outputs.lineage_*`) onto this app's `extract-lineage`
+  // entrypoint outputs, since the ARS staging is produced there.
+  //
+  // The connection-cache gates are NOT pinned: `LineagePublishNode` already
+  // defaults both to `false` upstream (BLDX-1299). That default is
+  // load-bearing — the connection-cache index is built by the asset publish
+  // step from Database/Schema/Table-class rows, and letting lineage-publish
+  // rebuild it from lineage-stage data (Process / ColumnProcess) would
+  // overwrite the asset crawler's index and break qualified-name lookups for
+  // miners and BI lineage builders.
   ["lineage-publish"] = new LineagePublishNode {
-    // ARS 2.0 publish — PublishNode-class read of Process/ColumnProcess
-    // emitted by extract-lineage, resolved via publish-app's modern ARS
-    // resolver (the shared `lineage-app` is intentionally skipped).
     upstream = "extract-lineage"
     transformedDataPrefix = "$.extract-lineage.outputs.lineage_stage_prefix"
     publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
     currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
-    waitForAssetPublish = false
 
-    // Pin lineage-publish's cache flags to `false`. The connection-cache
-    // index (SQLite, mapping typeName + qualifiedName → metadata) is built
-    // and uploaded by the asset publish step from Database/Schema/Table-class
-    // rows. If lineage-publish also writes the index from lineage-stage data
-    // (Process / ColumnProcess), it overwrites the asset crawler's index and
-    // breaks downstream qualified-name lookups for miners / BI lineage builders.
-    //
-    // Toolkit 0.10.0 (what this app pins) defaults these to `true` for
-    // LineagePublishNode — fixed upstream to `false` in a later toolkit
-    // release. Remove these two overrides once we bump toolkit.
-    connectionCacheEnabled = false
-    connectionCacheViaAppEnabled = false
+    // This app fans lineage-publish off `extract-lineage` only, so it must not
+    // also gate on the asset publish node. `waitForAssetPublish = false` drops
+    // that leg, and the explicit dependsOn/dependsOnCondition pair below
+    // replaces the node's computed listing form with the tag-conditioned form
+    // this DAG needs.
+    waitForAssetPublish = false
 
     errorHandling = new ErrorHandlingConfig {
       startToCloseTimeoutSeconds = 86400
