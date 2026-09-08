@@ -230,8 +230,7 @@ artifactSchemas {
 //                         entities on lookup miss and wires the lineage edge
 //                         to them)
 //        │
-//        └──► lineage-publish (`pipeline.publish.lineagePublish` /
-//                              LineagePublishStep; publishes the ARS-staged
+//        └──► lineage-publish (LineagePublishNode; publishes the ARS-staged
 //                              Process/ColumnProcess records — no `enable_ars`
 //                              flag needed, the node uses ARS 2.0 by default,
 //                              and `connection_creation_enabled = false`
@@ -243,9 +242,17 @@ artifactSchemas {
 // (matches the canonical `ErrorHandlingConfig` default in the toolkit's
 // `PublishStep`).
 //
-// `publish` and `lineage-publish` come from the TYPED `pipeline.publish`
-// step below; `qi` and `extract-lineage` stay in `extraNodes` because the
-// toolkit has no typed step matching them (see each node's note).
+// `publish` comes from the TYPED `pipeline.publish` step below. The other
+// three stay in `extraNodes`, for three different reasons:
+//   - `extract-lineage` — no typed step exists; it dispatches this app's own
+//     `metabase:extract-lineage` workflow.
+//   - `lineage-publish` — a typed step exists and is equivalent, but nesting
+//     it reorders the DAG; see that node's note.
+//   - `qi` — a typed step exists (`pipeline.parseQueries`) and would express
+//     this node exactly, `vendorKey` included. Left here so this change stays
+//     scoped to the publish regression; moving it is behaviour-neutral
+//     (`ParseQueriesStep` is an empty subclass of `QueryIntelligenceNode`)
+//     but shifts node order, so it belongs in its own change.
 
 // ---- Publish (typed pipeline step) ------------------------------------
 //
@@ -274,46 +281,8 @@ pipeline {
       startToCloseTimeoutSeconds = 86400
     }
 
-    // ARS 2.0 lineage publish — a PublishNode-class read of the
-    // Process/ColumnProcess records emitted by `extract-lineage`, resolved
-    // via publish-app's modern ARS resolver (the shared `lineage-app` is
-    // intentionally skipped). Nested under the publish step so the toolkit
-    // emits it as the `lineage-publish` node.
-    //
-    // The prefixes are all repointed from the toolkit defaults
-    // (`$.extract.outputs.lineage_*`) onto this app's `extract-lineage`
-    // entrypoint outputs, because the ARS staging is produced there rather
-    // than by the extract node.
-    //
-    // The connection-cache gates are NOT pinned here: `LineagePublishNode`
-    // already defaults both to `false` upstream (BLDX-1299). That default is
-    // load-bearing — the connection-cache index is built by the asset
-    // publish step from Database/Schema/Table-class rows, and letting
-    // lineage-publish rebuild it from lineage-stage data (Process /
-    // ColumnProcess) would overwrite the asset crawler's index and break
-    // qualified-name lookups for miners and BI lineage builders.
-    lineagePublish = new LineagePublishStep {
-      upstream = "extract-lineage"
-      transformedDataPrefix = "$.extract-lineage.outputs.lineage_stage_prefix"
-      publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
-      currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
-
-      // This app fans lineage-publish off `extract-lineage` only, so it must
-      // not also gate on the asset publish node. `waitForAssetPublish =
-      // false` drops that leg, and the explicit dependsOn/dependsOnCondition
-      // pair below replaces the node's computed listing form with the
-      // tag-conditioned form this DAG needs.
-      waitForAssetPublish = false
-
-      errorHandling = new ErrorHandlingConfig {
-        startToCloseTimeoutSeconds = 86400
-      }
-      dependsOn = null
-      dependsOnCondition = new DependencyCondition {
-        nodeId = "extract-lineage"
-        tag = "success"
-      }
-    }
+    // NOTE: `lineagePublish` is deliberately NOT nested here — see the
+    // `lineage-publish` node in `extraNodes` below for why.
   }
 }
 
@@ -374,6 +343,58 @@ extraNodes {
           tag = "success"
         }
       }
+    }
+  }
+  // ARS 2.0 lineage publish — a PublishNode-class read of the
+  // Process/ColumnProcess records emitted by `extract-lineage`, resolved via
+  // publish-app's modern ARS resolver (the shared `lineage-app` is
+  // intentionally skipped).
+  //
+  // Kept HERE rather than nested as `pipeline.publish.lineagePublish`, purely
+  // for node ORDER. `generateDAG()` emits the nested form in a fixed slot
+  // immediately after `publish`, which would place lineage-publish *ahead of*
+  // `extract-lineage` — the node it depends on. Emitting it from `extraNodes`
+  // keeps it in the trailing loop, so DAG order stays extract → publish → qi
+  // → extract-lineage → lineage-publish, matching both the dependency flow
+  // and every previously generated manifest.
+  //
+  // Unlike the publish pair, this costs nothing: `LineagePublishStep` is an
+  // empty subclass of `LineagePublishNode`, so the typed step and direct node
+  // carry identical defaults. (`PublishStep` is the sole exception in the
+  // toolkit — a standalone class that re-declares its Node's fields with
+  // opposite defaults, which is exactly why `publish` had to move.)
+  //
+  // The prefixes are repointed off the toolkit defaults
+  // (`$.extract.outputs.lineage_*`) onto this app's `extract-lineage`
+  // entrypoint outputs, since the ARS staging is produced there.
+  //
+  // The connection-cache gates are NOT pinned: `LineagePublishNode` already
+  // defaults both to `false` upstream (BLDX-1299). That default is
+  // load-bearing — the connection-cache index is built by the asset publish
+  // step from Database/Schema/Table-class rows, and letting lineage-publish
+  // rebuild it from lineage-stage data (Process / ColumnProcess) would
+  // overwrite the asset crawler's index and break qualified-name lookups for
+  // miners and BI lineage builders.
+  ["lineage-publish"] = new LineagePublishNode {
+    upstream = "extract-lineage"
+    transformedDataPrefix = "$.extract-lineage.outputs.lineage_stage_prefix"
+    publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
+    currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
+
+    // This app fans lineage-publish off `extract-lineage` only, so it must not
+    // also gate on the asset publish node. `waitForAssetPublish = false` drops
+    // that leg, and the explicit dependsOn/dependsOnCondition pair below
+    // replaces the node's computed listing form with the tag-conditioned form
+    // this DAG needs.
+    waitForAssetPublish = false
+
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
+    dependsOn = null
+    dependsOnCondition = new DependencyCondition {
+      nodeId = "extract-lineage"
+      tag = "success"
     }
   }
 }
