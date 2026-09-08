@@ -217,8 +217,9 @@ artifactSchemas {
 //   ├──► qi            (QueryIntelligenceNode; parses metabaseQuery SQL,
 //   │                   reads inputs from transformed_data_prefix,
 //   │                   writes parsed-SQL output to view_lineage_output_prefix)
-//   ├──► publish       (PublishNode; publishes Collection/Dashboard/Question/
-//   │                   BIProcess to Atlan via the publish-app)
+//   ├──► publish       (typed `pipeline.publish` / PublishStep; publishes
+//   │                   Collection/Dashboard/Question/BIProcess to Atlan via
+//   │                   the publish-app)
 //   └──► extract-lineage (this app's `extract_lineage` @entrypoint —
 //                         replaces the shared LineageNode because Metabase
 //                         is a BI connector and the lineage is cross-connector;
@@ -229,7 +230,8 @@ artifactSchemas {
 //                         entities on lookup miss and wires the lineage edge
 //                         to them)
 //        │
-//        └──► lineage-publish (LineagePublishNode; publishes the ARS-staged
+//        └──► lineage-publish (`pipeline.publish.lineagePublish` /
+//                              LineagePublishStep; publishes the ARS-staged
 //                              Process/ColumnProcess records — no `enable_ars`
 //                              flag needed, the node uses ARS 2.0 by default,
 //                              and `connection_creation_enabled = false`
@@ -240,6 +242,81 @@ artifactSchemas {
 // which is too tight for any non-trivial publish on a large tenant
 // (matches the canonical `ErrorHandlingConfig` default in the toolkit's
 // `PublishStep`).
+//
+// `publish` and `lineage-publish` come from the TYPED `pipeline.publish`
+// step below; `qi` and `extract-lineage` stay in `extraNodes` because the
+// toolkit has no typed step matching them (see each node's note).
+
+// ---- Publish (typed pipeline step) ------------------------------------
+//
+// `pipeline.publish` is default-on (`publish: PublishStep? = new
+// PublishStep {}`), so declaring the publish node under `extraNodes` was
+// never additive — the toolkit resolves the collision by letting
+// `extraNodes["publish"]` WIN over the typed step, which is what this app
+// used to rely on.
+//
+// That override is what broke the current-state snapshot. The toolkit
+// deliberately carries different defaults per publish role: `PublishStep`
+// (asset publish) defaults all four write gates to `true`, while a bare
+// `PublishNode` used directly under `extraNodes` defaults them to `false`
+// as a conservative base. Overriding therefore opted this app out of the
+// asset-publish defaults, and when contract-toolkit PR #1866 began
+// emitting `current_state_enabled` explicitly, the app started shipping
+// `false` — silently skipping `update_current_state`, because publish-app
+// treats an ABSENT `current_state_enabled` as `true`.
+//
+// Using the typed step restores the intended asset-publish role defaults
+// (connection cache + current state, both gates each, all `true`) with no
+// per-app pinning — the fleet-standard shape, matching atlan-mysql-app.
+pipeline {
+  publish = new PublishStep {
+    errorHandling = new ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = 86400
+    }
+
+    // ARS 2.0 lineage publish — a PublishNode-class read of the
+    // Process/ColumnProcess records emitted by `extract-lineage`, resolved
+    // via publish-app's modern ARS resolver (the shared `lineage-app` is
+    // intentionally skipped). Nested under the publish step so the toolkit
+    // emits it as the `lineage-publish` node.
+    //
+    // The prefixes are all repointed from the toolkit defaults
+    // (`$.extract.outputs.lineage_*`) onto this app's `extract-lineage`
+    // entrypoint outputs, because the ARS staging is produced there rather
+    // than by the extract node.
+    //
+    // The connection-cache gates are NOT pinned here: `LineagePublishNode`
+    // already defaults both to `false` upstream (BLDX-1299). That default is
+    // load-bearing — the connection-cache index is built by the asset
+    // publish step from Database/Schema/Table-class rows, and letting
+    // lineage-publish rebuild it from lineage-stage data (Process /
+    // ColumnProcess) would overwrite the asset crawler's index and break
+    // qualified-name lookups for miners and BI lineage builders.
+    lineagePublish = new LineagePublishStep {
+      upstream = "extract-lineage"
+      transformedDataPrefix = "$.extract-lineage.outputs.lineage_stage_prefix"
+      publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
+      currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
+
+      // This app fans lineage-publish off `extract-lineage` only, so it must
+      // not also gate on the asset publish node. `waitForAssetPublish =
+      // false` drops that leg, and the explicit dependsOn/dependsOnCondition
+      // pair below replaces the node's computed listing form with the
+      // tag-conditioned form this DAG needs.
+      waitForAssetPublish = false
+
+      errorHandling = new ErrorHandlingConfig {
+        startToCloseTimeoutSeconds = 86400
+      }
+      dependsOn = null
+      dependsOnCondition = new DependencyCondition {
+        nodeId = "extract-lineage"
+        tag = "success"
+      }
+    }
+  }
+}
+
 extraNodes {
   ["qi"] = new QueryIntelligenceNode {
     displayName = "Parse Metabase Question SQL"
@@ -261,16 +338,6 @@ extraNodes {
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
     errorHandling = new ErrorHandlingConfig {
       startToCloseTimeoutSeconds = 86400
-    }
-  }
-  ["publish"] = new PublishNode {
-    errorHandling = new ErrorHandlingConfig {
-      startToCloseTimeoutSeconds = 86400
-    }
-    args {
-      ["connection_cache_enabled"] = true
-      ["connection_cache_via_app_enabled"] = true
-      ["current_state_via_app_enabled"] = true
     }
   }
   ["extract-lineage"] = new DAGNode {
@@ -307,38 +374,6 @@ extraNodes {
           tag = "success"
         }
       }
-    }
-  }
-  ["lineage-publish"] = new LineagePublishNode {
-    // ARS 2.0 publish — PublishNode-class read of Process/ColumnProcess
-    // emitted by extract-lineage, resolved via publish-app's modern ARS
-    // resolver (the shared `lineage-app` is intentionally skipped).
-    upstream = "extract-lineage"
-    transformedDataPrefix = "$.extract-lineage.outputs.lineage_stage_prefix"
-    publishStatePrefix = "$.extract-lineage.outputs.lineage_publish_state_prefix"
-    currentStatePrefix = "$.extract-lineage.outputs.lineage_current_state_prefix"
-    waitForAssetPublish = false
-
-    // Pin lineage-publish's cache flags to `false`. The connection-cache
-    // index (SQLite, mapping typeName + qualifiedName → metadata) is built
-    // and uploaded by the asset publish step from Database/Schema/Table-class
-    // rows. If lineage-publish also writes the index from lineage-stage data
-    // (Process / ColumnProcess), it overwrites the asset crawler's index and
-    // breaks downstream qualified-name lookups for miners / BI lineage builders.
-    //
-    // Toolkit 0.10.0 (what this app pins) defaults these to `true` for
-    // LineagePublishNode — fixed upstream to `false` in a later toolkit
-    // release. Remove these two overrides once we bump toolkit.
-    connectionCacheEnabled = false
-    connectionCacheViaAppEnabled = false
-
-    errorHandling = new ErrorHandlingConfig {
-      startToCloseTimeoutSeconds = 86400
-    }
-    dependsOn = null
-    dependsOnCondition = new DependencyCondition {
-      nodeId = "extract-lineage"
-      tag = "success"
     }
   }
 }
