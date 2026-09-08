@@ -242,17 +242,23 @@ artifactSchemas {
 // (matches the canonical `ErrorHandlingConfig` default in the toolkit's
 // `PublishStep`).
 //
-// `publish` comes from the TYPED `pipeline.publish` step below. The other
-// three stay in `extraNodes`, for three different reasons:
+// `publish` comes from the TYPED `pipeline.publish` step below — it is the one
+// node whose typed and direct forms carry different defaults. The other three
+// stay in `extraNodes`:
 //   - `extract-lineage` — no typed step exists; it dispatches this app's own
 //     `metabase:extract-lineage` workflow.
-//   - `lineage-publish` — a typed step exists and is equivalent, but nesting
-//     it reorders the DAG; see that node's note.
+//   - `lineage-publish` — a typed step exists and is exactly equivalent, but
+//     using it would list the node ahead of `extract-lineage`, which it
+//     depends on; see that node's note.
 //   - `qi` — a typed step exists (`pipeline.parseQueries`) and would express
 //     this node exactly, `vendorKey` included. Left here so this change stays
 //     scoped to the publish regression; moving it is behaviour-neutral
 //     (`ParseQueriesStep` is an empty subclass of `QueryIntelligenceNode`)
 //     but shifts node order, so it belongs in its own change.
+//
+// `generateDAG()` appends every `extraNodes` entry AFTER the typed slots, in
+// declaration order — so the order these are declared in is the order they
+// appear in the generated manifest, following `extract` and `publish`.
 
 // ---- Publish (typed pipeline step) ------------------------------------
 //
@@ -281,8 +287,8 @@ pipeline {
       startToCloseTimeoutSeconds = 86400
     }
 
-    // NOTE: `lineagePublish` is deliberately NOT nested here — see the
-    // `lineage-publish` node in `extraNodes` below for why.
+    // `lineagePublish` is intentionally left unset — the lineage-publish node
+    // is declared in `extraNodes` instead. See its note there.
   }
 }
 
@@ -350,19 +356,21 @@ extraNodes {
   // publish-app's modern ARS resolver (the shared `lineage-app` is
   // intentionally skipped).
   //
-  // Kept HERE rather than nested as `pipeline.publish.lineagePublish`, purely
-  // for node ORDER. `generateDAG()` emits the nested form in a fixed slot
-  // immediately after `publish`, which would place lineage-publish *ahead of*
-  // `extract-lineage` — the node it depends on. Emitting it from `extraNodes`
-  // keeps it in the trailing loop, so DAG order stays extract → publish → qi
-  // → extract-lineage → lineage-publish, matching both the dependency flow
-  // and every previously generated manifest.
+  // Declared HERE, after `extract-lineage`, so the generated manifest lists
+  // the nodes in dependency order. The typed `pipeline.publish.lineagePublish`
+  // form is exactly equivalent — `LineagePublishStep` is an empty subclass of
+  // `LineagePublishNode`, so both emit an identical node — but `generateDAG()`
+  // renders the nested form in a fixed slot immediately after `publish`, ahead
+  // of the trailing `extraNodes` loop. Because `extract-lineage` is a custom
+  // node and can only live in `extraNodes`, a nested lineage-publish would
+  // ALWAYS be listed before the node it depends on; the two cannot both be
+  // satisfied. Listing order is presentational — AE resolves execution from
+  // `depends_on`, and the chain qi+publish → extract-lineage → lineage-publish
+  // is unaffected either way — so this is readability, not correctness.
   //
-  // Unlike the publish pair, this costs nothing: `LineagePublishStep` is an
-  // empty subclass of `LineagePublishNode`, so the typed step and direct node
-  // carry identical defaults. (`PublishStep` is the sole exception in the
-  // toolkit — a standalone class that re-declares its Node's fields with
-  // opposite defaults, which is exactly why `publish` had to move.)
+  // Contrast with `publish` above, which HAD to move to the typed step:
+  // `PublishStep` is the toolkit's one non-subclass step, re-declaring
+  // `PublishNode`'s fields with inverted defaults.
   //
   // The prefixes are repointed off the toolkit defaults
   // (`$.extract.outputs.lineage_*`) onto this app's `extract-lineage`
