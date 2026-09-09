@@ -254,6 +254,8 @@ class TestMetabaseHandlerValidators:
         assert result.passed is False
         assert result.error is not None
         assert result.error.category.name == "SOURCE_UNAVAILABLE"
+        assert result.error.code == "SOURCE_UNAVAILABLE_METABASE"
+        assert result.error.suggested_action
         assert "connection refused" not in result.message
 
     @patch.object(MetabaseHandler, "_fetch_collections", new_callable=AsyncMock)
@@ -332,6 +334,8 @@ class TestMetabaseHandlerValidators:
         assert result.passed is False
         assert result.error is not None
         assert result.error.category.name == "SOURCE_UNAVAILABLE"
+        assert result.error.code == "SOURCE_UNAVAILABLE_METABASE"
+        assert result.error.suggested_action
 
     # _validate_question_count -------------------------------------------------
 
@@ -370,6 +374,8 @@ class TestMetabaseHandlerValidators:
         assert result.passed is False
         assert result.error is not None
         assert result.error.category.name == "SOURCE_UNAVAILABLE"
+        assert result.error.code == "SOURCE_UNAVAILABLE_METABASE"
+        assert result.error.suggested_action
 
     # _validate_native_query_permission ----------------------------------------
 
@@ -430,6 +436,8 @@ class TestMetabaseHandlerValidators:
         assert result.passed is False
         assert result.error is not None
         assert result.error.category.name == "SOURCE_UNAVAILABLE"
+        assert result.error.code == "SOURCE_UNAVAILABLE_METABASE"
+        assert result.error.suggested_action
 
     async def test_validate_native_query_permission_accepts_bare_list_response(
         self, mock_client
@@ -565,6 +573,9 @@ class TestMetabaseHandlerPreflightCheck:
         assert result.status == PreflightStatus.NOT_READY
         assert [c.name for c in result.checks] == ["authenticationCheck"]
         assert result.checks[0].error.category.name == "SOURCE_UNAVAILABLE"
+        assert result.checks[0].error.code == "SOURCE_UNAVAILABLE_METABASE"
+        assert result.checks[0].error.suggested_action
+        assert "reachable" in result.checks[0].error.suggested_action.lower()
         assert "connection refused" not in result.checks[0].message
 
     @patch.object(
@@ -702,6 +713,12 @@ class TestMetabaseHandlerPreflightCheck:
         assert result.checks[0].passed is False
         assert result.checks[0].error is not None
         assert "not initialized" in result.checks[0].message.lower()
+        assert (
+            result.checks[0].error.code
+            == "INVALID_INPUT_METABASE_CLIENT_NOT_INITIALIZED"
+        )
+        assert result.checks[0].error.suggested_action
+        assert "credentials" in result.checks[0].error.suggested_action.lower()
 
     @patch.object(
         MetabaseHandler, "_validate_native_query_permission", new_callable=AsyncMock
