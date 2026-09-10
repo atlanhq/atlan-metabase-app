@@ -47,6 +47,9 @@ class MetabaseSessionMissingError(AuthError):
 class MetabaseClientNotInitializedError(InvalidInputError):
     """A Metabase client was requested but no credentials were supplied."""
 
+    suggested_action: str | None = (
+        "Provide valid Metabase credentials for this connection, then re-run preflight."
+    )
     code: ClassVar[str] = "INVALID_INPUT_METABASE_CLIENT_NOT_INITIALIZED"
 
 
@@ -88,6 +91,10 @@ class MetabaseSourceUnavailableError(SourceUnavailableError):
     retryable) rather than ``DependencyUnavailableError``.
     """
 
+    suggested_action: str | None = (
+        "Verify the Metabase host is reachable and the service is responding, "
+        "then re-run preflight."
+    )
     code: ClassVar[str] = "SOURCE_UNAVAILABLE_METABASE"
 
 
