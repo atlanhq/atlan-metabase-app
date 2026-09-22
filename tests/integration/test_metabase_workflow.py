@@ -33,7 +33,7 @@ import pytest
 from application_sdk.contracts.types import ConnectionRef
 
 from app.connector import MetabaseApp
-from app.contracts import MetabaseInput, MetabaseOutput
+from app.contracts import CredentialValue, MetabaseInput, MetabaseOutput
 
 if TYPE_CHECKING:
     from tests.integration.conftest import AppExecutor
@@ -53,7 +53,7 @@ _CONNECTION = ConnectionRef.model_validate(
 )
 
 
-def _inline_credentials(creds: dict[str, Any]) -> list[dict[str, str]]:
+def _inline_credentials(creds: dict[str, Any]) -> list[dict[str, CredentialValue]]:
     """Pack ``{host, port, username, password}`` into the v3 ``[{key, value}]`` shape.
 
     Uses FLAT keys (``username`` / ``password``) rather than the

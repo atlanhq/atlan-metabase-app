@@ -171,8 +171,20 @@ def build_credential_ref(
     creds = input.credentials
     if isinstance(creds, list):
         for item in creds:
-            if isinstance(item, dict) and "key" in item:
-                inline[item["key"]] = item.get("value", "")
+            if not isinstance(item, dict) or "key" not in item:
+                continue
+            key = item["key"]
+            # ``credentials`` used to be typed ``list[dict[str, Any]]``, which
+            # let a non-string key through to ``inline[...]`` and fail only at
+            # runtime. The bag is now bounded to CredentialValue, so the key
+            # is narrowed explicitly here rather than assumed.
+            if not isinstance(key, str):
+                logger.debug(
+                    "Skipping inline credential entry with non-string key of type %s",
+                    type(key).__name__,
+                )
+                continue
+            inline[key] = item.get("value", "")
     elif isinstance(creds, dict):
         inline = creds
     return None, inline

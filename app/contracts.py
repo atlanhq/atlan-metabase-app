@@ -115,8 +115,7 @@ BoundedCredentialList = Annotated[list[BoundedCredentialDict], MaxItems(50)]
 # ---------------------------------------------------------------------------
 
 
-# conformance: ignore[P001] 'credentials' is an entrypoint field (B005-guarded) — narrowing its dict value type away from Any to satisfy payload-safety bounding would be a breaking contract-type change; see BoundedCredentialDict's docstring note.
-class MetabaseInput(Input, allow_unbounded_fields=True):
+class MetabaseInput(Input):
     """Input for the ``extract_metadata`` @entrypoint.
 
     Credentials can arrive via three paths (mirrors sigma/looker pattern):
@@ -124,15 +123,26 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
       2. ``credential_guid`` (str) — legacy GUID, resolved from secret store.
       3. ``credentials`` (list[{key,value}] or dict) — inline local-dev path.
 
-    ``allow_unbounded_fields`` is required for ``credentials: list[dict[str,
-    Any]] | dict[str, Any]`` — this is an ``@entrypoint`` contract, so B005
-    (NonAdditiveContractChange) blocks narrowing an existing field's value
-    type away from ``Any`` even just to satisfy payload-safety bounding
-    (``Any`` is unconditionally forbidden regardless of ``MaxItems``). Unlike
-    the ``@task``-only ``inline_credentials`` fields elsewhere in this module
-    (safe to bound — task contracts aren't B005-guarded), this field cannot
-    be narrowed in place; only a new, additively-added field could carry a
-    bounded type.
+    Every field is payload-safe, so this contract takes no
+    ``allow_unbounded_fields`` opt-out. ``credentials`` carries the same
+    bounded shapes as the ``@task``-only ``inline_credentials`` fields
+    further down: ``Any`` is replaced by :data:`CredentialValue` inside the
+    same outer ``list[dict] | dict``. That is the one retype B005 explicitly
+    does not treat as a break ("a move OFF ``Any`` that keeps the same outer
+    shape"), and ``ledger-guard`` confirms it — ``gen-contract-ledger``
+    rewrites no recorded type, so the ledger is byte-identical and the guard
+    passes. Payload safety requires the narrowing anyway: ``Any`` is refused
+    regardless of ``MaxItems``.
+
+    The annotation is spelled out in full rather than reusing
+    :data:`BoundedCredentialList` / :data:`BoundedCredentialDict` because
+    B005 compares the *written* annotation against the ledger string without
+    resolving aliases. Via the aliases it reads the change as
+    ``list[dict[str, Any]] | dict[str, Any]`` → ``BoundedCredentialList |
+    BoundedCredentialDict``, cannot see that the outer shape is unchanged,
+    and fires at BLOCK tier — the same types written inline pass. Collapsing
+    this back into the aliases will redden CI until that checker resolves
+    aliases (reported upstream; see FND-2547).
     """
 
     workflow_id: str = ""
@@ -151,7 +161,12 @@ class MetabaseInput(Input, allow_unbounded_fields=True):
     agent_json: AgentCredentialSpec | None = None
 
     metabase_credential: CredentialRef | None = None
-    credentials: list[dict[str, Any]] | dict[str, Any] = Field(default_factory=list)
+    credentials: (
+        Annotated[
+            list[Annotated[dict[str, CredentialValue], MaxItems(500)]], MaxItems(50)
+        ]
+        | Annotated[dict[str, CredentialValue], MaxItems(500)]
+    ) = Field(default_factory=list)
     connection: ConnectionRef = Field(default_factory=ConnectionRef)
 
     include_collections: CollectionFilter = Field(default_factory=dict)

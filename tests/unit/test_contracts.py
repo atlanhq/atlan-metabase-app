@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from app.contracts import FilterInput, MetabaseInput
 
@@ -59,3 +60,44 @@ class TestCollectionFilterCoercion:
         kwargs: dict[str, Any] = {"exclude_collections": "[object Object]"}
         model = FilterInput(**kwargs)
         assert model.exclude_collections == {}
+
+
+class TestCredentialsPayloadSafety:
+    """``MetabaseInput.credentials`` is bounded, so the contract needs no opt-out.
+
+    The field used to be ``list[dict[str, Any]] | dict[str, Any]`` behind
+    ``allow_unbounded_fields=True``. ``Any`` is refused by payload safety
+    regardless of ``MaxItems``, so the opt-out was the only thing keeping the
+    contract importable — and it disabled the 2MB-payload guard for every
+    other field too (ADR-0008). Both inline wire shapes must keep working
+    now that the value type is the concrete ``CredentialValue`` union.
+    """
+
+    def test_contract_does_not_opt_out_of_payload_safety(self) -> None:
+        assert getattr(MetabaseInput, "_allow_unbounded_fields", False) is False
+
+    def test_inline_dict_credentials_accepted(self) -> None:
+        model = MetabaseInput(credentials={"host": "h", "port": 3000, "tls": True})
+        assert model.credentials == {"host": "h", "port": 3000, "tls": True}
+
+    def test_inline_list_credentials_accepted(self) -> None:
+        model = MetabaseInput(credentials=[{"key": "username", "value": "u"}])
+        assert model.credentials == [{"key": "username", "value": "u"}]
+
+    def test_default_is_empty_list(self) -> None:
+        assert MetabaseInput().credentials == []
+
+    def test_none_valued_credential_accepted(self) -> None:
+        """``None`` is in ``CredentialValue`` — an unset optional must survive."""
+        model = MetabaseInput(credentials={"password": None})
+        assert model.credentials == {"password": None}
+
+    def test_non_scalar_credential_value_rejected(self) -> None:
+        """The narrowing is load-bearing, not cosmetic.
+
+        A nested container is what made the field unbounded in the first
+        place; it must now be refused rather than silently crossing a task
+        boundary.
+        """
+        with pytest.raises(ValidationError):
+            MetabaseInput(credentials={"nested": {"a": "b"}})  # type: ignore[dict-item]
