@@ -70,6 +70,14 @@ def parse_metabase_credentials(
     - ``dict[str, Any]`` — legacy v2 nested shape ``{host, port, extra:
       {username, password}}`` OR the flat shape ``{host, port, username,
       password}``. ``extra`` may also arrive as a JSON-encoded string.
+
+      The **nested** form reaches here only on the credential-ref path:
+      ``_build_client`` hands ``resolve_credential_raw``'s dict straight in,
+      without crossing a contract field. It cannot arrive via the inline
+      channel — ``MetabaseInput.credentials`` and every ``@task``
+      ``inline_credentials`` field are bounded to scalar values, so a nested
+      ``extra`` is refused before it gets here. The JSON-encoded-string form
+      works on both paths, and is what an inline caller should use.
     - ``MetabaseCredential`` — already-typed credential, returned as-is.
 
     Empty/missing fields fall through to the model defaults.
@@ -177,8 +185,20 @@ def build_credential_ref(
     creds = input.credentials
     if isinstance(creds, list):
         for item in creds:
-            if isinstance(item, dict) and "key" in item:
-                inline[item["key"]] = item.get("value", "")
+            if not isinstance(item, dict) or "key" not in item:
+                continue
+            key = item["key"]
+            # ``credentials`` used to be typed ``list[dict[str, Any]]``, which
+            # let a non-string key through to ``inline[...]`` and fail only at
+            # runtime. The bag is now bounded to CredentialValue, so the key
+            # is narrowed explicitly here rather than assumed.
+            if not isinstance(key, str):
+                logger.debug(
+                    "Skipping inline credential entry with non-string key of type %s",
+                    type(key).__name__,
+                )
+                continue
+            inline[key] = item.get("value", "")
     elif isinstance(creds, dict):
         inline = creds
     return None, inline
