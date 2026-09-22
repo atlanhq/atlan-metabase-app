@@ -103,9 +103,14 @@ def parse_metabase_credentials(
         try:
             extra = orjson.loads(extra) or {}
         except orjson.JSONDecodeError:
-            logger.warning(
-                "Credential 'extra' field is not valid JSON; ignoring", exc_info=True
-            )
+            # DEBUG, not WARNING: this is recovery, not a preflight failure —
+            # the malformed block is ignored and parsing continues. A WARNING
+            # from inside a preflight-reachable path is invisible under the
+            # customer's default ERROR filter anyway, and duplicates whatever
+            # verdict row the gate emits (F005 / FND-901). No ``exc_info``:
+            # this function reads the credentials, so traceback frame locals
+            # can carry the password under loguru's ``diagnose`` (F014).
+            logger.debug("Credential 'extra' field is not valid JSON; ignoring")
             extra = {}
     if isinstance(extra, dict):
         for k, v in extra.items():
@@ -115,10 +120,11 @@ def parse_metabase_credentials(
     try:
         port = int(port_raw) if port_raw not in (None, "") else 443
     except (TypeError, ValueError):
-        logger.warning(
+        # Same as above: recovery, not a verdict, and no traceback from a
+        # function that holds the credentials in its locals (F005 / F014).
+        logger.debug(
             "Credential port %r is not a valid integer; defaulting to 443",
             port_raw,
-            exc_info=True,
         )
         port = 443
 
