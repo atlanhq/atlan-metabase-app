@@ -1,5 +1,6 @@
 """Unit tests for app.handler.MetabaseHandler (v3 typed contracts)."""
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -764,3 +765,48 @@ class TestMetabaseHandlerPreflightCheck:
         exclude_arg = mock_collection.call_args.args[2]
         assert include_arg == {"1": "Engineering"}
         assert exclude_arg == {"9": "Archived"}
+
+
+class TestProbeTimeout:
+    """Boundary shapes for ``MetabaseHandler._probe_timeout``.
+
+    The F016 ``budget_retry`` scenario in ``test_preflight_conformance.py``
+    covers the ordinary range end-to-end (60 / 10 / 3 second budgets). These
+    pin the two clamps it cannot reach: the cap that keeps a generous budget
+    from lengthening a probe beyond the historical 30s, and the floor that
+    still attempts one request on an exhausted budget rather than skipping the
+    probe and reporting no evidence at all.
+    """
+
+    def test_generous_budget_is_capped_at_the_historical_timeout(self):
+        """A large remaining budget must not lengthen a probe past 30s — the
+        value every probe used before the budget was threaded through."""
+        deadline = time.monotonic() + 3600
+
+        assert MetabaseHandler._probe_timeout(deadline) == 30
+
+    @pytest.mark.parametrize("remaining", [10, 3])
+    def test_ordinary_budget_stays_strictly_inside_the_remainder(self, remaining):
+        """A probe deadline equal to the budget makes the gate's cancel
+        decorative: the handler is killed mid-probe with no check evidence."""
+        deadline = time.monotonic() + remaining
+
+        assert 0 < MetabaseHandler._probe_timeout(deadline) < remaining
+
+    @pytest.mark.parametrize("remaining", [0, -5])
+    def test_exhausted_budget_still_attempts_one_request(self, remaining):
+        """An elapsed or negative remainder floors at 1s rather than 0 or a
+        negative timeout, which httpx would reject outright."""
+        deadline = time.monotonic() + remaining
+
+        assert MetabaseHandler._probe_timeout(deadline) == 1
+
+    def test_deadline_shrinks_as_the_budget_is_consumed(self):
+        """Two probes in one run: the later one gets the smaller deadline,
+        because the remainder it is measured against has shrunk."""
+        deadline = time.monotonic() + 20
+
+        first = MetabaseHandler._probe_timeout(deadline)
+        second = MetabaseHandler._probe_timeout(deadline - 10)
+
+        assert second < first
