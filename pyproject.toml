@@ -104,6 +104,18 @@ venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
 exclude = [
+    # pyright's `exclude` REPLACES its built-in defaults rather than adding to
+    # them, so the first three entries restate those defaults. `**/.*` is the
+    # only reason `.venv` stays out of the analysis — drop it and a bare
+    # `uv run pyright` (no file arguments, which is how an agent or an ad-hoc
+    # shell invokes it) type-checks every installed package and never
+    # finishes. pre-commit and editors pass filenames, so they stay fast and
+    # hide the problem. pyright does not read .gitignore; ruff does, which is
+    # where the assumption comes from. Keep these three whenever adding an
+    # entry below.
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
     ".github/**",
     "app/generated/**",
 ]
@@ -163,6 +175,27 @@ exclude_lines = [
     "raise ImportError",
 ]
 fail_under = 85
+
+# Pin PyPI as the resolver's default index. Without this, uv inherits whatever
+# default the machine supplies — on an Atlan laptop that is the Endor Labs
+# package firewall configured in ~/.config/uv/uv.toml with `default = true`,
+# and then every `uv run` / `uv sync` / `uv lock` rewrites every package URL in
+# uv.lock to that credentialed proxy. Committing the rewritten lock makes CI,
+# which holds no credential for the proxy, fail at dependency install with 401
+# Unauthorized on a different package each run.
+#
+# This is not a bypass of the firewall: CI already resolves from PyPI, and the
+# lock records hashes either way. It stops the laptop-local index leaking into
+# a shared file.
+#
+# Declared here rather than in a project-level uv.toml on purpose — a uv.toml
+# overrides the user-level file but also suppresses [tool.uv] in this file
+# entirely, silently dropping any constraint-dependencies CVE floors declared
+# in it. See conformance D012.
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
 
 [tool.uv.sources]
 # atlan-application-sdk = { path = "../application-sdk", editable = true }
