@@ -8,11 +8,15 @@ never being reviewed, since worker-pod logs are easy to miss and don't
 aggregate per-workflow-run.
 
 This module gives those call sites a second, additive output: a local JSONL
-file recording every tolerated failure, written into the same ``output_path``
-staging tree tasks already use (alongside ``raw/``, ``processed/``,
-``transformed/``). It changes no ``Input``/``Output`` contract field and no
-task's return value — call sites keep returning their existing empty/None
-sentinel exactly as before; this only adds a side file for later review.
+file recording every tolerated failure, written into the calling task's own
+scratch directory (alongside ``raw/``). Call sites keep returning their
+existing empty/None sentinel exactly as before; this only adds a side file.
+
+The file lives on the pod the task ran on, so it cannot be collected by
+scanning a directory later: each task hands it back as a durable
+``FileReference`` (:func:`residual_ref`) on its output, and the entrypoint
+fans those references in. That is also what makes the run's
+``PARTIAL_SUCCESS`` declaration hold when tasks land on different pods.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import orjson
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -61,3 +66,19 @@ def record_residual_failure(output_path: str, category: str, **detail: Any) -> N
             category,
             exc_info=True,
         )
+
+
+def residual_ref(output_path: str) -> FileReference | None:
+    """Return a durable reference to the task's residual file, if one was written.
+
+    ``RETAINED`` so the records survive pod teardown and stay reviewable
+    after the run. ``None`` when the task tolerated no failure — the absence
+    is what lets the entrypoint report plain ``SUCCESS``.
+
+    Args:
+        output_path: The task's local scratch directory.
+    """
+    path = os.path.join(output_path, RESIDUAL_DIR, RESIDUAL_FAILURES_FILE)
+    if not os.path.isfile(path):
+        return None
+    return FileReference.from_local(path, tier=StorageTier.RETAINED)

@@ -285,7 +285,7 @@
     {
       "contract": "MetabaseInput",
       "field": "output_path",
-      "status": "active",
+      "status": "sunset",
       "type": "str"
     },
     {
@@ -297,7 +297,7 @@
     {
       "contract": "MetabaseInput",
       "field": "processed_data_path",
-      "status": "active",
+      "status": "sunset",
       "type": "str"
     },
     {
@@ -339,7 +339,7 @@
     {
       "contract": "MetabaseLineageInput",
       "field": "output_path",
-      "status": "active",
+      "status": "sunset",
       "type": "str"
     },
     {
@@ -465,7 +465,7 @@
     {
       "contract": "MetabaseOutput",
       "field": "output_path",
-      "status": "active",
+      "status": "sunset",
       "type": "str"
     },
     {
