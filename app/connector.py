@@ -992,10 +992,6 @@ class MetabaseApp(App):
     # package_id "@atlan/metabase" (auto-derived), and extract_lineage has no
     # card or route declaration — it is invoked by workflowType
     # "metabase:extract-lineage" from the extraNodes DAG, not by the user.
-    # P016 stays ignored: it requires per-entrypoint app/generated/<name>/
-    # contract subdirs (Entrypoint.contract bundle mode), which this app
-    # hasn't adopted — the generated artifacts remain app-level flat files.
-    # conformance: ignore[P016] single-card app; per-entrypoint generated/ bundle split not adopted (see contract/app.pkl)
     @entrypoint
     async def extract_lineage(
         self, input: MetabaseLineageInput
