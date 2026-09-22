@@ -57,6 +57,17 @@ _MANDATORY_CHECKS = frozenset(
     }
 )
 
+# Longest deadline any single preflight probe may ask for, in seconds. Caps the
+# per-probe slice when the gate hands down a generous budget; the historical
+# value, kept so a default-budget run behaves exactly as before.
+_PROBE_TIMEOUT_CAP = 30
+
+# Fraction of the *remaining* gate budget one probe may consume. Strictly below
+# 1.0 so a probe's deadline always sits inside the budget the gate will cancel
+# at — a probe allowed the whole remainder would be killed mid-flight and the
+# gate would get no check evidence at all (see PreflightInput.timeout_seconds).
+_PROBE_BUDGET_FRACTION = 0.9
+
 
 # ---------------------------------------------------------------------------
 # Handler
@@ -156,10 +167,20 @@ class MetabaseHandler(Handler):
         statically (F019), and it mirrors ``atlan-openapi-app`` app/handler.py.
         ``PreflightStatus.PARTIAL`` is deprecated and removed in SDK v3.40.0
         (B001); READY and NOT_READY are the only two verdicts.
+
+        Every probe is bounded by what remains of ``input.timeout_seconds``. On
+        the injected gate path that field is the *enforced* remaining budget and
+        the gate cancels the handler when it elapses — a handler whose probes can
+        outlive it is killed with no check evidence, which is the one outcome
+        worse than NOT_READY. ``_probe_timeout`` keeps each deadline strictly
+        inside the remainder.
         """
+        deadline = time.monotonic() + max(input.timeout_seconds, 0)
         checks: list[PreflightCheck] = []
 
-        auth_check, client = await self._authentication_check(input.credentials)
+        auth_check, client = await self._authentication_check(
+            input.credentials, timeout=self._probe_timeout(deadline)
+        )
         checks.append(auth_check)
 
         if client is not None:
@@ -168,23 +189,34 @@ class MetabaseHandler(Handler):
                 include_filter, exclude_filter = self._resolve_filters(input)
 
                 collection_check = await self._validate_collection_count(
-                    client, include_filter, exclude_filter
+                    client,
+                    include_filter,
+                    exclude_filter,
+                    timeout=self._probe_timeout(deadline),
                 )
                 checks.append(collection_check)
 
                 if collection_check.passed:
-                    native_check = await self._validate_native_query_permission(client)
+                    native_check = await self._validate_native_query_permission(
+                        client, timeout=self._probe_timeout(deadline)
+                    )
                     checks.append(native_check)
 
                     if native_check.passed:
                         checks.append(
                             await self._validate_dashboard_count(
-                                client, include_filter, exclude_filter
+                                client,
+                                include_filter,
+                                exclude_filter,
+                                timeout=self._probe_timeout(deadline),
                             )
                         )
                         checks.append(
                             await self._validate_question_count(
-                                client, include_filter, exclude_filter
+                                client,
+                                include_filter,
+                                exclude_filter,
+                                timeout=self._probe_timeout(deadline),
                             )
                         )
             finally:
@@ -206,7 +238,10 @@ class MetabaseHandler(Handler):
     # ------------------------------------------------------------------
 
     async def _client_for(
-        self, credentials: list[HandlerCredential] | dict[str, Any]
+        self,
+        credentials: list[HandlerCredential] | dict[str, Any],
+        *,
+        timeout: int = 30,
     ) -> MetabaseApiClient:
         """Return an authenticated client — pre-built fixture or freshly built."""
         if self.client is not None:
@@ -217,10 +252,13 @@ class MetabaseHandler(Handler):
                 field="credentials",
             )
         credential = parse_metabase_credentials(credentials)
-        return await build_client(credential)
+        return await build_client(credential, timeout=timeout)
 
     async def _authentication_check(
-        self, credentials: list[HandlerCredential] | dict[str, Any]
+        self,
+        credentials: list[HandlerCredential] | dict[str, Any],
+        *,
+        timeout: int = 30,
     ) -> tuple[PreflightCheck, MetabaseApiClient | None]:
         """Reachability + authentication tier.
 
@@ -236,7 +274,7 @@ class MetabaseHandler(Handler):
         start = time.perf_counter()
         client: MetabaseApiClient | None = None
         try:
-            client = await self._client_for(credentials)
+            client = await self._client_for(credentials, timeout=timeout)
             await client.test_connection()
             return (
                 PreflightCheck(
@@ -294,6 +332,21 @@ class MetabaseHandler(Handler):
     def _elapsed_ms(start: float) -> float:
         """Milliseconds elapsed since ``start`` (``time.perf_counter``)."""
         return round((time.perf_counter() - start) * 1000, 2)
+
+    @staticmethod
+    def _probe_timeout(deadline: float) -> int:
+        """Seconds the next probe may take, strictly inside the gate budget.
+
+        ``deadline`` is a ``time.monotonic`` instant. Each probe gets a fraction
+        of what is left rather than all of it, so the sum of the probes cannot
+        reach the budget the gate cancels at, and a later probe in the same run
+        gets a smaller deadline than an earlier one. Floored at 1s: a request has
+        to be attempted even on an exhausted budget, because a probe that never
+        ran yields no evidence either. Returned as ``int`` to match the SDK
+        client's ``timeout`` parameter.
+        """
+        remaining = deadline - time.monotonic()
+        return max(1, min(_PROBE_TIMEOUT_CAP, int(remaining * _PROBE_BUDGET_FRACTION)))
 
     @staticmethod
     def _failed_check(name: str, error: Any, start: float) -> PreflightCheck:
@@ -360,9 +413,11 @@ class MetabaseHandler(Handler):
     @staticmethod
     async def _fetch_collections(
         client: MetabaseApiClient,
+        *,
+        timeout: int = 30,
     ) -> list[dict[str, Any]]:
         url = MetabaseUrls.collection(client.host, client.port)
-        response = await client.execute_http_get_request(url=url, timeout=30)
+        response = await client.execute_http_get_request(url=url, timeout=timeout)
         if response is None or not response.is_success:
             status = response.status_code if response else "No response"
             raise MetabaseSourceUnavailableError(
@@ -378,10 +433,14 @@ class MetabaseHandler(Handler):
         client: MetabaseApiClient,
         include_filter: dict[str, Any],
         exclude_filter: dict[str, Any],
+        *,
+        timeout: int = 30,
     ) -> PreflightCheck:
         start = time.perf_counter()
         try:
-            collections = await MetabaseHandler._fetch_collections(client)
+            collections = await MetabaseHandler._fetch_collections(
+                client, timeout=timeout
+            )
             count = 0
             for collection in collections:
                 if collection.get("personal_owner_id") is not None:
@@ -431,17 +490,21 @@ class MetabaseHandler(Handler):
         client: MetabaseApiClient,
         include_filter: dict[str, Any],
         exclude_filter: dict[str, Any],
+        *,
+        timeout: int = 30,
     ) -> PreflightCheck:
         start = time.perf_counter()
         try:
-            collections = await MetabaseHandler._fetch_collections(client)
+            collections = await MetabaseHandler._fetch_collections(
+                client, timeout=timeout
+            )
             effective_exclude: dict[str, Any] = dict(exclude_filter)
             for collection in collections:
                 if collection.get("personal_owner_id") is not None:
                     effective_exclude[str(collection.get("id", ""))] = {}
 
             url = MetabaseUrls.dashboard(client.host, client.port)
-            response = await client.execute_http_get_request(url=url, timeout=30)
+            response = await client.execute_http_get_request(url=url, timeout=timeout)
             if response is None or not response.is_success:
                 status = response.status_code if response else "No response"
                 raise MetabaseSourceUnavailableError(
@@ -488,17 +551,21 @@ class MetabaseHandler(Handler):
         client: MetabaseApiClient,
         include_filter: dict[str, Any],
         exclude_filter: dict[str, Any],
+        *,
+        timeout: int = 30,
     ) -> PreflightCheck:
         start = time.perf_counter()
         try:
-            collections = await MetabaseHandler._fetch_collections(client)
+            collections = await MetabaseHandler._fetch_collections(
+                client, timeout=timeout
+            )
             effective_exclude: dict[str, Any] = dict(exclude_filter)
             for collection in collections:
                 if collection.get("personal_owner_id") is not None:
                     effective_exclude[str(collection.get("id", ""))] = {}
 
             url = MetabaseUrls.card(client.host, client.port)
-            response = await client.execute_http_get_request(url=url, timeout=30)
+            response = await client.execute_http_get_request(url=url, timeout=timeout)
             if response is None or not response.is_success:
                 status = response.status_code if response else "No response"
                 raise MetabaseSourceUnavailableError(
@@ -543,11 +610,13 @@ class MetabaseHandler(Handler):
     @staticmethod
     async def _validate_native_query_permission(
         client: MetabaseApiClient,
+        *,
+        timeout: int = 30,
     ) -> PreflightCheck:
         start = time.perf_counter()
         try:
             url = MetabaseUrls.database(client.host, client.port)
-            response = await client.execute_http_get_request(url=url, timeout=30)
+            response = await client.execute_http_get_request(url=url, timeout=timeout)
             if response is None or not response.is_success:
                 status = response.status_code if response else "No response"
                 raise MetabaseSourceUnavailableError(

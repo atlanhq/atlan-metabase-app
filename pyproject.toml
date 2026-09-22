@@ -152,6 +152,7 @@ timeout_method = "thread"
 markers = [
     "e2e: tenant-hitting end-to-end test (requires ATLAN_BASE_URL + ATLAN_API_KEY)",
     "integration: exercises external services/containers (e.g. testcontainers); deselected from the unit job",
+    "preflight_conformance(rule, scenario, entrypoint): registered F016 behaviour scenario",
 ]
 
 [tool.coverage.run]

@@ -26,6 +26,12 @@ class MetabaseApiClient(BaseClient):
     3. ``test_connection()`` verifies that a session token was obtained.
     """
 
+    #: Deadline for the session POST, in seconds. A class attribute, not set
+    #: only in ``load()``, so ``_authenticate`` is well-defined for a client
+    #: built directly (the extraction tasks and this app's client tests both
+    #: do that). ``load(timeout=...)`` overrides it per instance.
+    auth_timeout: int = 30
+
     async def load(self, **kwargs: Any) -> None:
         """Initialize the client with a typed ``MetabaseCredential``.
 
@@ -46,6 +52,10 @@ class MetabaseApiClient(BaseClient):
         self.username: Optional[str] = credential.username
         self.password: Optional[str] = credential.password
         self.session_token: Optional[str] = None
+        # Preflight hands down what remains of ``PreflightInput.timeout_seconds``
+        # so authentication is bounded by the gate's budget like every other
+        # probe; every other caller keeps the class default.
+        self.auth_timeout = int(kwargs.get("timeout", type(self).auth_timeout))
 
         await self._authenticate()
 
@@ -63,7 +73,7 @@ class MetabaseApiClient(BaseClient):
         response = await self.execute_http_post_request(
             url=url,
             json_data=payload,
-            timeout=30,
+            timeout=self.auth_timeout,
         )
 
         if response is None or not response.is_success:
@@ -101,14 +111,20 @@ class MetabaseApiClient(BaseClient):
 # ---------------------------------------------------------------------------
 
 
-async def build_client(credential: MetabaseCredential) -> MetabaseApiClient:
+async def build_client(
+    credential: MetabaseCredential, *, timeout: int = 30
+) -> MetabaseApiClient:
     """Build and authenticate a :class:`MetabaseApiClient` from a typed credential.
 
     Defined at module level (not on the handler / app) so the handler and the
     workflow tasks share one credential → client path. Reviewers on the MSSQL
     v3 PR flagged a duplicated ``_build_client`` body as a top-finding;
     this helper avoids that.
+
+    ``timeout`` bounds the session POST. Preflight passes what remains of the
+    gate's budget so authentication cannot outlive it; extraction tasks keep
+    the 30s default.
     """
     client = MetabaseApiClient()
-    await client.load(credential=credential)
+    await client.load(credential=credential, timeout=timeout)
     return client
