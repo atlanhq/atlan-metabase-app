@@ -48,10 +48,10 @@ from app.asset_mapper import (
 from app.client import MetabaseApiClient, build_client
 from app.contracts import (
     TRANSFORM_ASSET_TYPES,
-    CollectResidualsInput,
-    CollectResidualsOutput,
     BuildLineageInput,
     BuildLineageOutput,
+    CollectResidualsInput,
+    CollectResidualsOutput,
     FetchDetailInput,
     FetchInput,
     FetchOutput,
@@ -67,10 +67,7 @@ from app.contracts import (
     TransformTaskOutput,
 )
 from app.credentials import build_credential_ref, parse_metabase_credentials
-from app.errors import (
-    MetabaseCredentialInputError,
-    MissingTypenameInputError,
-)
+from app.errors import MetabaseCredentialInputError, MissingTypenameInputError
 from app.extracts.collections import fetch_collections_summaries
 from app.extracts.dashboards import fetch_dashboards_details, fetch_dashboards_summaries
 from app.extracts.databases import fetch_databases_details, fetch_databases_summaries
