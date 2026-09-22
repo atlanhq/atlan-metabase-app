@@ -16,7 +16,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.contracts import FilterInput, MetabaseInput
+from app.contracts import (
+    FetchDetailInput,
+    FetchInput,
+    FilterInput,
+    MetabaseInput,
+    ProcessInput,
+)
 
 
 class TestCollectionFilterCoercion:
@@ -92,12 +98,45 @@ class TestCredentialsPayloadSafety:
         model = MetabaseInput(credentials={"password": None})
         assert model.credentials == {"password": None}
 
-    def test_non_scalar_credential_value_rejected(self) -> None:
-        """The narrowing is load-bearing, not cosmetic.
+    @pytest.mark.parametrize(
+        ("label", "payload"),
+        [
+            ("v2 nested extra", {"host": "h", "extra": {"username": "u"}}),
+            ("list-valued entry", {"host": "h", "hosts": ["a", "b"]}),
+            ("float value", {"host": "h", "timeout": 1.5}),
+        ],
+    )
+    def test_entrypoint_rejects_what_the_task_contracts_reject(
+        self, label: str, payload: dict[str, Any]
+    ) -> None:
+        """The entrypoint now agrees with the `@task` contracts downstream.
 
-        A nested container is what made the field unbounded in the first
-        place; it must now be refused rather than silently crossing a task
-        boundary.
+        These payloads were never usable. The four `@task` contracts have
+        always declared ``inline_credentials: BoundedCredentialDict``, so a
+        non-scalar value was refused at the first task hop — *after* the
+        workflow had started, as a ``ValidationError`` inside an activity,
+        which is the worst place to discover it.
+
+        Before this contract was bounded, ``MetabaseInput`` accepted them and
+        deferred that failure. Rejecting them here changes no capability; it
+        moves an existing failure from mid-run to submission time.
+
+        The nested ``extra`` shape is still genuinely supported — but on the
+        credential-ref path, where ``_build_client`` hands
+        ``resolve_credential_raw``'s dict straight to
+        :func:`parse_metabase_credentials` without crossing a contract field.
+        That is why the parser keeps its nested branch.
         """
         with pytest.raises(ValidationError):
-            MetabaseInput(credentials={"nested": {"a": "b"}})  # type: ignore[dict-item]
+            MetabaseInput(credentials=payload)  # type: ignore[arg-type]
+
+    def test_task_contracts_agree_with_the_entrypoint(self) -> None:
+        """Guard the invariant the test above relies on.
+
+        If a `@task` contract ever widened ``inline_credentials`` past the
+        scalar bag, the entrypoint would become the stricter of the two and
+        would start refusing payloads the tasks could carry.
+        """
+        for model in (FetchInput, FilterInput, FetchDetailInput, ProcessInput):
+            with pytest.raises(ValidationError):
+                model(inline_credentials={"extra": {"username": "u"}})  # type: ignore[dict-item]

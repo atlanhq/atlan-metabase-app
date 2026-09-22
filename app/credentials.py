@@ -70,6 +70,14 @@ def parse_metabase_credentials(
     - ``dict[str, Any]`` — legacy v2 nested shape ``{host, port, extra:
       {username, password}}`` OR the flat shape ``{host, port, username,
       password}``. ``extra`` may also arrive as a JSON-encoded string.
+
+      The **nested** form reaches here only on the credential-ref path:
+      ``_build_client`` hands ``resolve_credential_raw``'s dict straight in,
+      without crossing a contract field. It cannot arrive via the inline
+      channel — ``MetabaseInput.credentials`` and every ``@task``
+      ``inline_credentials`` field are bounded to scalar values, so a nested
+      ``extra`` is refused before it gets here. The JSON-encoded-string form
+      works on both paths, and is what an inline caller should use.
     - ``MetabaseCredential`` — already-typed credential, returned as-is.
 
     Empty/missing fields fall through to the model defaults.
