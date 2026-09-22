@@ -16,6 +16,7 @@ from typing import Any
 
 import orjson
 from application_sdk.errors import AuthError, InvalidInputError
+from application_sdk.errors.base import sanitize_cause_repr
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -43,6 +44,18 @@ from app.errors import (
 )
 
 logger = get_logger(__name__)
+
+# Checks whose failure blocks extraction. Everything else is advisory: it is
+# reported in its own PreflightCheck row and leaves the verdict READY. Declared
+# here, as a literal, so the preflight analysis can resolve the roles behind the
+# verdict without executing the handler (F019).
+_MANDATORY_CHECKS = frozenset(
+    {
+        "authenticationCheck",
+        "collectionCountCheck",
+        "nativeQueryPermissionCheck",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -130,53 +143,63 @@ class MetabaseHandler(Handler):
         """Gate readiness in blocking → advisory tiers.
 
         Ordering is reachability → authentication → authorization → advisory.
-        Each blocking tier short-circuits ``NOT_READY``; the advisory tier only
-        downgrades the verdict to ``PARTIAL`` (the run still proceeds). Unhandled
-        errors are deliberately *not* caught here — a plumbing bug should fail the
-        gate open (SDK logs and proceeds), never silently block every run.
+        A failed *mandatory* check (see ``_MANDATORY_CHECKS``) blocks the run and
+        short-circuits the tiers below it, so a broken source is not probed
+        further. An *advisory* failure is reported in its own check row and does
+        **not** change the verdict — extraction proceeds, so the verdict stays
+        ``READY``. Unhandled errors are deliberately *not* caught here — a
+        plumbing bug should fail the gate open (SDK logs and proceeds), never
+        silently block every run.
+
+        One terminal ``PreflightOutput``, with the mandatory/advisory roles in a
+        module-level frozenset: that is the shape the preflight analysis can read
+        statically (F019), and it mirrors ``atlan-openapi-app`` app/handler.py.
+        ``PreflightStatus.PARTIAL`` is deprecated and removed in SDK v3.40.0
+        (B001); READY and NOT_READY are the only two verdicts.
         """
         checks: list[PreflightCheck] = []
 
         auth_check, client = await self._authentication_check(input.credentials)
         checks.append(auth_check)
-        if client is None:
-            return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
 
-        owns_client = self.client is None
-        try:
-            include_filter, exclude_filter = self._resolve_filters(input)
+        if client is not None:
+            owns_client = self.client is None
+            try:
+                include_filter, exclude_filter = self._resolve_filters(input)
 
-            collection_check = await self._validate_collection_count(
-                client, include_filter, exclude_filter
-            )
-            checks.append(collection_check)
-            if not collection_check.passed:
-                return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
+                collection_check = await self._validate_collection_count(
+                    client, include_filter, exclude_filter
+                )
+                checks.append(collection_check)
 
-            native_check = await self._validate_native_query_permission(client)
-            checks.append(native_check)
-            if not native_check.passed:
-                return PreflightOutput(status=PreflightStatus.NOT_READY, checks=checks)
+                if collection_check.passed:
+                    native_check = await self._validate_native_query_permission(client)
+                    checks.append(native_check)
 
-            dashboard_check = await self._validate_dashboard_count(
-                client, include_filter, exclude_filter
-            )
-            question_check = await self._validate_question_count(
-                client, include_filter, exclude_filter
-            )
-            checks.append(dashboard_check)
-            checks.append(question_check)
+                    if native_check.passed:
+                        checks.append(
+                            await self._validate_dashboard_count(
+                                client, include_filter, exclude_filter
+                            )
+                        )
+                        checks.append(
+                            await self._validate_question_count(
+                                client, include_filter, exclude_filter
+                            )
+                        )
+            finally:
+                if owns_client:
+                    await client.close()
 
-            advisory_ok = dashboard_check.passed and question_check.passed
-            return PreflightOutput(
-                status=PreflightStatus.READY
-                if advisory_ok
-                else PreflightStatus.PARTIAL,
-                checks=checks,
-            )
-        finally:
-            if owns_client:
-                await client.close()
+        mandatory_failed = any(
+            not check.passed for check in checks if check.name in _MANDATORY_CHECKS
+        )
+        return PreflightOutput(
+            status=PreflightStatus.NOT_READY
+            if mandatory_failed
+            else PreflightStatus.READY,
+            checks=checks,
+        )
 
     # ------------------------------------------------------------------
     # SHARED HELPERS
@@ -225,10 +248,19 @@ class MetabaseHandler(Handler):
                 client,
             )
         except (InvalidInputError, AuthError) as exc:
-            logger.warning("authenticationCheck failed", exc_info=True)
+            # No ``exc_info`` here, unlike the other probes: this ``try`` reads
+            # the credentials, so a traceback would carry the password in its
+            # frame locals past every redaction under loguru's ``diagnose``
+            # (F014). The sanitized, capped cause is enough for an engineer;
+            # the customer-facing outcome is the typed error on the check row.
+            # DEBUG, not WARNING, for the same reason as every other probe: the
+            # gate levels the verdict row itself and a handler-authored WARNING
+            # is both a duplicate and invisible under the customer's default
+            # ERROR filter (F005 / FND-901).
+            logger.debug("authenticationCheck failed: %s", sanitize_cause_repr(exc))
             check = self._failed_check("authenticationCheck", exc, start)
         except Exception as exc:
-            logger.warning("authenticationCheck failed", exc_info=True)
+            logger.debug("authenticationCheck failed: %s", sanitize_cause_repr(exc))
             check = self._failed_check(
                 "authenticationCheck",
                 MetabaseSourceUnavailableError(
@@ -367,7 +399,14 @@ class MetabaseHandler(Handler):
                 duration_ms=MetabaseHandler._elapsed_ms(start),
             )
         except MetabaseSourceUnavailableError as exc:
-            logger.warning("collectionCountCheck failed", exc_info=True)
+            # DEBUG, not WARNING: the probe returns the failure typed, on the
+            # check row below, and the preflight gate owns the customer-facing
+            # outcome and levels it from the verdict. A handler-authored WARNING
+            # is both a duplicate of that row and invisible under the customer's
+            # default ERROR filter (F005 / FND-901). DEBUG keeps the traceback
+            # for engineers without adding a second customer-visible record —
+            # the same applies to every probe below.
+            logger.debug("collectionCountCheck failed", exc_info=True)
             error = (
                 MetabaseCollectionAccessError(cause=exc)
                 if exc.http_status in (401, 403)
@@ -375,7 +414,7 @@ class MetabaseHandler(Handler):
             )
             return MetabaseHandler._failed_check("collectionCountCheck", error, start)
         except Exception as exc:
-            logger.warning("collectionCountCheck failed", exc_info=True)
+            logger.debug("collectionCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "collectionCountCheck",
                 MetabaseSourceUnavailableError(
@@ -429,10 +468,10 @@ class MetabaseHandler(Handler):
                 duration_ms=MetabaseHandler._elapsed_ms(start),
             )
         except MetabaseSourceUnavailableError as exc:
-            logger.warning("dashboardCountCheck failed", exc_info=True)
+            logger.debug("dashboardCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check("dashboardCountCheck", exc, start)
         except Exception as exc:
-            logger.warning("dashboardCountCheck failed", exc_info=True)
+            logger.debug("dashboardCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "dashboardCountCheck",
                 MetabaseSourceUnavailableError(
@@ -486,10 +525,10 @@ class MetabaseHandler(Handler):
                 duration_ms=MetabaseHandler._elapsed_ms(start),
             )
         except MetabaseSourceUnavailableError as exc:
-            logger.warning("questionCountCheck failed", exc_info=True)
+            logger.debug("questionCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check("questionCountCheck", exc, start)
         except Exception as exc:
-            logger.warning("questionCountCheck failed", exc_info=True)
+            logger.debug("questionCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "questionCountCheck",
                 MetabaseSourceUnavailableError(
@@ -549,12 +588,12 @@ class MetabaseHandler(Handler):
                 start,
             )
         except MetabaseSourceUnavailableError as exc:
-            logger.warning("nativeQueryPermissionCheck failed", exc_info=True)
+            logger.debug("nativeQueryPermissionCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "nativeQueryPermissionCheck", exc, start
             )
         except Exception as exc:
-            logger.warning("nativeQueryPermissionCheck failed", exc_info=True)
+            logger.debug("nativeQueryPermissionCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "nativeQueryPermissionCheck",
                 MetabaseSourceUnavailableError(

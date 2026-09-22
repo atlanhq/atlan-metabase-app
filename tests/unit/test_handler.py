@@ -646,10 +646,15 @@ class TestMetabaseHandlerPreflightCheck:
     @patch.object(MetabaseHandler, "_validate_question_count", new_callable=AsyncMock)
     @patch.object(MetabaseHandler, "_validate_dashboard_count", new_callable=AsyncMock)
     @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
-    async def test_dashboard_advisory_failure_returns_partial_and_proceeds(
+    async def test_dashboard_advisory_failure_returns_ready_and_proceeds(
         self, mock_collection, mock_dashboard, mock_question, mock_native, handler
     ):
-        """An advisory dashboard failure downgrades to PARTIAL — the run proceeds."""
+        """An advisory dashboard failure keeps the verdict READY — the run proceeds.
+
+        The failed row is still reported; only mandatory checks decide the
+        verdict. (``PreflightStatus.PARTIAL`` was the old answer here and is
+        deprecated — removed in SDK v3.40.0.)
+        """
         mock_collection.return_value = self._check(
             "collectionCountCheck", True, "Total collections: 3"
         )
@@ -670,7 +675,7 @@ class TestMetabaseHandlerPreflightCheck:
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
-        assert result.status == PreflightStatus.PARTIAL
+        assert result.status == PreflightStatus.READY
         assert len(result.checks) == 5
         dashboard = next(c for c in result.checks if c.name == "dashboardCountCheck")
         assert dashboard.passed is False
@@ -681,10 +686,10 @@ class TestMetabaseHandlerPreflightCheck:
     @patch.object(MetabaseHandler, "_validate_question_count", new_callable=AsyncMock)
     @patch.object(MetabaseHandler, "_validate_dashboard_count", new_callable=AsyncMock)
     @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
-    async def test_both_advisory_failures_return_partial(
+    async def test_both_advisory_failures_return_ready(
         self, mock_collection, mock_dashboard, mock_question, mock_native, handler
     ):
-        """Both advisory checks failing still only downgrades to PARTIAL."""
+        """Both advisory checks failing still leaves the verdict READY."""
         mock_collection.return_value = self._check(
             "collectionCountCheck", True, "Total collections: 3"
         )
@@ -696,7 +701,7 @@ class TestMetabaseHandlerPreflightCheck:
 
         result = await handler.preflight_check(PreflightInput(credentials=_creds()))
 
-        assert result.status == PreflightStatus.PARTIAL
+        assert result.status == PreflightStatus.READY
         assert len(result.checks) == 5
 
     async def test_no_client_no_credentials_blocks_at_authentication(
