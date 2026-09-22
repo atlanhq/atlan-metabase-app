@@ -75,13 +75,6 @@ class MissingTypenameInputError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
-class MissingOutputPathInputError(InvalidInputError):
-    """``transform_data`` was called without an ``output_path``."""
-
-    code: ClassVar[str] = "INVALID_INPUT_MISSING_OUTPUT_PATH"
-
-
-@dataclass(kw_only=True)
 class MetabaseSourceUnavailableError(SourceUnavailableError):
     """A Metabase REST API call failed with a non-success HTTP response.
 

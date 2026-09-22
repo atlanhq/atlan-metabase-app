@@ -77,14 +77,26 @@ def _inline_credentials(creds: dict[str, Any]) -> list[dict[str, CredentialValue
     ]
 
 
-def _read_transformed_jsonl(output_path: str, typename: str) -> list[dict]:
-    """Read ``transformed/<TYPENAME>/result-0.json`` and return its records.
+def _transformed_file(store_root: Path, result: MetabaseOutput, typename: str) -> Path:
+    """Where the run DELIVERED ``<TYPENAME>/result-0.json`` in the object store.
+
+    Read from the LocalStore under ``transformed_data_prefix`` — what
+    PublishNode reads — not from a task's local disk: each task writes into
+    its own scratch directory, which nothing downstream can see.
+    """
+    return store_root / result.transformed_data_prefix / typename / "result-0.json"
+
+
+def _read_transformed_jsonl(
+    store_root: Path, result: MetabaseOutput, typename: str
+) -> list[dict]:
+    """Read one delivered ``<TYPENAME>/result-0.json`` and return its records.
 
     Returns an empty list when the file doesn't exist — different
     typenames may legitimately produce zero records against a sparsely-
     seeded Metabase.
     """
-    f = Path(output_path) / "transformed" / typename / "result-0.json"
+    f = _transformed_file(store_root, result, typename)
     if not f.exists():
         return []
     return [json.loads(line) for line in f.read_text().splitlines() if line.strip()]
@@ -101,19 +113,12 @@ class TestMetabaseExtraction:
     pytestmark = pytest.mark.integration
 
     @pytest.fixture(scope="class")
-    def tmp_dir_class(self, tmp_path_factory: pytest.TempPathFactory) -> Path:
-        return tmp_path_factory.mktemp("metabase_extraction")
-
-    @pytest.fixture(scope="class")
     async def extraction_result(
         self,
         metabase_executor: "AppExecutor",
         metabase_credentials: dict[str, Any],
-        tmp_dir_class: Path,
     ) -> MetabaseOutput:
         """Execute one extraction against the seeded testcontainer Metabase."""
-        output_dir = tmp_dir_class / "output"
-        output_dir.mkdir()
         return cast(
             "MetabaseOutput",
             await metabase_executor.execute_app(
@@ -122,7 +127,6 @@ class TestMetabaseExtraction:
                     workflow_id="integration-happy-path",
                     credentials=_inline_credentials(metabase_credentials),
                     connection=_CONNECTION,
-                    output_path=str(output_dir),
                 ),
                 # MetabaseApp is multi-entry-point — without ``entry_point``
                 # the backend would submit to workflow name "metabase",
@@ -183,7 +187,7 @@ class TestMetabaseExtraction:
 
     @pytest.mark.asyncio
     async def test_transformed_collection_file_has_records(
-        self, extraction_result: MetabaseOutput
+        self, extraction_result: MetabaseOutput, store_root: Path
     ) -> None:
         """``transformed/METABASECOLLECTION/result-0.json`` is populated.
 
@@ -192,17 +196,17 @@ class TestMetabaseExtraction:
         the connector, we still expect at least the seeded one to land.
         """
         records = _read_transformed_jsonl(
-            extraction_result.output_path, "METABASECOLLECTION"
+            store_root, extraction_result, "METABASECOLLECTION"
         )
         assert len(records) >= 1, "expected at least one MetabaseCollection record"
 
     @pytest.mark.asyncio
     async def test_transformed_records_have_required_atlas_fields(
-        self, extraction_result: MetabaseOutput
+        self, extraction_result: MetabaseOutput, store_root: Path
     ) -> None:
         """Every transformed record carries the minimum Atlas envelope."""
         records = _read_transformed_jsonl(
-            extraction_result.output_path, "METABASECOLLECTION"
+            store_root, extraction_result, "METABASECOLLECTION"
         )
         for r in records[:5]:  # spot-check the first 5
             assert r.get("typeName") == "MetabaseCollection"
@@ -214,20 +218,16 @@ class TestMetabaseExtraction:
 
     @pytest.mark.asyncio
     async def test_chunk_start_threaded_into_transform_filenames(
-        self, extraction_result: MetabaseOutput
+        self, extraction_result: MetabaseOutput, store_root: Path
     ) -> None:
         """Default ``chunk_start=0`` produces ``result-0.json`` in transformed/."""
-        f = (
-            Path(extraction_result.output_path)
-            / "transformed"
-            / "METABASECOLLECTION"
-            / "result-0.json"
-        )
-        assert f.exists()
+        assert _transformed_file(
+            store_root, extraction_result, "METABASECOLLECTION"
+        ).exists()
 
     @pytest.mark.asyncio
     async def test_biprocess_lineage_refs_on_single_channel(
-        self, extraction_result: MetabaseOutput
+        self, extraction_result: MetabaseOutput, store_root: Path
     ) -> None:
         """A BIProcess wire body must carry its lineage refs on exactly one
         channel — the invariant that prevents ATLAS-400-00-108.
@@ -244,7 +244,7 @@ class TestMetabaseExtraction:
         seeded questions sit on dashboards, so the extract workflow emits
         BIProcess (question->dashboard) lineage.
         """
-        records = _read_transformed_jsonl(extraction_result.output_path, "BIPROCESS")
+        records = _read_transformed_jsonl(store_root, extraction_result, "BIPROCESS")
         assert records, (
             "expected at least one transformed BIProcess — the seed places "
             "questions on dashboards, which yields question->dashboard lineage"

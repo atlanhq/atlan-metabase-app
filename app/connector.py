@@ -16,6 +16,7 @@ serves the platform endpoints: ``/workflows/v1/auth``,
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from typing import Any
 
@@ -49,6 +50,8 @@ from app.contracts import (
     TRANSFORM_ASSET_TYPES,
     BuildLineageInput,
     BuildLineageOutput,
+    CollectResidualsInput,
+    CollectResidualsOutput,
     FetchDetailInput,
     FetchInput,
     FetchOutput,
@@ -64,11 +67,7 @@ from app.contracts import (
     TransformTaskOutput,
 )
 from app.credentials import build_credential_ref, parse_metabase_credentials
-from app.errors import (
-    MetabaseCredentialInputError,
-    MissingOutputPathInputError,
-    MissingTypenameInputError,
-)
+from app.errors import MetabaseCredentialInputError, MissingTypenameInputError
 from app.extracts.collections import fetch_collections_summaries
 from app.extracts.dashboards import fetch_dashboards_details, fetch_dashboards_summaries
 from app.extracts.databases import fetch_databases_details, fetch_databases_summaries
@@ -90,13 +89,13 @@ from app.lineage.ars_builder import build_column_process, build_process, process
 from app.lineage.qi_reader import _question_name as _qi_question_name
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
 from app.paths import (
-    default_output_path,
     processed_file,
     raw_file,
+    task_scratch_dir,
     transformed_file,
     transformed_leaf,
 )
-from app.residuals import RESIDUAL_DIR
+from app.residuals import RESIDUAL_DIR, RESIDUAL_FAILURES_FILE, residual_ref
 from app.utils import read_jsonl, write_jsonl
 
 logger = get_logger(__name__)
@@ -104,6 +103,11 @@ logger = get_logger(__name__)
 
 def _ref(local_path: str) -> FileReference:
     return FileReference(local_path=local_path, tier=StorageTier.RETAINED)
+
+
+def _copy_file(src: str, dst: str) -> None:
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copyfile(src, dst)
 
 
 def _map_one_record(
@@ -273,48 +277,64 @@ class MetabaseApp(App):
     async def extract_collections(self, input: FetchInput) -> FetchOutput:
         """Fetch all collections → ``raw/collections/result-0.json``."""
         client = await self._build_client(input)
-        records = await fetch_collections_summaries(client, input.output_path)
-        out = raw_file(input.output_path, "collections")
+        scratch = task_scratch_dir("extract-collections")
+        records = await fetch_collections_summaries(client, scratch)
+        out = raw_file(scratch, "collections")
         await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_collections: wrote %d records", len(records))
         return FetchOutput(
-            typename="collections", record_count=len(records), output_file=_ref(out)
+            typename="collections",
+            record_count=len(records),
+            output_file=_ref(out),
+            residual_file=residual_ref(scratch),
         )
 
     @task(timeout_seconds=600)
     async def extract_dashboards(self, input: FetchInput) -> FetchOutput:
         """Fetch dashboard summaries → ``raw/dashboards/result-0.json``."""
         client = await self._build_client(input)
-        records = await fetch_dashboards_summaries(client, input.output_path)
-        out = raw_file(input.output_path, "dashboards")
+        scratch = task_scratch_dir("extract-dashboards")
+        records = await fetch_dashboards_summaries(client, scratch)
+        out = raw_file(scratch, "dashboards")
         await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_dashboards: wrote %d records", len(records))
         return FetchOutput(
-            typename="dashboards", record_count=len(records), output_file=_ref(out)
+            typename="dashboards",
+            record_count=len(records),
+            output_file=_ref(out),
+            residual_file=residual_ref(scratch),
         )
 
     @task(timeout_seconds=600)
     async def extract_questions(self, input: FetchInput) -> FetchOutput:
         """Fetch question (card) summaries → ``raw/questions/result-0.json``."""
         client = await self._build_client(input)
-        records = await fetch_questions_summaries(client, input.output_path)
-        out = raw_file(input.output_path, "questions")
+        scratch = task_scratch_dir("extract-questions")
+        records = await fetch_questions_summaries(client, scratch)
+        out = raw_file(scratch, "questions")
         await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_questions: wrote %d records", len(records))
         return FetchOutput(
-            typename="questions", record_count=len(records), output_file=_ref(out)
+            typename="questions",
+            record_count=len(records),
+            output_file=_ref(out),
+            residual_file=residual_ref(scratch),
         )
 
     @task(timeout_seconds=600)
     async def extract_databases(self, input: FetchInput) -> FetchOutput:
         """Fetch database summaries → ``raw/databases/result-0.json``."""
         client = await self._build_client(input)
-        records = await fetch_databases_summaries(client, input.output_path)
-        out = raw_file(input.output_path, "databases")
+        scratch = task_scratch_dir("extract-databases")
+        records = await fetch_databases_summaries(client, scratch)
+        out = raw_file(scratch, "databases")
         await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_databases: wrote %d records", len(records))
         return FetchOutput(
-            typename="databases", record_count=len(records), output_file=_ref(out)
+            typename="databases",
+            record_count=len(records),
+            output_file=_ref(out),
+            residual_file=residual_ref(scratch),
         )
 
     @task(timeout_seconds=600)
@@ -350,10 +370,11 @@ class MetabaseApp(App):
         filtered_dashboards = filter_dashboards(raw_dashboards, accepted_ids)
         filtered_questions = filter_questions(raw_questions, accepted_ids)
 
-        c_out = raw_file(input.output_path, "collections_filtered")
-        d_out = raw_file(input.output_path, "dashboards_filtered")
-        q_out = raw_file(input.output_path, "questions_filtered")
-        db_out = raw_file(input.output_path, "databases_filtered")
+        scratch = task_scratch_dir("filter-data")
+        c_out = raw_file(scratch, "collections_filtered")
+        d_out = raw_file(scratch, "dashboards_filtered")
+        q_out = raw_file(scratch, "questions_filtered")
+        db_out = raw_file(scratch, "databases_filtered")
 
         await self.run_in_thread(write_jsonl, c_out, filtered_collections)
         await self.run_in_thread(write_jsonl, d_out, filtered_dashboards)
@@ -398,16 +419,16 @@ class MetabaseApp(App):
             "extract_individual_dashboards: fetching detail for %d dashboards",
             len(filtered_dashboards),
         )
-        records = await fetch_dashboards_details(
-            client, filtered_dashboards, input.output_path
-        )
-        out = raw_file(input.output_path, "dashboard_details")
+        scratch = task_scratch_dir("extract-individual-dashboards")
+        records = await fetch_dashboards_details(client, filtered_dashboards, scratch)
+        out = raw_file(scratch, "dashboard_details")
         await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_individual_dashboards: wrote %d records", len(records))
         return FetchOutput(
             typename="dashboard_details",
             record_count=len(records),
             output_file=_ref(out),
+            residual_file=residual_ref(scratch),
         )
 
     @task(
@@ -425,14 +446,16 @@ class MetabaseApp(App):
             "extract_individual_databases: fetching metadata for %d databases",
             len(databases),
         )
-        records = await fetch_databases_details(client, databases, input.output_path)
-        out = raw_file(input.output_path, "database_metadata")
+        scratch = task_scratch_dir("extract-individual-databases")
+        records = await fetch_databases_details(client, databases, scratch)
+        out = raw_file(scratch, "database_metadata")
         await self.run_in_thread(write_jsonl, out, records)
         logger.info("extract_individual_databases: wrote %d records", len(records))
         return FetchOutput(
             typename="database_metadata",
             record_count=len(records),
             output_file=_ref(out),
+            residual_file=residual_ref(scratch),
         )
 
     @task(
@@ -450,14 +473,16 @@ class MetabaseApp(App):
             "fetch_question_queries_activity: fetching queries for %d questions",
             len(questions),
         )
-        records = await fetch_question_queries(client, questions, input.output_path)
-        out = raw_file(input.output_path, "question_queries")
+        scratch = task_scratch_dir("fetch-question-queries")
+        records = await fetch_question_queries(client, questions, scratch)
+        out = raw_file(scratch, "question_queries")
         await self.run_in_thread(write_jsonl, out, records)
         logger.info("fetch_question_queries_activity: wrote %d records", len(records))
         return FetchOutput(
             typename="question_queries",
             record_count=len(records),
             output_file=_ref(out),
+            residual_file=residual_ref(scratch),
         )
 
     @task(timeout_seconds=1800)
@@ -524,10 +549,11 @@ class MetabaseApp(App):
             connection_qualified_name=input.connection_qualified_name,
         )
 
-        c_out = processed_file(input.output_path, "collections")
-        d_out = processed_file(input.output_path, "dashboards")
-        q_out = processed_file(input.output_path, "questions")
-        qd_out = processed_file(input.output_path, "questions_dashboards")
+        scratch = task_scratch_dir("process-metabaseprocess")
+        c_out = processed_file(scratch, "collections")
+        d_out = processed_file(scratch, "dashboards")
+        q_out = processed_file(scratch, "questions")
+        qd_out = processed_file(scratch, "questions_dashboards")
 
         await self.run_in_thread(write_jsonl, c_out, filtered_collections)
         await self.run_in_thread(write_jsonl, d_out, enriched_dashboards)
@@ -557,6 +583,35 @@ class MetabaseApp(App):
             total_records=total,
         )
 
+    @task(timeout_seconds=600)
+    async def collect_residuals(
+        self, input: CollectResidualsInput
+    ) -> CollectResidualsOutput:
+        """Gather the tasks' tolerated-failure files into one ``residual/`` tree.
+
+        Each file was written on the pod of the task that tolerated the
+        failure and arrives here as that task's reference, materialised on
+        this pod by the interceptor. Laid out as
+        ``residual/<producer>/failures.jsonl`` so every producer keeps its
+        own file. The returned directory reference is what the entrypoint
+        uploads — the same stage-then-upload shape as
+        ``build_lineage_records``.
+        """
+        if not input.residual_files:
+            return CollectResidualsOutput()
+        residual_dir = os.path.join(task_scratch_dir("collect-residuals"), RESIDUAL_DIR)
+        for producer, ref in sorted(input.residual_files.items()):
+            await self.run_in_thread(
+                _copy_file,
+                ref.local_path or "",
+                os.path.join(residual_dir, producer, RESIDUAL_FAILURES_FILE),
+            )
+        return CollectResidualsOutput(
+            residual_dir=FileReference.from_local(
+                residual_dir, tier=StorageTier.RETAINED
+            )
+        )
+
     # ------------------------------------------------------------------
     # TRANSFORM @task — called once per asset typename from run()
     # ------------------------------------------------------------------
@@ -575,8 +630,8 @@ class MetabaseApp(App):
         Reads the enriched records through ``input.processed_file`` — the
         reference ``process_metabaseprocess`` returned — runs each one
         through a typed pyatlan_v9 asset mapper, writes the serialized
-        entities to ``<output_path>/transformed/<typename>/result-<chunk>``
-        on this pod, and hands that tree back as a ``FileReference`` for the
+        entities to ``<scratch>/transformed/<typename>/result-<chunk>``
+        in this task's own scratch directory, and hands that tree back as a ``FileReference`` for the
         entrypoint to publish.
 
         Asset-mapper migration: this used to consume YAML + Daft via
@@ -591,14 +646,8 @@ class MetabaseApp(App):
                 message="transform_data: 'typename' is required",
                 field="typename",
             )
-        if not input.output_path:
-            raise MissingOutputPathInputError(
-                message="transform_data: 'output_path' is required",
-                field="output_path",
-            )
-
         # Read through the reference the producer handed us, not a path
-        # rebuilt from output_path. process_metabaseprocess runs as its own
+        # rebuilt from a shared directory. process_metabaseprocess runs as its own
         # activity, so its `processed/` tree lives on that activity's pod;
         # rebuilding the path here found an empty directory — and returned
         # zero records under a SUCCESS status — whenever the two activities
@@ -614,7 +663,9 @@ class MetabaseApp(App):
             logger.info("transform_data: no records found for %s", typename)
             return TransformTaskOutput(typename=typename, record_count=0)
 
-        out_file = transformed_file(input.output_path, typename, input.chunk_start)
+        out_file = transformed_file(
+            task_scratch_dir("transform-data"), typename, input.chunk_start
+        )
         os.makedirs(os.path.dirname(out_file), exist_ok=True)
 
         ctx = dict(
@@ -664,7 +715,7 @@ class MetabaseApp(App):
         """End-to-end Metabase metadata extraction + transform.
 
         Orchestration:
-          1. Validate + resolve output path
+          1. (No shared output path: each @task makes its own scratch dir)
           2. Resolve credential routing (CredentialRef vs inline)
           3. Extract: collections, dashboards, questions, databases
           4. Filter: apply include/exclude (collection-level; cascades to
@@ -679,14 +730,10 @@ class MetabaseApp(App):
              LineagePublishNode (no upload yet — that's extract_lineage's job)
          10. Return MetabaseOutput
         """
-        output_path = input.output_path or default_output_path(input.workflow_id)
-        logger.info("MetabaseApp.run: output_path=%s", output_path)
-
         # Resolve credentials ONCE and thread through every @task input.
         cred_ref, inline_creds = build_credential_ref(input)
 
         fetch_input = FetchInput(
-            output_path=output_path,
             credential_ref=cred_ref,
             inline_credentials=inline_creds,
         )
@@ -700,7 +747,6 @@ class MetabaseApp(App):
         # --- 4. Filter --------------------------------------------------
         filtered = await self.filter_data(
             FilterInput(
-                output_path=output_path,
                 include_collections=input.include_collections,
                 exclude_collections=input.exclude_collections,
                 collections_file=collections.output_file,
@@ -715,7 +761,6 @@ class MetabaseApp(App):
         # --- 5. Detail fetch -------------------------------------------
         dashboard_details = await self.extract_individual_dashboards(
             FetchDetailInput(
-                output_path=output_path,
                 source_file=filtered.dashboards_filtered_file,
                 credential_ref=cred_ref,
                 inline_credentials=inline_creds,
@@ -726,10 +771,10 @@ class MetabaseApp(App):
         # available in the artifact bundle for diagnostics). Its result file
         # is not consumed downstream — the QueryIntelligence app resolves
         # source tables against Atlan-known assets directly, not against
-        # raw Metabase database metadata.
-        await self.extract_individual_databases(
+        # raw Metabase database metadata. Its result is kept only for the
+        # failures it tolerated (fanned in with the others below).
+        database_details = await self.extract_individual_databases(
             FetchDetailInput(
-                output_path=output_path,
                 source_file=filtered.databases_filtered_file,
                 credential_ref=cred_ref,
                 inline_credentials=inline_creds,
@@ -737,7 +782,6 @@ class MetabaseApp(App):
         )
         question_queries = await self.fetch_question_queries_activity(
             FetchDetailInput(
-                output_path=output_path,
                 source_file=filtered.questions_filtered_file,
                 credential_ref=cred_ref,
                 inline_credentials=inline_creds,
@@ -752,7 +796,6 @@ class MetabaseApp(App):
         # every activity happened to share one pod's filesystem.
         processed = await self.process_metabaseprocess(
             ProcessInput(
-                output_path=output_path,
                 collections_filtered_file=filtered.collections_filtered_file,
                 databases_filtered_file=filtered.databases_filtered_file,
                 question_queries_file=question_queries.output_file,
@@ -788,7 +831,6 @@ class MetabaseApp(App):
             stats = await self.transform_data(
                 TransformTaskInput(
                     workflow_id=input.workflow_id,
-                    output_path=output_path,
                     processed_file=processed_by_typename.get(typename),
                     connection_qualified_name=connection_qn,
                     connection_name=connection_name,
@@ -826,10 +868,10 @@ class MetabaseApp(App):
         #     being handed on as a short prefix nobody can distinguish
         #     from a small run.
         #
-        # What it does not do is scan ``<output_path>/transformed/``. That
-        # directory is written by the transform activities, so this pod holds
-        # only the subset that happened to run locally — and on a fully
-        # fanned-out run, nothing at all.
+        # What it does not do is scan a local ``transformed/`` directory.
+        # That tree is written by the transform activities, each in its own
+        # scratch directory on whichever pod it ran on — this one holds none
+        # of it.
         #
         # The label is the full ``<TYPENAME>/result-<chunk>.json`` leaf, from
         # the same ``transformed_leaf`` the producing task wrote to, so the
@@ -855,16 +897,45 @@ class MetabaseApp(App):
         )
         transformed_data_prefix = delivered.prefix
 
-        # Upload residual/ (tolerated-failure records — see app/residuals.py)
-        # so they survive pod teardown instead of being stranded on ephemeral
-        # local disk. Only present when at least one failure was recorded.
-        residual_dir = os.path.join(output_path, RESIDUAL_DIR)
-        residual_failures = None
-        if os.path.isdir(residual_dir):
-            residual_upload = await self.upload(
-                UploadInput(local_path=residual_dir, tier=StorageTier.RETAINED)
+        # Deliver residual/ (tolerated-failure records — see app/residuals.py).
+        # Each file was written on the pod of the task that tolerated the
+        # failure, so it arrives as that task's `residual_file` reference,
+        # never by scanning this pod's disk. Scanning found only the failures
+        # of tasks that happened to run here, so a fanned-out run could lose
+        # them and report SUCCESS over a gap. collect_residuals gathers the
+        # references into one tree and the upload makes it durable, the same
+        # stage-then-upload shape extract_lineage uses. Absent when nothing
+        # was tolerated.
+        residual_files = {
+            out.typename: out.residual_file
+            for out in (
+                collections,
+                dashboards,
+                questions,
+                databases,
+                dashboard_details,
+                database_details,
+                question_queries,
             )
-            residual_failures = residual_upload.ref
+            if out.residual_file is not None
+        }
+        residual_failures = None
+        if residual_files:
+            collected = await self.collect_residuals(
+                CollectResidualsInput(residual_files=residual_files)
+            )
+            if collected.residual_dir is not None:
+                residual_upload = await self.upload(
+                    UploadInput(
+                        ref=collected.residual_dir,
+                        local_path=collected.residual_dir.local_path or "",
+                        tier=StorageTier.RETAINED,
+                        # Failures were recorded, so an empty upload means
+                        # the evidence never reached the store.
+                        raise_on_empty=True,
+                    )
+                )
+                residual_failures = residual_upload.ref
 
         # --- 9. Compute lineage path prefixes for downstream nodes ----
         # The QueryIntelligenceNode writes to `view_lineage_output_prefix`;
@@ -908,7 +979,6 @@ class MetabaseApp(App):
             ),
             transformed_data_prefix=transformed_data_prefix,
             connection_qualified_name=connection_qn,
-            output_path=output_path,
             view_lineage_output_prefix=view_lineage_output_prefix,
             publish_state_prefix=publish_state_prefix,
             current_state_prefix=current_state_prefix,
@@ -962,7 +1032,7 @@ class MetabaseApp(App):
         # Process publish to land ATLAS-400-00-021 — the resolver never
         # saw our records, the arsIdentity refs never got UNNESTed, and
         # publish-app posted malformed ObjectIds to Atlas.
-        stage_dir = os.path.join(input.output_path, "lineage-stage")
+        stage_dir = os.path.join(task_scratch_dir("build-lineage"), "lineage-stage")
         resolvable_dir = os.path.join(stage_dir, "resolvable")
         os.makedirs(os.path.join(resolvable_dir, "PROCESS"), exist_ok=True)
         os.makedirs(os.path.join(resolvable_dir, "COLUMNPROCESS"), exist_ok=True)
@@ -1024,7 +1094,6 @@ class MetabaseApp(App):
             input.connection_qualified_name
             or input.connection.attributes.qualified_name
         )
-        output_path = input.output_path or default_output_path(input.workflow_id)
         connection_name = input.connection.attributes.name or "metabase"
         logger.info(
             "MetabaseApp.extract_lineage: connection_qn=%s, view_lineage_input_prefix=%s",
@@ -1054,7 +1123,6 @@ class MetabaseApp(App):
         # built-in open() in entrypoint code.
         build = await self.build_lineage_records(
             BuildLineageInput(
-                output_path=output_path,
                 qi_records=qi_records,
                 connection_qualified_name=connection_qn,
                 connection_name=connection_name,

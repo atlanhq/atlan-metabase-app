@@ -59,10 +59,15 @@ Per-task inputs (`FetchInput`, `FilterInput`, `FetchDetailInput`, `ProcessInput`
 | `connection` | `ConnectionRef` | empty | The Atlan connection assets are written under. |
 | `include_collections` | `dict[str, CollectionSelection]` | `{}` | Collection ids to include. Empty = include all non-personal. |
 | `exclude_collections` | `dict[str, CollectionSelection]` | `{}` | Collection ids to skip. |
-| `output_path` | `str` | `""` | Local working directory. Defaults to a temp dir. |
 | `output_prefix` | `str` | `""` | Object-store prefix for the `transformed/` upload. |
-| `processed_data_path` | `str` | `""` | Override read root for `transform_data` (debug-only). |
 | `chunk_start` | `int` | `0` | Chunk index threaded into output filenames. |
+
+`output_path` and `processed_data_path` are retired (`sunset` in
+[`contract_schema.lock.json`](contract_schema.lock.json)). Every `@task`
+creates its own scratch directory and every hand-off travels as a
+`FileReference`, so no working directory is passed in. Payloads that still
+carry these fields are accepted and the fields are ignored. The same
+applies to `output_path` on `MetabaseLineageInput` and `MetabaseOutput`.
 
 ### `extract_lineage` input fields ([`MetabaseLineageInput`](app/contracts.py))
 
@@ -72,7 +77,6 @@ Per-task inputs (`FetchInput`, `FilterInput`, `FetchDetailInput`, `ProcessInput`
 | `connection` | `ConnectionRef` | empty | Same connection as `extract_metadata`. |
 | `connection_qualified_name` | `str` | `""` | Threaded from `extract_metadata.outputs.connection_qualified_name`. |
 | `view_lineage_input_prefix` | `str` | `""` | Object-store prefix where the QueryIntelligence node wrote parsed-SQL NDJSON. |
-| `output_path` | `str` | `""` | Local working directory. |
 | `output_prefix` | `str` | `""` | Object-store prefix for the `lineage-stage/` upload. |
 
 ---
@@ -85,7 +89,6 @@ Per-task inputs (`FetchInput`, `FilterInput`, `FetchDetailInput`, `ProcessInput`
 |---|---|---|
 | `transformed_data_prefix` | `str` | Object-store prefix of the uploaded `transformed/` tree. Read by the publish node. |
 | `connection_qualified_name` | `str` | Echoed from `input.connection`. Used to scope downstream state buckets. |
-| `output_path` | `str` | Local working directory (so re-runs / debug tools can find intermediate files). |
 | `view_lineage_output_prefix` | `str` | Prefix the QueryIntelligence node will write parsed-SQL output to. Threaded into `extract_lineage`. |
 | `publish_state_prefix` | `str` | Blue-green publish state prefix derived under `persistent-artifacts/`. |
 | `current_state_prefix` | `str` | Current-state cache prefix derived under `argo-artifacts/`. |

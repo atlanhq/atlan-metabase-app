@@ -8,9 +8,9 @@ from app.paths import (
     PROCESSED_DIR,
     RAW_DIR,
     TRANSFORMED_DIR,
-    default_output_path,
     processed_file,
     raw_file,
+    task_scratch_dir,
     transformed_file,
     transformed_leaf,
 )
@@ -22,18 +22,17 @@ def test_constants_match_layout_used_by_tasks():
     assert TRANSFORMED_DIR == "transformed"
 
 
-def test_default_output_path_uses_tempdir_with_workflow_id(tmp_path, monkeypatch):
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
-    result = default_output_path("wf-abc")
-    assert result == str(tmp_path / "atlan-metabase-app" / "wf-abc")
-    assert Path(result).exists()
-
-
-def test_default_output_path_no_workflow_id(tmp_path, monkeypatch):
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
-    result = default_output_path("")
-    assert result == str(tmp_path / "atlan-metabase-app")
-    assert Path(result).exists()
+def test_task_scratch_dir_is_fresh_per_call(tmp_path, monkeypatch):
+    """Two invocations never share a directory, so a retry cannot append to
+    a previous attempt's files and no task can lean on another's disk."""
+    monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
+    first = task_scratch_dir("extract-collections")
+    second = task_scratch_dir("extract-collections")
+    assert first != second
+    for d in (first, second):
+        assert Path(d).is_dir()
+        assert Path(d).parent == tmp_path
+        assert Path(d).name.startswith("atlan-metabase-extract-collections-")
 
 
 def test_raw_file_path_layout():
