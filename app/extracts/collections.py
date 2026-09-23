@@ -6,6 +6,8 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 from app.client import MetabaseApiClient
 from app.constants import MetabaseUrls
+from app.errors import MetabaseSourceUnavailableError
+from app.extracts.responses import json_or_raise
 from app.residuals import record_residual_failure
 
 logger = get_logger(__name__)
@@ -36,22 +38,25 @@ async def fetch_collections_summaries(
     Returns:
         List of raw collection dicts.  Returns ``[]`` on failure — collections
         are foundational to every downstream stage, so a hard failure here is
-        recorded as a residual rather than raised (see module docstring in
-        ``app/residuals.py``).
+        caught here and recorded as a residual rather than propagated (see
+        module docstring in ``app/residuals.py``).
     """
     url = MetabaseUrls.collection(client.host, client.port)
     response = await client.execute_http_get_request(url=url, timeout=60)
-    if response is None or not response.is_success:
-        status = response.status_code if response else "No response"
-        logger.warning("Failed to fetch collections: %s", status)
+    try:
+        records = json_or_raise(response, endpoint="/api/collection")
+    except MetabaseSourceUnavailableError as exc:
+        logger.warning(
+            "Failed to fetch collections: %s",
+            exc.http_status or "No response",
+            exc_info=True,
+        )
         record_residual_failure(
             output_path,
             "collections_fetch_failed",
-            endpoint="/api/collection",
-            http_status=status if isinstance(status, int) else None,
+            endpoint=exc.endpoint,
+            http_status=exc.http_status,
         )
-        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow; the run declares the resulting gap as OutputStatus.PARTIAL_SUCCESS (connector.py step 10), so a tolerated failure is never published as a complete run.
         return []
-    records = response.json()
     logger.info("Fetched %d collections", len(records))
     return records

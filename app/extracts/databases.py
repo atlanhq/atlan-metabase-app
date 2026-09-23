@@ -6,6 +6,8 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 from app.client import MetabaseApiClient
 from app.constants import MetabaseUrls
+from app.errors import MetabaseSourceUnavailableError
+from app.extracts.responses import json_or_raise
 from app.residuals import record_residual_failure
 
 logger = get_logger(__name__)
@@ -41,23 +43,27 @@ async def fetch_databases_summaries(
 
     Returns:
         List of raw database dicts (unwrapped from the ``data`` key).  Returns
-        ``[]`` on failure — the failure is recorded as a residual rather than
-        raised (see ``app/residuals.py``).
+        ``[]`` on failure — the typed failure is caught here and recorded as a
+        residual rather than propagated (see ``app/residuals.py``).
     """
     url = MetabaseUrls.database(client.host, client.port)
     response = await client.execute_http_get_request(url=url, timeout=60)
-    if response is None or not response.is_success:
-        status = response.status_code if response else "No response"
-        logger.warning("Failed to fetch databases: %s", status)
+    try:
+        body = json_or_raise(response, endpoint="/api/database")
+    except MetabaseSourceUnavailableError as exc:
+        logger.warning(
+            "Failed to fetch databases: %s",
+            exc.http_status or "No response",
+            exc_info=True,
+        )
         record_residual_failure(
             output_path,
             "databases_fetch_failed",
-            endpoint="/api/database",
-            http_status=status if isinstance(status, int) else None,
+            endpoint=exc.endpoint,
+            http_status=exc.http_status,
         )
-        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the workflow; the run declares the resulting gap as OutputStatus.PARTIAL_SUCCESS (connector.py step 10), so a tolerated failure is never published as a complete run.
         return []
-    records = response.json().get("data", [])
+    records = body.get("data", [])
     logger.info("Fetched %d databases", len(records))
     return records
 
@@ -118,21 +124,23 @@ async def fetch_database_metadata(
     """
     url = MetabaseUrls.database_metadata(client.host, client.port, database_id)
     response = await client.execute_http_get_request(url=url, timeout=60)
-    if response is None or not response.is_success:
-        status = response.status_code if response else "No response"
+    try:
+        return json_or_raise(response, endpoint="/api/database")
+    except MetabaseSourceUnavailableError as exc:
         logger.warning(
-            "Failed to fetch database metadata for id=%s: %s", database_id, status
+            "Failed to fetch database metadata for id=%s: %s",
+            database_id,
+            exc.http_status or "No response",
+            exc_info=True,
         )
         record_residual_failure(
             output_path,
             "database_metadata_fetch_failed",
-            endpoint="/api/database",
+            endpoint=exc.endpoint,
             record_id=database_id,
-            http_status=status if isinstance(status, int) else None,
+            http_status=exc.http_status,
         )
-        # conformance: ignore[E020] tolerated failure recorded to residual/failures.jsonl (see app/residuals.py) instead of aborting the batch; the run declares the resulting gap as OutputStatus.PARTIAL_SUCCESS (connector.py step 10), so a tolerated failure is never published as a complete run.
         return None
-    return response.json()
 
 
 async def _fetch_database_metadata(
