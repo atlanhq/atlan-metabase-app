@@ -63,11 +63,7 @@ class TestMetabaseHandlerTestAuth:
         mock_client.test_connection.assert_called_once()
 
     async def test_auth_failure_raises_when_no_token(self, handler, mock_client):
-        """test_auth returns FAILED with a stable message when test_connection raises.
-
-        The raw exception text must NOT leak into the typed ``message`` field
-        (E019) — the detail goes to the application logs instead.
-        """
+        """An untyped failure reports the host as unreachable, as preflight does."""
         mock_client.test_connection = AsyncMock(
             side_effect=Exception("No session token available")
         )
@@ -75,19 +71,25 @@ class TestMetabaseHandlerTestAuth:
         result = await handler.test_auth(AuthInput(credentials=_creds()))
 
         assert result.status == AuthStatus.FAILED
-        assert (
-            result.message == "Authentication failed — see application logs for detail"
-        )
+        assert result.message == "Could not reach the Metabase host."
         assert "No session token available" not in result.message
+
+    async def test_auth_rejected_session_reports_the_auth_failure(
+        self, handler, mock_client
+    ):
+        mock_client.test_connection = AsyncMock(side_effect=MetabaseSessionAuthError())
+
+        result = await handler.test_auth(AuthInput(credentials=_creds()))
+
+        assert result.status == AuthStatus.FAILED
+        assert result.message == MetabaseSessionAuthError().message
 
     async def test_auth_no_client_raises(self, handler_no_client):
         """test_auth returns FAILED when there is no client and no credentials."""
         result = await handler_no_client.test_auth(AuthInput(credentials=[]))
 
         assert result.status == AuthStatus.FAILED
-        assert (
-            result.message == "Authentication failed — see application logs for detail"
-        )
+        assert result.message == "Metabase client not initialized"
 
 
 class TestMetabaseHandlerFetchMetadata:
