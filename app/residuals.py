@@ -1,16 +1,17 @@
 """Purely-additive residual-failure tracking.
 
-Some extract paths deliberately tolerate individual API failures — returning
-an empty list or ``None`` — rather than aborting the whole workflow over one
-flaky endpoint or one bad record (see the ``# conformance: ignore[E020]``
-directives at each call site). Logging the failure and moving on risks it
-never being reviewed, since worker-pod logs are easy to miss and don't
+Some extract paths deliberately tolerate individual API failures — the
+failed response is raised as a typed ``MetabaseSourceUnavailableError``
+(``app/extracts/responses.py``), and the extract function catches it and
+returns an empty list or ``None`` — rather than aborting the whole workflow
+over one flaky endpoint or one bad record. Logging the failure and moving on
+risks it never being reviewed, since worker-pod logs are easy to miss and don't
 aggregate per-workflow-run.
 
 This module gives those call sites a second, additive output: a local JSONL
 file recording every tolerated failure, written into the calling task's own
-scratch directory (alongside ``raw/``). Call sites keep returning their
-existing empty/None sentinel exactly as before; this only adds a side file.
+scratch directory (alongside ``raw/``). The catching call sites still return
+their empty/None sentinel; this only adds a side file.
 
 The file lives on the pod the task ran on, so it cannot be collected by
 scanning a directory later: each task hands it back as a durable

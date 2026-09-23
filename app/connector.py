@@ -967,9 +967,9 @@ class MetabaseApp(App):
         # least one tolerated failure was recorded, which means some entities
         # are absent from this run's output. Reporting SUCCESS with a gap is
         # how downstream diffing comes to read that gap as an intentional
-        # delete: the `# conformance: ignore[E020]` directives at each call
-        # site sanction *tolerating* the failure, not *claiming the run was
-        # complete*. PARTIAL_SUCCESS is the SDK's channel for exactly this
+        # delete: the typed-error catches in `app/extracts/` sanction
+        # *tolerating* the failure, not *claiming the run was complete*.
+        # PARTIAL_SUCCESS is the SDK's channel for exactly this
         # ("some entities were skipped or degraded" — OutputStatus).
         return MetabaseOutput(
             status=(

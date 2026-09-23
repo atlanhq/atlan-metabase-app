@@ -540,9 +540,10 @@ async def test_probe_blocks_where_extraction_degrades_under_one_failure(
 
     Under one injected 503 on the collection listing: the probe blocks with a
     typed SOURCE_UNAVAILABLE row (no evidence, no run), while extraction
-    tolerates it — returns the empty sentinel its ``ignore[E020]`` sanctions and
-    records a residual, which is what makes ``app/connector.py`` step 10 declare
-    the run PARTIAL_SUCCESS instead of publishing a gap as a complete crawl.
+    tolerates it — catches the typed ``MetabaseSourceUnavailableError``,
+    returns the empty sentinel and records a residual, which is what makes
+    ``app/connector.py`` step 10 declare the run PARTIAL_SUCCESS instead of
+    publishing a gap as a complete crawl.
     """
     source.status(COLLECTION, 503)
 
