@@ -9,9 +9,10 @@ shape.
 All functions are pure: no I/O, no side effects, deterministic. Temporal
 may replay them during retries; the activity boundary owns I/O.
 
-Serialization uses :func:`serialize_entity` to emit the
-``{typeName, status, attributes}`` shape the publish layer reads — same
-shape the v2 transformer produced, so this is a drop-in swap.
+Serialization goes through the SDK's ``entity_bytes`` seam (see
+:func:`serialize_entity`) under this connector's declared
+:data:`ENTITY_ENVELOPE`, emitting the flattened ``{typeName, status,
+attributes}`` shape the publish layer reads.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ from __future__ import annotations
 from typing import Any
 
 import orjson
+from application_sdk.common.asset_serialization import entity_bytes
+from application_sdk.common.entity_envelope import EntityEnvelopePolicy, EnvelopeShape
 from pyatlan_v9.model.assets import (
     BIProcess,
     MetabaseCollection,
@@ -65,8 +68,10 @@ def _apply_sync_metadata(
 
     The publish layer keys cache state off ``last_sync_run`` /
     ``last_sync_workflow_name`` and the connection identity fields, so this
-    must be applied uniformly across all four mappers.
+    must be applied uniformly across all four mappers. ``status`` is set on
+    the asset because the flattened envelope emits only what the asset holds.
     """
+    asset.status = "ACTIVE"
     asset.connector_name = connector_name
     asset.connection_name = connection_name
     asset.last_sync_workflow_name = workflow_id
@@ -307,49 +312,37 @@ def map_bi_process(
 
 
 # ---------------------------------------------------------------------------
-# Serialization — preserves the v2 wire format the publish layer consumes
+# Serialization — through the SDK's entity_bytes seam
 # ---------------------------------------------------------------------------
+
+#: This connector's entity envelope. FLATTENED puts every relationship ref in
+#: ``attributes`` beside the scalars and emits no ``relationshipAttributes`` key:
+#: BIProcess ``inputs``/``outputs`` land where the publish-app's ARS resolver
+#: reads them, on one channel only (the ATLAS-400-00-108 guard), and the
+#: ``metabaseCollection`` ref travels the same way. It is the SDK default;
+#: declared explicitly because the shape is a published contract, not a
+#: formatting preference. No ``sql_dialect``: no Metabase asset carries DDL.
+ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)
 
 
 def serialize_entity(
     asset: Any, extra_attributes: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Encode a pyatlan_v9 asset to the JSON shape the publish layer reads.
+    """Encode a pyatlan_v9 asset to the Atlas wire shape the publish layer reads.
 
-    Decodes the asset's canonical ``to_nested_bytes`` output back through
-    json — that's the form the publish-app's ARS resolver expects (with
-    ``attributes`` and ``relationshipAttributes`` top-level keys). Extras
-    (e.g. Atlan custom attributes not modelled in pyatlan_v9) are merged
-    into ``attributes``.
+    Serialization itself is :func:`entity_bytes` under :data:`ENTITY_ENVELOPE`,
+    which owns the dispatch (raising ``UnserializableMapperResultError`` on a
+    shape it does not recognise) and strips pyatlan's placeholder ``guid``. No
+    ``connection_name`` / ``last_sync``: :func:`_apply_sync_metadata` already
+    stamps both on every asset.
+
+    ``extra_attributes`` are Atlan custom attributes pyatlan_v9 does not model
+    (see :func:`map_question`); they have no field on the asset, so they are
+    merged into ``attributes`` after serialization.
     """
-    nested = orjson.loads(asset.to_nested_bytes())
-    attrs = dict(nested.get("attributes") or {})
+    entity: dict[str, Any] = orjson.loads(
+        entity_bytes(asset, entity_type=asset.type_name, envelope=ENTITY_ENVELOPE)
+    )
     if extra_attributes:
-        attrs.update(extra_attributes)
-    out: dict[str, Any] = {
-        "typeName": nested.get("typeName"),
-        "status": "ACTIVE",
-        "attributes": attrs,
-    }
-    rel = nested.get("relationshipAttributes") or {}
-    # BIProcess lineage refs must surface as inputs/outputs on attributes —
-    # the v2 YAML put them there inline and the publish-app's ARS resolver
-    # reads from attributes.inputs/outputs. Hoisting from relationshipAttributes
-    # preserves that contract while keeping the typed pyatlan asset canonical.
-    if out["typeName"] == "BIProcess":
-        for key in ("inputs", "outputs"):
-            value = rel.get(key)
-            if value is not None:
-                out["attributes"][key] = value
-                # Drop the hoisted keys from relationshipAttributes so lineage
-                # refs travel on a single channel. The publish-app diff manages
-                # inputs/outputs via appendRelationshipAttributes; leaving them
-                # in relationshipAttributes too makes Atlas reject the entity on
-                # incremental runs (ATLAS-400-00-108: attribute already exists in
-                # relationshipAttributes).
-                rel.pop(key, None)
-    # Keep canonical relationshipAttributes for the publish layer's
-    # relationship updates (Question→Collection, Question→Dashboards, etc).
-    if rel:
-        out["relationshipAttributes"] = rel
-    return out
+        entity.setdefault("attributes", {}).update(extra_attributes)
+    return entity
