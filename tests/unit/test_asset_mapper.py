@@ -122,16 +122,19 @@ class TestMapDashboard:
         attrs = out["attributes"]
         assert attrs["metabaseCollectionName"] == "Marketing"
         assert attrs["metabaseCollectionQualifiedName"] == f"{CONN_QN}/collections/7"
-        # Relation ref carries typeName + uniqueAttributes for Atlas resolution.
-        rel = out["relationshipAttributes"]["metabaseCollection"]
+        # Relation ref carries typeName + uniqueAttributes for Atlas resolution,
+        # and lives on attributes under the flattened envelope.
+        rel = attrs["metabaseCollection"]
         assert rel["typeName"] == "MetabaseCollection"
         assert rel["uniqueAttributes"]["qualifiedName"] == f"{CONN_QN}/collections/7"
+        assert "relationshipAttributes" not in out
 
     def test_no_collection_means_no_collection_ref(self):
         rec = DashboardRecord.from_dict({"id": 100, "name": "Sales"})
         out = serialize_entity(map_dashboard(rec, **CTX))
-        # No collection_id → no relationship ref emitted.
-        assert "metabaseCollection" not in out.get("relationshipAttributes", {})
+        # No collection_id → no relationship ref emitted, not even a null.
+        assert "metabaseCollection" not in out["attributes"]
+        assert "relationshipAttributes" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -227,8 +230,30 @@ class TestMapQuestion:
         asset, extras = map_question(rec, **CTX)
         out = serialize_entity(asset, extras)
         assert out["attributes"]["metabaseDashboardCount"] == 2
-        rel = out.get("relationshipAttributes", {})
-        assert "metabaseDashboards" not in rel
+        assert "metabaseDashboards" not in out["attributes"]
+        assert "relationshipAttributes" not in out
+
+    def test_collection_relationship_ref_alongside_qi_extras(self):
+        """The collection ref and the QI extras share ``attributes``: the
+        extras are merged after serialization and must not displace the
+        flattened relationship ref."""
+        rec = QuestionRecord.from_dict(
+            {
+                "id": 200,
+                "name": "Top Customers",
+                "collection": {"id": 7, "name": "Marketing"},
+                "metabase_database_name": "ANALYTICS",
+            }
+        )
+        asset, extras = map_question(rec, **CTX)
+        out = serialize_entity(asset, extras)
+        attrs = out["attributes"]
+        rel = attrs["metabaseCollection"]
+        assert rel["typeName"] == "MetabaseCollection"
+        assert rel["uniqueAttributes"]["qualifiedName"] == f"{CONN_QN}/collections/7"
+        assert attrs["metabaseCollectionQualifiedName"] == f"{CONN_QN}/collections/7"
+        assert attrs["metabaseSourceDatabaseName"] == "ANALYTICS"
+        assert "relationshipAttributes" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -324,11 +349,14 @@ class TestSerializeEntity:
         assert isinstance(out["attributes"], dict)
         assert "name" in out["attributes"]
         assert "qualifiedName" in out["attributes"]
+        # Flattened envelope: no relationship channel, no placeholder guid.
+        assert "relationshipAttributes" not in out
+        assert "guid" not in out
 
 
 # ---------------------------------------------------------------------------
 # Regression: BIProcess lineage refs must live on exactly one channel. The
-# connector hoists inputs/outputs into `attributes`; leaving a copy in
+# flattened envelope (ENTITY_ENVELOPE) puts inputs/outputs on `attributes`; a copy in
 # `relationshipAttributes` makes Atlas reject the entity on incremental runs
 # (the publish-app diff also emits appendRelationshipAttributes.outputs, and
 # Atlas raises ATLAS-400-00-108 when a key is in both places).
@@ -341,6 +369,6 @@ class TestBIProcessLineageChannel:
         rec = BIProcessLineageRecord(name="Q", question_id=200, dashboard_ids=[100])
         out = serialize_entity(map_bi_process(rec, **CTX))
         # present on attributes (the channel publish-app's ARS resolver reads)
-        assert out["attributes"].get(key), f"{key} must be hoisted onto attributes"
+        assert out["attributes"].get(key), f"{key} must be on attributes"
         # and NOT also on relationshipAttributes (the ATLAS-400-00-108 trigger)
         assert key not in out.get("relationshipAttributes", {})
