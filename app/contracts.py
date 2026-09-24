@@ -287,11 +287,27 @@ class FetchInput(Input):
 
 
 class FetchOutput(Output):
-    """Output for an extract @task that wrote a single JSONL file."""
+    """Output for an extract @task that wrote one or more JSONL files.
+
+    ``output_file`` carries a single-file result for tasks that always produce
+    one file (collections, dashboards, questions, databases, question queries,
+    dashboard details).
+
+    ``output_files`` carries a list of per-record files for tasks that may
+    produce arbitrarily large individual records.  When set, the SDK's
+    file-reference interceptor uploads every entry independently, so no single
+    object-store artifact can exceed the downstream DuckDB ``maximum_object_size``
+    limit.  ``output_file`` is set to ``output_files[0]`` for backward
+    compatibility with callers that expect at least one durable reference.
+    """
 
     typename: str = ""
     record_count: int = 0
     output_file: FileReference | None = None
+    # Per-record files written by extract_individual_databases.  Each element
+    # is one database's metadata JSONL; the SDK uploads them independently so
+    # no single file can exceed DuckDB's 16 MB maximum_object_size limit.
+    output_files: Annotated[list[FileReference], MaxItems(1000)] | None = None
     # Tolerated failures this task recorded (app/residuals.py), as a durable
     # reference: the file sits on this task's pod, which the entrypoint does
     # not share. `None` when nothing was tolerated.

@@ -437,7 +437,14 @@ class MetabaseApp(App):
     async def extract_individual_databases(
         self, input: FetchDetailInput
     ) -> FetchOutput:
-        """Fetch per-database schema/table metadata."""
+        """Fetch per-database schema/table metadata.
+
+        Each database record is written to its own JSONL file so that no single
+        artifact can exceed DuckDB's ``maximum_object_size`` limit (default
+        16 MB) during the publish phase.  Previously all records were written to
+        one combined file; with large schemas that file could exceed the limit
+        and cause the publish workflow to fail (CONNECT-2373).
+        """
         client = await self._build_client(input)
         databases = await self.run_in_thread(
             read_jsonl, input.source_file.local_path if input.source_file else ""
@@ -448,13 +455,30 @@ class MetabaseApp(App):
         )
         scratch = task_scratch_dir("extract-individual-databases")
         records = await fetch_databases_details(client, databases, scratch)
-        out = raw_file(scratch, "database_metadata")
-        await self.run_in_thread(write_jsonl, out, records)
-        logger.info("extract_individual_databases: wrote %d records", len(records))
+
+        # Write one JSONL file per database record so no single artifact
+        # can exceed DuckDB's 16 MB maximum_object_size limit.  The SDK
+        # interceptor uploads every FileReference in output_files independently.
+        output_files = []
+        for i, record in enumerate(records):
+            out = raw_file(scratch, f"database_metadata_{i}")
+            await self.run_in_thread(write_jsonl, out, [record])
+            output_files.append(_ref(out))
+
+        logger.info(
+            "extract_individual_databases: wrote %d records in %d file(s)",
+            len(records),
+            len(output_files),
+        )
+        # output_file is set to output_files[0] (same Python object) for
+        # backward compatibility.  Because it is the same object, the SDK
+        # interceptor deduplicates the upload and stores it exactly once.
+        first_file = output_files[0] if output_files else None
         return FetchOutput(
             typename="database_metadata",
             record_count=len(records),
-            output_file=_ref(out),
+            output_file=first_file,
+            output_files=output_files if output_files else None,
             residual_file=residual_ref(scratch),
         )
 

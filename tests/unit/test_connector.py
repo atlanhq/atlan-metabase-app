@@ -407,6 +407,42 @@ class TestDetailFetchTasks:
         assert json.loads(written[0]) == records[0]
 
     @pytest.mark.asyncio
+    async def test_extract_individual_databases_per_database_files(
+        self, app_with_mock_client, detail_input
+    ):
+        """Each database record must be written to its own JSONL file so no
+        single artifact can exceed DuckDB's 16 MB maximum_object_size limit
+        during the publish phase (regression test for CONNECT-2373)."""
+        records = [
+            {"id": 1, "name": "db1", "tables": [{"id": 10, "fields": []}]},
+            {"id": 2, "name": "db2", "tables": [{"id": 20, "fields": []}]},
+            {"id": 3, "name": "db3", "tables": [{"id": 30, "fields": []}]},
+        ]
+        with patch(
+            "app.connector.fetch_databases_details",
+            new_callable=AsyncMock,
+            return_value=records,
+        ):
+            out = await app_with_mock_client.extract_individual_databases(detail_input)
+        assert out.typename == "database_metadata"
+        assert out.record_count == 3
+        # output_files must contain one FileReference per database so no
+        # single artifact file exceeds DuckDB's maximum_object_size limit.
+        assert out.output_files is not None, (
+            "extract_individual_databases must populate output_files with one "
+            "file per database record to prevent oversized artifacts"
+        )
+        assert len(out.output_files) == 3, (
+            f"expected 3 per-database files, got {len(out.output_files)}"
+        )
+        for i, ref in enumerate(out.output_files):
+            lines = Path(ref.local_path).read_text().splitlines()
+            assert len(lines) == 1, (
+                f"file {i} should contain exactly 1 record, got {len(lines)}"
+            )
+            assert json.loads(lines[0]) == records[i]
+
+    @pytest.mark.asyncio
     async def test_fetch_question_queries_activity(
         self, app_with_mock_client, detail_input
     ):
