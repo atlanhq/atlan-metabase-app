@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 import orjson
-from application_sdk.errors import AuthError, InvalidInputError
+from application_sdk.errors import AppError, AuthError, InvalidInputError
 from application_sdk.errors.base import sanitize_cause_repr
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
@@ -117,11 +117,11 @@ class MetabaseHandler(Handler):
                 )
             finally:
                 await client.close()
-        except Exception:
+        except Exception as exc:
             logger.warning("Metabase auth failed", exc_info=True)
             return AuthOutput(
                 status=AuthStatus.FAILED,
-                message="Authentication failed — see application logs for detail",
+                error=self._auth_failure(exc).to_failure_details(),
             )
 
     async def fetch_metadata(self, input: MetadataInput) -> ApiMetadataOutput:
@@ -300,13 +300,7 @@ class MetabaseHandler(Handler):
         except Exception as exc:
             logger.debug("authenticationCheck failed: %s", sanitize_cause_repr(exc))
             check = self._failed_check(
-                "authenticationCheck",
-                MetabaseSourceUnavailableError(
-                    message="Could not reach the Metabase host.",
-                    source_type="metabase",
-                    cause=exc,
-                ),
-                start,
+                "authenticationCheck", self._auth_failure(exc), start
             )
         if client is not None and self.client is None:
             await client.close()
@@ -327,6 +321,17 @@ class MetabaseHandler(Handler):
                 getattr(input, "connection_config", None)
             )
         return include, exclude
+
+    @staticmethod
+    def _auth_failure(exc: Exception) -> AppError:
+        """Typed failure for the reachability + authentication tier."""
+        if isinstance(exc, (InvalidInputError, AuthError)):
+            return exc
+        return MetabaseSourceUnavailableError(
+            message="Could not reach the Metabase host.",
+            source_type="metabase",
+            cause=exc,
+        )
 
     @staticmethod
     def _elapsed_ms(start: float) -> float:
