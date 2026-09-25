@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.4.1 (September 25, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.4.0...v2.4.1
+
+
 ## v2.4.0 (September 25, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.3.0...v2.4.0
