@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.4.0 (September 25, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.3.0...v2.4.0
+
+### Features
+
+- bound probes by the gate budget and register the F016 matrix (#580) (by @cmgrote in [a258943](https://github.com/atlanhq/atlan-metabase-app/commit/a258943))
+
+### Bug Fixes
+
+- unpin the yanked pytest-timeout 2.5.0 (FND-379) (#350) (by @cmgrote in [760f161](https://github.com/atlanhq/atlan-metabase-app/commit/760f161))
+- report Release Gate on merge-queue branches (FND-851) (#361) (by @cmgrote in [f5c1adb](https://github.com/atlanhq/atlan-metabase-app/commit/f5c1adb))
+- local review kit v2 — real L1 run, diff-scoped gate, precise commit match (#368) (by @chetanchoudhary-atlan in [a489134](https://github.com/atlanhq/atlan-metabase-app/commit/a489134))
+- set terminationGracePeriodSeconds to 24h to cover longest activity (#413) (by @SanilK2108 in [0fa52ea](https://github.com/atlanhq/atlan-metabase-app/commit/0fa52ea))
+- publish via typed pipeline step so current-state is written (#438) (by @vaibhavatlan in [fc6e006](https://github.com/atlanhq/atlan-metabase-app/commit/fc6e006))
+- guide the unresolved-leaf error site the classifier can't type (#451) (by @fyzanshaik-atlan in [b31782b](https://github.com/atlanhq/atlan-metabase-app/commit/b31782b))
+- bound MetabaseInput.credentials and drop the P001 opt-out (#573) (by @vaibhavatlan in [15ef032](https://github.com/atlanhq/atlan-metabase-app/commit/15ef032))
+- hand residual failures across pods by reference and drop shared output_path (#582) (by @cmgrote in [3ef391a](https://github.com/atlanhq/atlan-metabase-app/commit/3ef391a))
+- raise failed Metabase responses as typed errors and drop E020 suppressions (#589) (by @vaibhavatlan in [3ebeb66](https://github.com/atlanhq/atlan-metabase-app/commit/3ebeb66))
+- FND-2501 return a typed test-auth error (#585) (by @sachi-atlan in [2106f3a](https://github.com/atlanhq/atlan-metabase-app/commit/2106f3a))
+
+
 ## v2.3.0 (August 12, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.2.3...v2.3.0
