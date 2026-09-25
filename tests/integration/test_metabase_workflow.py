@@ -232,8 +232,8 @@ class TestMetabaseExtraction:
         """A BIProcess wire body must carry its lineage refs on exactly one
         channel — the invariant that prevents ATLAS-400-00-108.
 
-        ``serialize_entity`` hoists inputs/outputs onto ``attributes`` (the
-        channel the publish-app ARS resolver reads). If it *also* leaves them
+        The flattened envelope puts inputs/outputs on ``attributes`` (the
+        channel the publish-app ARS resolver reads). If they *also* land
         in ``relationshipAttributes``, an incremental publish sends the same
         relationship key in both ``relationshipAttributes`` and
         ``appendRelationshipAttributes`` (the publish-app diff emits the

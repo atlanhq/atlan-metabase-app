@@ -8,59 +8,74 @@ so a single grammar change would break them independently. Centralising the
 grammar here keeps one definition per QN shape.
 
 This lives in its own module (not ``asset_mapper``) so the lineage/transform
-layer can import the grammar without pulling in the pyatlan asset-construction
-imports that ``asset_mapper`` carries.
+layer can import the grammar without depending on the asset mappers.
 
 The Metabase asset QNs (:func:`collection_qn`, :func:`dashboard_qn`,
-:func:`question_qn`, :func:`bi_process_qn`) still trip conformance P028 because
-pyatlan_v9 ships no ``.creator()`` for the Metabase asset family yet (see
-BLDX-1558 / atlan-python#975); once it does, these become thin wrappers over the
-creators. The lineage-process QNs (:func:`process_qn`,
-:func:`column_process_qn`) are a bespoke ARS identity grammar with a content
-hash — there is no pyatlan asset factory for them — so they carry a justified
-P028 suppression.
+:func:`question_qn`) are derived from the pyatlan_v9 ``.creator()`` factories,
+so pyatlan owns their grammar; they serve callers that need the string for a
+reference to an asset they are not building. :func:`bi_process_qn` and the
+lineage-process QNs (:func:`process_qn`, :func:`column_process_qn`) are bespoke
+grammars with no pyatlan asset factory, so they carry a justified P028
+suppression.
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
+
+from pyatlan_v9.model.assets import (
+    MetabaseCollection,
+    MetabaseDashboard,
+    MetabaseQuestion,
+)
 
 # ---------------------------------------------------------------------------
 # Metabase asset qualifiedNames
 # ---------------------------------------------------------------------------
 
 
-# The three grammars below are byte-identical to the ones pyatlan_v9's own
-# creators build — MetabaseCollection.creator (metabase_collection.py:328),
-# MetabaseDashboard.creator (metabase_dashboard.py:335) and
-# MetabaseQuestion.creator (metabase_question.py:343) — so asset identity here
-# already matches the pyatlan-owned grammar; these are not a divergent
-# invention. Verify that pairing before editing either side.
+# Derived via ``.creator()`` and memoized, the same way atlan-mysql-app derives
+# its parent QNs: the same collection / dashboard / question QN is re-derived
+# for every child record and lineage edge that references it, so building a
+# throwaway asset per call just to read ``qualified_name`` would be real waste.
 #
-# Not routed through those creators, for two reasons. Most callers need the
-# qualifiedName STRING, not an asset: a parent reference
-# (`metabase_collection_qualified_name`), a Related*(qualified_name=...) edge,
-# or a "qualifiedName" key in ARS JSON — and `.creator()` demands a `name` the
-# caller does not have for an asset it is only referencing. And at the four
-# sites that DO construct assets, `.creator()` calls
-# validate_required_fields, which raises on a blank name; api_types.py defaults
-# a missing Metabase name to "" on purpose, so adopting the creator there would
-# convert a source data quirk into a failed run.
+# The creators key the qualifiedName on ``metabase_id`` alone; ``name`` is a
+# required, non-blank argument that plays no part in it. The caller only has the
+# id of an asset it is referencing, so the id is passed as the name too.
 
 
+@lru_cache(maxsize=4096)
 def collection_qn(connection_qn: str, collection_id: Any) -> str:
-    # conformance: ignore[P028] matches MetabaseCollection.creator's grammar byte-for-byte (pyatlan_v9 metabase_collection.py:328); callers need the string, not an asset — see the note above.
-    return f"{connection_qn}/collections/{collection_id}"
+    qn = MetabaseCollection.creator(
+        name=str(collection_id),
+        connection_qualified_name=connection_qn,
+        metabase_id=str(collection_id),
+    ).qualified_name
+    assert isinstance(qn, str)
+    return qn
 
 
+@lru_cache(maxsize=4096)
 def dashboard_qn(connection_qn: str, dashboard_id: Any) -> str:
-    # conformance: ignore[P028] matches MetabaseDashboard.creator's grammar byte-for-byte (pyatlan_v9 metabase_dashboard.py:335); callers need the string, not an asset — see the note above.
-    return f"{connection_qn}/dashboards/{dashboard_id}"
+    qn = MetabaseDashboard.creator(
+        name=str(dashboard_id),
+        connection_qualified_name=connection_qn,
+        metabase_id=str(dashboard_id),
+    ).qualified_name
+    assert isinstance(qn, str)
+    return qn
 
 
+@lru_cache(maxsize=4096)
 def question_qn(connection_qn: str, question_id: Any) -> str:
-    # conformance: ignore[P028] matches MetabaseQuestion.creator's grammar byte-for-byte (pyatlan_v9 metabase_question.py:343); callers need the string, not an asset — see the note above.
-    return f"{connection_qn}/questions/{question_id}"
+    qn = MetabaseQuestion.creator(
+        name=str(question_id),
+        connection_qualified_name=connection_qn,
+        metabase_id=str(question_id),
+    ).qualified_name
+    assert isinstance(qn, str)
+    return qn
 
 
 def bi_process_qn(connection_qn: str, question_id: Any) -> str:

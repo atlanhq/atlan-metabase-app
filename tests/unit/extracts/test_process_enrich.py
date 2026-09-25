@@ -221,6 +221,7 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=filtered_questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert isinstance(dashboards, list)
         assert isinstance(questions, list)
@@ -242,6 +243,7 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=filtered_questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert len(dashboards) == 1
         d = dashboards[0]
@@ -277,6 +279,7 @@ class TestProcessAssets:
             dashboard_details=legacy,
             filtered_questions=filtered_questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert dashboards[0]["cards_count"] == 1
 
@@ -298,6 +301,7 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=filtered_questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         q = questions[0]
         assert q["metabase_query"] == "SELECT * FROM analytics.customers"
@@ -345,6 +349,7 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=new_format_native,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert questions[0]["query_type"] == "native"
 
@@ -372,6 +377,7 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=new_format_mbql,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert questions[0]["query_type"] == "query"
 
@@ -399,6 +405,7 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=filtered_questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert questions[0]["metabase_source_engine"] == "bigquery"
 
@@ -433,6 +440,7 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert enriched[0]["metabase_database_name"] == "sample"
 
@@ -467,6 +475,7 @@ class TestProcessAssets:
             dashboard_details=dashboard_details,
             filtered_questions=questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         # Falls back to database.name when details has neither dbname nor db.
         assert enriched[0]["metabase_database_name"] == "e2e-source"
@@ -523,6 +532,7 @@ class TestProcessAssets:
             dashboard_details=[],  # no dashboards link to question 10
             filtered_questions=filtered_questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         assert lineage == []
 
@@ -548,6 +558,7 @@ class TestProcessAssets:
             dashboard_details=orphan_dash,
             filtered_questions=filtered_questions,
             metabase_host="http://m",
+            connection_qualified_name="default/metabase/123",
         )
         # Orphan dashboard is dropped.
         assert dashboards == []
