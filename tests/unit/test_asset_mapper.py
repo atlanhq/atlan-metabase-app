@@ -355,6 +355,31 @@ class TestSerializeEntity:
 
 
 # ---------------------------------------------------------------------------
+# Blank-name fallback: the pyatlan creators reject a blank name, so an unnamed
+# Metabase record is published under its Metabase id instead of failing the run.
+# ---------------------------------------------------------------------------
+
+
+class TestBlankNameFallsBackToId:
+    @pytest.mark.parametrize("raw_name", [None, "", "   "])
+    @pytest.mark.parametrize(
+        "factory,record_cls,segment",
+        [
+            (map_collection, CollectionRecord, "collections"),
+            (map_dashboard, DashboardRecord, "dashboards"),
+            (map_question, QuestionRecord, "questions"),
+        ],
+    )
+    def test_blank_name_uses_metabase_id(self, factory, record_cls, segment, raw_name):
+        rec = record_cls.from_dict({"id": 42, "name": raw_name})
+        result = factory(rec, **CTX)
+        asset = result[0] if isinstance(result, tuple) else result
+        attrs = serialize_entity(asset)["attributes"]
+        assert attrs["name"] == "42"
+        assert attrs["qualifiedName"] == f"{CONN_QN}/{segment}/42"
+
+
+# ---------------------------------------------------------------------------
 # Regression: BIProcess lineage refs must live on exactly one channel. The
 # flattened envelope (ENTITY_ENVELOPE) puts inputs/outputs on `attributes`; a copy in
 # `relationshipAttributes` makes Atlas reject the entity on incremental runs
