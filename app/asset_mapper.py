@@ -41,8 +41,8 @@ from app.api_types import (
     QuestionRecord,
 )
 
-# QN grammar lives in app.qualified_names (single source of truth). Aliased to
-# the previous private names so the mapper call sites (and the local
+# QN helpers for referenced (not built) assets live in app.qualified_names.
+# Aliased to the previous private names so the mapper call sites (and the local
 # ``collection_qn`` variables below) stay unchanged.
 from app.qualified_names import bi_process_qn as _bi_process_qn
 from app.qualified_names import collection_qn as _collection_qn
@@ -80,6 +80,16 @@ def _apply_sync_metadata(
     asset.tenant_id = tenant_id
 
 
+def _name_or_id(name: str, metabase_id: Any) -> str:
+    """Return ``name``, or the Metabase id when ``name`` is blank.
+
+    ``api_types`` defaults a missing Metabase name to ``""``, and the pyatlan
+    ``.creator()`` factories reject a blank name, so one unnamed record would
+    otherwise fail the whole transform activity.
+    """
+    return name if name.strip() else str(metabase_id)
+
+
 # ---------------------------------------------------------------------------
 # Mappers — one per Atlan asset type
 # ---------------------------------------------------------------------------
@@ -96,10 +106,10 @@ def map_collection(
     last_sync_run_at_ms: int,
     tenant_id: str,
 ) -> MetabaseCollection:
-    asset = MetabaseCollection(
-        name=record.name,
-        qualified_name=_collection_qn(connection_qualified_name, record.id),
+    asset = MetabaseCollection.creator(
+        name=_name_or_id(record.name, record.id),
         connection_qualified_name=connection_qualified_name,
+        metabase_id=str(record.id),
     )
     if record.description is not None:
         asset.description = record.description
@@ -135,10 +145,10 @@ def map_dashboard(
     last_sync_run_at_ms: int,
     tenant_id: str,
 ) -> MetabaseDashboard:
-    asset = MetabaseDashboard(
-        name=record.name,
-        qualified_name=_dashboard_qn(connection_qualified_name, record.id),
+    asset = MetabaseDashboard.creator(
+        name=_name_or_id(record.name, record.id),
         connection_qualified_name=connection_qualified_name,
+        metabase_id=str(record.id),
     )
     if record.description is not None:
         asset.description = record.description
@@ -202,10 +212,10 @@ def map_question(
     None of these fields are in the pyatlan_v9 model, so the transform task
     injects them after :func:`serialize_entity`.
     """
-    asset = MetabaseQuestion(
-        name=record.name,
-        qualified_name=_question_qn(connection_qualified_name, record.id),
+    asset = MetabaseQuestion.creator(
+        name=_name_or_id(record.name, record.id),
         connection_qualified_name=connection_qualified_name,
+        metabase_id=str(record.id),
     )
     if record.description is not None:
         asset.description = record.description
