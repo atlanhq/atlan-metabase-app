@@ -72,6 +72,8 @@ class TestMetabaseHandlerTestAuth:
 
         assert result.status == AuthStatus.FAILED
         assert result.message == "Could not reach the Metabase host."
+        assert result.error is not None
+        assert result.error.code == MetabaseSourceUnavailableError.code
         assert "No session token available" not in result.message
 
     async def test_auth_rejected_session_reports_the_auth_failure(
@@ -83,6 +85,8 @@ class TestMetabaseHandlerTestAuth:
 
         assert result.status == AuthStatus.FAILED
         assert result.message == MetabaseSessionAuthError().message
+        assert result.error is not None
+        assert result.error.code == MetabaseSessionAuthError.code
 
     async def test_auth_no_client_raises(self, handler_no_client):
         """test_auth returns FAILED when there is no client and no credentials."""

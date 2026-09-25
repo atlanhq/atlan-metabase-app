@@ -120,7 +120,8 @@ class MetabaseHandler(Handler):
         except Exception as exc:
             logger.warning("Metabase auth failed", exc_info=True)
             return AuthOutput(
-                status=AuthStatus.FAILED, message=self._auth_failure(exc).message
+                status=AuthStatus.FAILED,
+                error=self._auth_failure(exc).to_failure_details(),
             )
 
     async def fetch_metadata(self, input: MetadataInput) -> ApiMetadataOutput:
