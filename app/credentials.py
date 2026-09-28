@@ -1,35 +1,31 @@
-"""Metabase credential model, routing, and parsing.
+"""Metabase credential model and parsing.
 
 A single home for credential concerns shared between the handler (which sees
 ``list[HandlerCredential]`` from the HTTP layer) and the connector (which
-receives ``CredentialRef`` from PKL or an inline ``dict`` resolved from the
-secret store). Three primitives:
+receives the raw dict ``resolve_credential_raw_or_inline`` returns). Two
+primitives:
 
 - :class:`MetabaseCredential` — the typed model the API client consumes.
 - :func:`parse_metabase_credentials` — normalize any inbound shape (list of
   pairs, nested dict with ``extra``, already-typed credential) into the model.
-- :func:`build_credential_ref` — thin wrapper over
-  :meth:`CredentialRef.resolve` from the SDK, which handles both direct
-  (``credential_guid``) and agent (``agent_json``) routing natively. Falls
-  back to inline credentials when neither is present, for local-dev runs.
+
+Routing a workflow input's credential channels (``metabase_credential``,
+``credential_guid``, ``agent_json``, inline ``credentials``) into a
+``(ref, inline)`` pair is the SDK's job: ``route_credentials`` in
+``application_sdk.credentials``, called from the entry point.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import orjson
-from application_sdk.credentials.errors import CredentialRoutingError
-from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.types import BasicCredential
 from application_sdk.handler.contracts import HandlerCredential
 from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import ConfigDict
 
 from app.errors import UnsupportedCredentialsPayloadError
-
-if TYPE_CHECKING:
-    from app.contracts import MetabaseInput
 
 logger = get_logger(__name__)
 
@@ -71,13 +67,11 @@ def parse_metabase_credentials(
       {username, password}}`` OR the flat shape ``{host, port, username,
       password}``. ``extra`` may also arrive as a JSON-encoded string.
 
-      The **nested** form reaches here only on the credential-ref path:
-      ``_build_client`` hands ``resolve_credential_raw``'s dict straight in,
-      without crossing a contract field. It cannot arrive via the inline
-      channel — ``MetabaseInput.credentials`` and every ``@task``
-      ``inline_credentials`` field are bounded to scalar values, so a nested
-      ``extra`` is refused before it gets here. The JSON-encoded-string form
-      works on both paths, and is what an inline caller should use.
+      Both task paths hand the nested form in: ``_build_client`` passes
+      whatever ``resolve_credential_raw_or_inline`` returns, and the SDK
+      expands inline credentials (which cross ``@task`` boundaries as flat
+      dotted keys, ``extra.username``) back to the nested ``extra`` shape the
+      credential-ref path produces.
     - ``MetabaseCredential`` — already-typed credential, returned as-is.
 
     Empty/missing fields fall through to the model defaults.
@@ -142,63 +136,3 @@ def parse_metabase_credentials(
         username=str(flat.get("username", "") or ""),
         password=str(flat.get("password", "") or ""),
     )
-
-
-def build_credential_ref(
-    input: MetabaseInput,
-) -> tuple[CredentialRef | None, dict[str, Any]]:
-    """Route ``MetabaseInput``'s credential channels into (ref, inline).
-
-    Exactly one of the returned values is populated:
-
-    - ``credential_ref`` — built by :meth:`CredentialRef.resolve` from the
-      SDK, which inspects ``input.extraction_method`` + ``input.agent_json``
-      + ``input.credential_guid`` and returns the right ref for either
-      direct or agent mode. Mysql gets this same routing for free via its
-      SDK base class (:meth:`SQLAppE2ETest.resolve_credential_ref`);
-      metabase wires it in explicitly here because the REST connector has
-      no equivalent SDK base. Also handles the PKL-contract path
-      (``input.metabase_credential``) for backward compat.
-    - ``inline_credentials`` — from ``input.credentials`` (list[{key,value}]
-      from the HTTP service layer, or a flat dict for local dev). Used
-      when neither direct nor agent routing applies (e.g. unit tests).
-
-    Tasks read ``credential_ref`` first; if absent they fall back to inline.
-    """
-    # PKL-contract path — explicit ref already constructed upstream.
-    if input.metabase_credential is not None:
-        return input.metabase_credential, {}
-
-    # SDK-canonical routing — covers direct (credential_guid) AND agent
-    # (agent_json) modes via the CredentialResolvable protocol. Raises
-    # CredentialRoutingError when neither field is set, which means we
-    # should fall through to inline.
-    try:
-        return CredentialRef.resolve(input), {}
-    except CredentialRoutingError as e:
-        logger.debug(
-            "No credential routing fields set, falling through to inline credentials: %s",
-            e,
-        )
-
-    inline: dict[str, Any] = {}
-    creds = input.credentials
-    if isinstance(creds, list):
-        for item in creds:
-            if not isinstance(item, dict) or "key" not in item:
-                continue
-            key = item["key"]
-            # ``credentials`` used to be typed ``list[dict[str, Any]]``, which
-            # let a non-string key through to ``inline[...]`` and fail only at
-            # runtime. The bag is now bounded to CredentialValue, so the key
-            # is narrowed explicitly here rather than assumed.
-            if not isinstance(key, str):
-                logger.debug(
-                    "Skipping inline credential entry with non-string key of type %s",
-                    type(key).__name__,
-                )
-                continue
-            inline[key] = item.get("value", "")
-    elif isinstance(creds, dict):
-        inline = creds
-    return None, inline

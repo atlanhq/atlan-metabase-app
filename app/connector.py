@@ -30,6 +30,7 @@ from application_sdk.contracts.storage import (
     UploadRefsInput,
 )
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.credentials import route_credentials
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.api_types import (
@@ -66,7 +67,7 @@ from app.contracts import (
     TransformTaskInput,
     TransformTaskOutput,
 )
-from app.credentials import build_credential_ref, parse_metabase_credentials
+from app.credentials import parse_metabase_credentials
 from app.errors import MetabaseCredentialInputError, MissingTypenameInputError
 from app.extracts.collections import fetch_collections_summaries
 from app.extracts.dashboards import fetch_dashboards_details, fetch_dashboards_summaries
@@ -253,18 +254,18 @@ class MetabaseApp(App):
         Raises:
             ValueError: When both fields are absent or empty.
         """
-        raw_creds: dict[str, Any] = {}
         cred_ref = getattr(input, "credential_ref", None)
-        if cred_ref is not None:
-            raw_creds = await self.context.resolve_credential_raw(cred_ref)
-        else:
-            inline = getattr(input, "inline_credentials", {}) or {}
-            if not inline:
-                raise MetabaseCredentialInputError(
-                    message="_build_client: no credential_ref or inline_credentials",
-                    field="credentials",
-                )
-            raw_creds = inline
+        inline = getattr(input, "inline_credentials", {}) or {}
+        if cred_ref is None and not inline:
+            raise MetabaseCredentialInputError(
+                message="_build_client: no credential_ref or inline_credentials",
+                field="credentials",
+            )
+        # One call for both paths: the ref resolves from the secret store, and
+        # the flat dotted-key inline dict expands to the same nested shape.
+        raw_creds = await self.context.resolve_credential_raw_or_inline(
+            cred_ref, inline
+        )
 
         credential = parse_metabase_credentials(raw_creds)
         return await build_client(credential)
@@ -731,7 +732,9 @@ class MetabaseApp(App):
          10. Return MetabaseOutput
         """
         # Resolve credentials ONCE and thread through every @task input.
-        cred_ref, inline_creds = build_credential_ref(input)
+        cred_ref, inline_creds = route_credentials(
+            input, ref_field="metabase_credential"
+        )
 
         fetch_input = FetchInput(
             credential_ref=cred_ref,
