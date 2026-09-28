@@ -22,13 +22,13 @@ class TestRouteCredentials:
     def test_metabase_credential_ref_takes_precedence(self):
         ref = CredentialRef(name="x", credential_type="basic", credential_guid="g")
         inp = MetabaseInput(metabase_credential=ref, credential_guid="other")
-        out_ref, inline = route_credentials(inp, ref_field="metabase_credential")
+        out_ref, inline = route_credentials(inp)
         assert out_ref is ref
         assert inline == {}
 
     def test_credential_guid_creates_ref(self):
         inp = MetabaseInput(credential_guid="guid-123")
-        out_ref, inline = route_credentials(inp, ref_field="metabase_credential")
+        out_ref, inline = route_credentials(inp)
         assert out_ref is not None
         # The auth scheme is decided at resolution time from the credential
         # row, so the routed ref carries credential_type="unknown".
@@ -46,7 +46,7 @@ class TestRouteCredentials:
             }
         )
         inp = MetabaseInput(extraction_method="agent", agent_json=spec)
-        out_ref, _ = route_credentials(inp, ref_field="metabase_credential")
+        out_ref, _ = route_credentials(inp)
         assert out_ref is not None
         assert out_ref.agent_spec == spec
 
@@ -59,7 +59,7 @@ class TestRouteCredentials:
                 {"key": "password", "value": "p"},
             ]
         )
-        out_ref, inline = route_credentials(inp, ref_field="metabase_credential")
+        out_ref, inline = route_credentials(inp)
         assert out_ref is None
         assert inline == {
             "host": "http://localhost",
@@ -70,7 +70,7 @@ class TestRouteCredentials:
 
     def test_credentials_dict_passes_through(self):
         inp = MetabaseInput(credentials={"host": "h", "port": 3000})
-        out_ref, inline = route_credentials(inp, ref_field="metabase_credential")
+        out_ref, inline = route_credentials(inp)
         assert out_ref is None
         assert inline == {"host": "h", "port": 3000}
 
@@ -85,14 +85,12 @@ class TestRouteCredentials:
                 {"key": "extra.password", "value": "p"},
             ]
         )
-        _, inline = route_credentials(inp, ref_field="metabase_credential")
+        _, inline = route_credentials(inp)
         cred = parse_metabase_credentials(expand_dotted_keys(inline))
         assert (cred.host, cred.username, cred.password) == ("http://x", "u", "p")
 
     def test_no_credentials_returns_empty_inline(self):
-        out_ref, inline = route_credentials(
-            MetabaseInput(), ref_field="metabase_credential"
-        )
+        out_ref, inline = route_credentials(MetabaseInput())
         assert out_ref is None
         assert inline == {}
 

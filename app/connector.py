@@ -732,9 +732,7 @@ class MetabaseApp(App):
          10. Return MetabaseOutput
         """
         # Resolve credentials ONCE and thread through every @task input.
-        cred_ref, inline_creds = route_credentials(
-            input, ref_field="metabase_credential"
-        )
+        cred_ref, inline_creds = route_credentials(input)
 
         fetch_input = FetchInput(
             credential_ref=cred_ref,
