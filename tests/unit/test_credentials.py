@@ -3,40 +3,49 @@
 from __future__ import annotations
 
 import pytest
+from application_sdk.credentials import expand_dotted_keys, route_credentials
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors import InvalidInputError
 from application_sdk.handler.contracts import HandlerCredential
 
 from app.contracts import MetabaseInput
-from app.credentials import (
-    MetabaseCredential,
-    build_credential_ref,
-    parse_metabase_credentials,
-)
+from app.credentials import MetabaseCredential, parse_metabase_credentials
 
 
-class TestBuildCredentialRef:
+class TestRouteCredentials:
+    """``MetabaseInput`` routes through the SDK's ``route_credentials`` (FND-2949)."""
+
     def test_metabase_credential_ref_takes_precedence(self):
         ref = CredentialRef(name="x", credential_type="basic", credential_guid="g")
-        inp = MetabaseInput(metabase_credential=ref)
-        out_ref, inline = build_credential_ref(inp)
+        inp = MetabaseInput(metabase_credential=ref, credential_guid="other")
+        out_ref, inline = route_credentials(inp)
         assert out_ref is ref
         assert inline == {}
 
     def test_credential_guid_creates_ref(self):
         inp = MetabaseInput(credential_guid="guid-123")
-        out_ref, inline = build_credential_ref(inp)
+        out_ref, inline = route_credentials(inp)
         assert out_ref is not None
-        assert out_ref.name == "guid-123"
-        # SDK's CredentialRef.resolve() sets credential_type="unknown" —
-        # the actual auth scheme is determined at resolution time from
-        # the credential row's contents (so the SDK can support multiple
-        # auth-types without hard-coding here). The previous custom
-        # build_credential_ref() hardcoded "basic"; this assertion was
-        # updated when we switched to the SDK helper for AGENT-mode parity.
+        # The auth scheme is decided at resolution time from the credential
+        # row, so the routed ref carries credential_type="unknown".
         assert out_ref.credential_type == "unknown"
         assert out_ref.credential_guid == "guid-123"
         assert inline == {}
+
+    def test_agent_json_routes_agent(self):
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "some-agent",
+                "secret-manager": "awssecretmanager",
+                "secret-path": "atlan/dev/test",
+                "auth-type": "basic",
+            }
+        )
+        inp = MetabaseInput(extraction_method="agent", agent_json=spec)
+        out_ref, _ = route_credentials(inp)
+        assert out_ref is not None
+        assert out_ref.agent_spec == spec
 
     def test_credentials_list_flattens_to_inline(self):
         inp = MetabaseInput(
@@ -47,7 +56,7 @@ class TestBuildCredentialRef:
                 {"key": "password", "value": "p"},
             ]
         )
-        out_ref, inline = build_credential_ref(inp)
+        out_ref, inline = route_credentials(inp)
         assert out_ref is None
         assert inline == {
             "host": "http://localhost",
@@ -58,12 +67,27 @@ class TestBuildCredentialRef:
 
     def test_credentials_dict_passes_through(self):
         inp = MetabaseInput(credentials={"host": "h", "port": 3000})
-        out_ref, inline = build_credential_ref(inp)
+        out_ref, inline = route_credentials(inp)
         assert out_ref is None
         assert inline == {"host": "h", "port": 3000}
 
+    def test_extra_prefixed_pairs_parse_after_expansion(self):
+        # The HTTP-layer ``extra.<k>`` convention now works on the inline path:
+        # inline credentials travel flat and expand back to a nested ``extra``,
+        # the shape parse_metabase_credentials reads on the credential-ref path.
+        inp = MetabaseInput(
+            credentials=[
+                {"key": "host", "value": "http://x"},
+                {"key": "extra.username", "value": "u"},
+                {"key": "extra.password", "value": "p"},
+            ]
+        )
+        _, inline = route_credentials(inp)
+        cred = parse_metabase_credentials(expand_dotted_keys(inline))
+        assert (cred.host, cred.username, cred.password) == ("http://x", "u", "p")
+
     def test_no_credentials_returns_empty_inline(self):
-        out_ref, inline = build_credential_ref(MetabaseInput())
+        out_ref, inline = route_credentials(MetabaseInput())
         assert out_ref is None
         assert inline == {}
 

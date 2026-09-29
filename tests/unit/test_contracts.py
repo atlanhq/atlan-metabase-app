@@ -76,7 +76,7 @@ class TestCredentialsPayloadSafety:
     regardless of ``MaxItems``, so the opt-out was the only thing keeping the
     contract importable — and it disabled the 2MB-payload guard for every
     other field too (ADR-0008). Both inline wire shapes must keep working
-    now that the value type is the concrete ``CredentialValue`` union.
+    now that the value type is the SDK's concrete ``CredentialValue`` union.
     """
 
     def test_contract_does_not_opt_out_of_payload_safety(self) -> None:
@@ -98,45 +98,34 @@ class TestCredentialsPayloadSafety:
         model = MetabaseInput(credentials={"password": None})
         assert model.credentials == {"password": None}
 
-    @pytest.mark.parametrize(
-        ("label", "payload"),
-        [
-            ("v2 nested extra", {"host": "h", "extra": {"username": "u"}}),
-            ("list-valued entry", {"host": "h", "hosts": ["a", "b"]}),
-            ("float value", {"host": "h", "timeout": 1.5}),
-        ],
-    )
-    def test_entrypoint_rejects_what_the_task_contracts_reject(
-        self, label: str, payload: dict[str, Any]
-    ) -> None:
-        """The entrypoint now agrees with the `@task` contracts downstream.
+    def test_nested_extra_is_flattened_to_dotted_keys(self) -> None:
+        """The SDK's ``InlineCredentials`` accepts the v2 nested ``extra`` shape.
 
-        These payloads were never usable. The four `@task` contracts have
-        always declared ``inline_credentials: BoundedCredentialDict``, so a
-        non-scalar value was refused at the first task hop — *after* the
-        workflow had started, as a ``ValidationError`` inside an activity,
-        which is the worst place to discover it.
-
-        Before this contract was bounded, ``MetabaseInput`` accepted them and
-        deferred that failure. Rejecting them here changes no capability; it
-        moves an existing failure from mid-run to submission time.
-
-        The nested ``extra`` shape is still genuinely supported — but on the
-        credential-ref path, where ``_build_client`` hands
-        ``resolve_credential_raw``'s dict straight to
-        :func:`parse_metabase_credentials` without crossing a contract field.
-        That is why the parser keeps its nested branch.
+        It flattens it to dotted keys on the way in, so the value still fits
+        the scalar-only bag and crosses every ``@task`` hop unchanged.
         """
+        model = MetabaseInput(credentials={"host": "h", "extra": {"username": "u"}})
+        assert model.credentials == {"host": "h", "extra.username": "u"}
+
+    def test_float_value_accepted(self) -> None:
+        """``float`` is in the SDK's ``CredentialValue`` (e.g. a timeout)."""
+        model = MetabaseInput(credentials={"host": "h", "timeout": 1.5})
+        assert model.credentials == {"host": "h", "timeout": 1.5}
+
+    def test_entrypoint_rejects_a_structured_value(self) -> None:
+        """A list value is not a credential scalar; it fails at submission time,
+        not mid-run inside the first ``@task`` activity."""
         with pytest.raises(ValidationError):
-            MetabaseInput(credentials=payload)  # type: ignore[arg-type]
+            MetabaseInput(credentials={"host": "h", "hosts": ["a", "b"]})  # type: ignore[dict-item]
 
     def test_task_contracts_agree_with_the_entrypoint(self) -> None:
-        """Guard the invariant the test above relies on.
+        """Every ``@task`` contract takes what the entrypoint produces.
 
-        If a `@task` contract ever widened ``inline_credentials`` past the
-        scalar bag, the entrypoint would become the stricter of the two and
-        would start refusing payloads the tasks could carry.
+        If a task contract diverged from the entrypoint, a payload the
+        entrypoint accepted would fail at the first task hop, mid-run.
         """
         for model in (FetchInput, FilterInput, FetchDetailInput, ProcessInput):
+            task = model(inline_credentials={"extra": {"username": "u"}})  # type: ignore[dict-item]
+            assert task.inline_credentials == {"extra.username": "u"}
             with pytest.raises(ValidationError):
-                model(inline_credentials={"extra": {"username": "u"}})  # type: ignore[dict-item]
+                model(inline_credentials={"hosts": ["a", "b"]})  # type: ignore[dict-item]

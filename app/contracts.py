@@ -21,6 +21,7 @@ from typing import Annotated, Any
 import orjson
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems
+from application_sdk.credentials import CredentialMap, InlineCredentials
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.observability.logger_adaptor import get_logger
@@ -97,20 +98,6 @@ CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]
 
 
 # ---------------------------------------------------------------------------
-# Bounded credential-bag shapes — inline/local-dev credential channels carry
-# a handful of scalar key-value pairs (host, port, username, password, …),
-# never hundreds+.  500 keys / 50 list entries is comfortably above any real
-# credential shape while still satisfying the SDK payload-safety validator
-# (a bare ``dict[str, Any]`` is unconditionally forbidden — ``Any`` itself is
-# rejected regardless of MaxItems — so the value type is narrowed to the
-# scalar types a credential field actually holds).
-# ---------------------------------------------------------------------------
-CredentialValue = str | int | bool | None
-BoundedCredentialDict = Annotated[dict[str, CredentialValue], MaxItems(500)]
-BoundedCredentialList = Annotated[list[BoundedCredentialDict], MaxItems(50)]
-
-
-# ---------------------------------------------------------------------------
 # App-level: single run() entrypoint
 # ---------------------------------------------------------------------------
 
@@ -123,26 +110,14 @@ class MetabaseInput(Input):
       2. ``credential_guid`` (str) — legacy GUID, resolved from secret store.
       3. ``credentials`` (list[{key,value}] or dict) — inline local-dev path.
 
-    Every field is payload-safe, so this contract takes no
-    ``allow_unbounded_fields`` opt-out. ``credentials`` carries the same
-    bounded shapes as the ``@task``-only ``inline_credentials`` fields
-    further down: ``Any`` is replaced by :data:`CredentialValue` inside the
-    same outer ``list[dict] | dict``. That is the one retype B005 explicitly
-    does not treat as a break ("a move OFF ``Any`` that keeps the same outer
-    shape"), and ``ledger-guard`` confirms it — ``gen-contract-ledger``
-    rewrites no recorded type, so the ledger is byte-identical and the guard
-    passes. Payload safety requires the narrowing anyway: ``Any`` is refused
-    regardless of ``MaxItems``.
+    ``route_credentials`` (``application_sdk.credentials``) routes all three
+    in that order; path 3 is for in-process runs only — ``/start`` strips
+    inline credentials, so a deployed run always arrives on path 1 or 2 (or
+    ``agent_json``).
 
-    The annotation is spelled out in full rather than reusing
-    :data:`BoundedCredentialList` / :data:`BoundedCredentialDict` because
-    B005 compares the *written* annotation against the ledger string without
-    resolving aliases. Via the aliases it reads the change as
-    ``list[dict[str, Any]] | dict[str, Any]`` → ``BoundedCredentialList |
-    BoundedCredentialDict``, cannot see that the outer shape is unchanged,
-    and fires at BLOCK tier — the same types written inline pass. Collapsing
-    this back into the aliases will redden CI until that checker resolves
-    aliases (reported upstream; see FND-2547).
+    Every field is payload-safe, so this contract takes no
+    ``allow_unbounded_fields`` opt-out: ``credentials`` is the SDK's bounded
+    :data:`~application_sdk.credentials.InlineCredentials`.
     """
 
     workflow_id: str = ""
@@ -161,12 +136,7 @@ class MetabaseInput(Input):
     agent_json: AgentCredentialSpec | None = None
 
     metabase_credential: CredentialRef | None = None
-    credentials: (
-        Annotated[
-            list[Annotated[dict[str, CredentialValue], MaxItems(500)]], MaxItems(50)
-        ]
-        | Annotated[dict[str, CredentialValue], MaxItems(500)]
-    ) = Field(default_factory=list)
+    credentials: InlineCredentials = Field(default_factory=list)
     connection: ConnectionRef = Field(default_factory=ConnectionRef)
 
     include_collections: CollectionFilter = Field(default_factory=dict)
@@ -283,7 +253,7 @@ class FetchInput(Input):
     """
 
     credential_ref: CredentialRef | None = None
-    inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
+    inline_credentials: CredentialMap = Field(default_factory=dict)
 
 
 class FetchOutput(Output):
@@ -337,7 +307,7 @@ class FilterInput(Input):
     questions_file: FileReference | None = None
     databases_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
+    inline_credentials: CredentialMap = Field(default_factory=dict)
 
 
 class FilterOutput(Output):
@@ -355,7 +325,7 @@ class FetchDetailInput(Input):
 
     source_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
+    inline_credentials: CredentialMap = Field(default_factory=dict)
 
 
 class ProcessInput(Input):
@@ -372,7 +342,7 @@ class ProcessInput(Input):
     dashboard_details_file: FileReference | None = None
     questions_filtered_file: FileReference | None = None
     credential_ref: CredentialRef | None = None
-    inline_credentials: BoundedCredentialDict = Field(default_factory=dict)
+    inline_credentials: CredentialMap = Field(default_factory=dict)
     connection_qualified_name: str = ""
 
 

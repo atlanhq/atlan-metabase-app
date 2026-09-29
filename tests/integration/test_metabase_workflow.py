@@ -31,9 +31,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from application_sdk.contracts.types import ConnectionRef
+from application_sdk.credentials import CredentialValue
 
 from app.connector import MetabaseApp
-from app.contracts import CredentialValue, MetabaseInput, MetabaseOutput
+from app.contracts import MetabaseInput, MetabaseOutput
 
 if TYPE_CHECKING:
     from tests.integration.conftest import AppExecutor
@@ -56,14 +57,10 @@ _CONNECTION = ConnectionRef.model_validate(
 def _inline_credentials(creds: dict[str, Any]) -> list[dict[str, CredentialValue]]:
     """Pack ``{host, port, username, password}`` into the v3 ``[{key, value}]`` shape.
 
-    Uses FLAT keys (``username`` / ``password``) rather than the
-    ``extra.username`` / ``extra.password`` HTTP-layer convention. Reason:
-    ``build_credential_ref`` in app/credentials.py packs the list into a
-    dict with keys preserved literally, and the downstream
-    ``parse_metabase_credentials`` reads ``flat.get("username")`` directly —
-    it strips the ``extra.`` prefix only when given a list (not a dict).
-    Sending ``extra.``-prefixed keys lands them as literal dict keys and
-    leaves username/password empty, which Metabase rejects with HTTP 400.
+    The entry point routes these through the SDK's ``route_credentials`` and
+    each task reads them back with ``resolve_credential_raw_or_inline``, so
+    flat keys and the HTTP layer's ``extra.``-prefixed keys both reach
+    ``parse_metabase_credentials`` correctly.
 
     Using the inline path keeps the test scope on the extraction workflow
     rather than CredentialRef → secret-store resolution (covered in

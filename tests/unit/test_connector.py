@@ -124,7 +124,11 @@ class TestBuildClient:
     @pytest.mark.asyncio
     async def test_inline_credentials_path(self, app):
         """When no credential_ref, falls back to inline_credentials."""
-        with patch("app.connector.build_client", new_callable=AsyncMock) as mock_build:
+        ctx = AppContext(app_name="metabase", app_version="0")
+        with (
+            patch.object(MetabaseApp, "context", ctx, create=True),
+            patch("app.connector.build_client", new_callable=AsyncMock) as mock_build,
+        ):
             mock_build.return_value = MagicMock()
             fake_input = MagicMock()
             fake_input.credential_ref = None
@@ -140,24 +144,45 @@ class TestBuildClient:
             assert cred.username == "u"
 
     @pytest.mark.asyncio
+    async def test_inline_dotted_extra_keys_expand_before_parsing(self, app):
+        """Inline credentials travel flat; ``extra.*`` expands back to ``extra``."""
+        ctx = AppContext(app_name="metabase", app_version="0")
+        with (
+            patch.object(MetabaseApp, "context", ctx, create=True),
+            patch("app.connector.build_client", new_callable=AsyncMock) as mock_build,
+        ):
+            mock_build.return_value = MagicMock()
+            fake_input = MagicMock()
+            fake_input.credential_ref = None
+            fake_input.inline_credentials = {
+                "host": "http://x",
+                "extra.username": "u",
+                "extra.password": "p",
+            }
+            await app._build_client(fake_input)
+            cred = mock_build.call_args[0][0]
+            assert (cred.username, cred.password) == ("u", "p")
+
+    @pytest.mark.asyncio
     async def test_credential_ref_path_resolves_via_context(self, app):
         """When credential_ref is present, looks up via self.context."""
         ref = CredentialRef(name="x", credential_type="basic", credential_guid="g")
         fake_input = MagicMock()
         fake_input.credential_ref = ref
+        fake_input.inline_credentials = {}
+        ctx = AppContext(app_name="metabase", app_version="0")
+        resolve_raw = AsyncMock(
+            return_value={"host": "h", "username": "u", "password": "p"}
+        )
 
         with (
-            patch.object(
-                MetabaseApp, "context", create=True, new_callable=MagicMock
-            ) as mock_ctx,
+            patch.object(MetabaseApp, "context", ctx, create=True),
+            patch.object(ctx, "resolve_credential_raw", resolve_raw),
             patch("app.connector.build_client", new_callable=AsyncMock) as mock_build,
         ):
-            mock_ctx.resolve_credential_raw = AsyncMock(
-                return_value={"host": "h", "username": "u", "password": "p"}
-            )
             mock_build.return_value = MagicMock()
             await app._build_client(fake_input)
-            mock_ctx.resolve_credential_raw.assert_awaited_once_with(ref)
+            resolve_raw.assert_awaited_once_with(ref)
 
     @pytest.mark.asyncio
     async def test_no_credentials_raises(self, app):
