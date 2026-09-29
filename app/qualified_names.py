@@ -12,11 +12,11 @@ layer can import the grammar without depending on the asset mappers.
 
 The Metabase asset QNs (:func:`collection_qn`, :func:`dashboard_qn`,
 :func:`question_qn`) are derived from the pyatlan_v9 ``.creator()`` factories,
-so pyatlan owns their grammar; they serve callers that need the string for a
-reference to an asset they are not building. :func:`bi_process_qn` and the
-lineage-process QNs (:func:`process_qn`, :func:`column_process_qn`) are bespoke
-grammars with no pyatlan asset factory, so they carry a justified P028
-suppression.
+and the lineage-process QNs (:func:`process_qn`, :func:`column_process_qn`)
+from ``Process`` / ``ColumnProcess.generate_qualified_name``, so pyatlan owns
+their grammar; they serve callers that need the string for a reference to an
+asset they are not building. :func:`bi_process_qn` is a bespoke grammar with no
+pyatlan asset factory, so it carries a justified P028 suppression.
 """
 
 from __future__ import annotations
@@ -25,9 +25,11 @@ from functools import lru_cache
 from typing import Any
 
 from pyatlan_v9.model.assets import (
+    ColumnProcess,
     MetabaseCollection,
     MetabaseDashboard,
     MetabaseQuestion,
+    Process,
 )
 
 # ---------------------------------------------------------------------------
@@ -84,15 +86,35 @@ def bi_process_qn(connection_qn: str, question_id: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Lineage-process qualifiedNames (bespoke ARS identity — no pyatlan creator)
+# Lineage-process qualifiedNames
 # ---------------------------------------------------------------------------
 
 
+# Derived via pyatlan_v9's ``generate_qualified_name`` with an explicit
+# ``process_id``, which owns the ``{connection_qn}/{process_id}`` grammar. On
+# that path pyatlan returns before reading ``inputs`` / ``outputs`` / ``parent``,
+# but still requires them non-empty; the caller only has the ids of a process it
+# is building or referencing as a raw ARS record, so placeholders stand in, the
+# same trade as passing the id as ``name`` above.
+_UNUSED_REFS: list[Any] = [None]
+
+
 def process_qn(connection_qn: str, question_id: Any, process_hash: str) -> str:
-    # conformance: ignore[P028] bespoke lineage-Process qualifiedName (question_tables/{id}/{hash}) — an ARS identity with a content hash, not a pyatlan-owned asset grammar; centralised here as the single source of truth.
-    return f"{connection_qn}/question_tables/{question_id}/{process_hash}"
+    return Process.generate_qualified_name(
+        name=str(question_id),
+        connection_qualified_name=connection_qn,
+        inputs=_UNUSED_REFS,
+        outputs=_UNUSED_REFS,
+        process_id=f"question_tables/{question_id}/{process_hash}",
+    )
 
 
 def column_process_qn(connection_qn: str, question_id: Any, cp_hash: str) -> str:
-    # conformance: ignore[P028] bespoke lineage-ColumnProcess qualifiedName (question_columns/{id}/{hash}) — an ARS identity with a content hash, not a pyatlan-owned asset grammar; centralised here as the single source of truth.
-    return f"{connection_qn}/question_columns/{question_id}/{cp_hash}"
+    return ColumnProcess.generate_qualified_name(
+        name=str(question_id),
+        connection_qualified_name=connection_qn,
+        inputs=_UNUSED_REFS,
+        outputs=_UNUSED_REFS,
+        parent=_UNUSED_REFS,
+        process_id=f"question_columns/{question_id}/{cp_hash}",
+    )
