@@ -299,8 +299,17 @@ class MetabaseHandler(Handler):
             check = self._failed_check("authenticationCheck", exc, start)
         except Exception as exc:
             logger.debug("authenticationCheck failed: %s", sanitize_cause_repr(exc))
+            # Typed inline rather than via ``_auth_failure``: the arm above
+            # already took its InvalidInputError / AuthError branch, so this is
+            # always the unreachable-host failure, carried out as typed data.
             check = self._failed_check(
-                "authenticationCheck", self._auth_failure(exc), start
+                "authenticationCheck",
+                MetabaseSourceUnavailableError(
+                    message="Could not reach the Metabase host.",
+                    source_type="metabase",
+                    cause=exc,
+                ),
+                start,
             )
         if client is not None and self.client is None:
             await client.close()
