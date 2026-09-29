@@ -10,10 +10,7 @@ from application_sdk.errors import InvalidInputError
 from application_sdk.handler.contracts import HandlerCredential
 
 from app.contracts import MetabaseInput
-from app.credentials import (
-    MetabaseCredential,
-    parse_metabase_credentials,
-)
+from app.credentials import MetabaseCredential, parse_metabase_credentials
 
 
 class TestRouteCredentials:
