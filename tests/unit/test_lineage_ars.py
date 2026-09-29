@@ -24,6 +24,7 @@ from app.lineage.ars_builder import (
     process_hash,
 )
 from app.lineage.qi_reader import iter_qi_records, parse_qi_record
+from app.qualified_names import column_process_qn, process_qn
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -410,6 +411,31 @@ class TestBuildColumnProcess:
         )
         assert cp is not None
         assert "relationshipAttributes" not in cp
+
+
+# ---------------------------------------------------------------------------
+# Lineage-process qualifiedName grammar
+# ---------------------------------------------------------------------------
+
+
+class TestLineageProcessQualifiedNames:
+    """Pins the QNs pyatlan derives to the grammar already published on tenants.
+
+    These are the identities of existing Process / ColumnProcess assets, so a
+    change here orphans or duplicates lineage rather than just renaming it.
+    """
+
+    def test_process_qn_grammar(self):
+        assert (
+            process_qn(_CONN_QN, _QID, "abc123")
+            == f"{_CONN_QN}/question_tables/{_QID}/abc123"
+        )
+
+    def test_column_process_qn_grammar(self):
+        assert (
+            column_process_qn(_CONN_QN, _QID, "def456")
+            == f"{_CONN_QN}/question_columns/{_QID}/def456"
+        )
 
 
 # ---------------------------------------------------------------------------
