@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.4.1 (October 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.4.0...v2.4.1
+
+### Bug Fixes
+
+- ignore ruff G201, which contradicts conformance L017 (#677) (by @vaibhavatlan in [c2a7ec1](https://github.com/atlanhq/atlan-metabase-app/commit/c2a7ec1))
+
+
 ## v2.4.0 (September 25, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.3.0...v2.4.0
