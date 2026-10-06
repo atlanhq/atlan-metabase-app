@@ -92,6 +92,10 @@ select = [
     "T201",   # print statement
     "LOG009", # logger.warn deprecated; use logger.warning
 ]
+# G201 asks for .exception(...) over .error(..., exc_info=True), the inverse of
+# conformance L017 (errors carry exc_info; .exception is not sanctioned). It is
+# not selected above, but stays ignored so adding "G" later cannot turn it on.
+extend-ignore = ["G201"]
 
 [tool.ruff.lint.per-file-ignores]
 # E2E scripts print human-readable diagnostics — stdout is the intended
