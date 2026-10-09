@@ -44,7 +44,6 @@ from app.api_types import (
 # QN helpers for referenced (not built) assets live in app.qualified_names.
 # Aliased to the previous private names so the mapper call sites (and the local
 # ``collection_qn`` variables below) stay unchanged.
-from app.qualified_names import bi_process_qn as _bi_process_qn
 from app.qualified_names import collection_qn as _collection_qn
 from app.qualified_names import dashboard_qn as _dashboard_qn
 from app.qualified_names import question_qn as _question_qn
@@ -293,22 +292,29 @@ def map_bi_process(
     last_sync_run_at_ms: int,
     tenant_id: str,
 ) -> BIProcess:
-    asset = BIProcess(
-        name=record.name,
-        qualified_name=_bi_process_qn(connection_qualified_name, record.question_id),
+    # BIProcess.creator requires a non-blank name and non-empty inputs/outputs.
+    # process_assets only emits a record for a question on at least one
+    # dashboard, so an empty ``dashboard_ids`` is a real defect and is left to
+    # fail loudly; a blank question name falls back to its id, as the
+    # qualified_names helpers do, rather than failing the whole activity.
+    asset = BIProcess.creator(
+        name=record.name or str(record.question_id),
         connection_qualified_name=connection_qualified_name,
+        inputs=[
+            RelatedMetabaseQuestion(
+                qualified_name=_question_qn(
+                    connection_qualified_name, record.question_id
+                )
+            )
+        ],
+        outputs=[
+            RelatedMetabaseDashboard(
+                qualified_name=_dashboard_qn(connection_qualified_name, did)
+            )
+            for did in record.dashboard_ids
+        ],
+        process_id=f"questions_dashboards/{record.question_id}",
     )
-    asset.inputs = [
-        RelatedMetabaseQuestion(
-            qualified_name=_question_qn(connection_qualified_name, record.question_id)
-        )
-    ]
-    asset.outputs = [
-        RelatedMetabaseDashboard(
-            qualified_name=_dashboard_qn(connection_qualified_name, did)
-        )
-        for did in record.dashboard_ids
-    ]
     _apply_sync_metadata(
         asset,
         connector_name=connector_name,
