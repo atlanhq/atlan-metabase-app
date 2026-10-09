@@ -297,6 +297,19 @@ class TestMapBIProcess:
         }
         assert all(o["typeName"] == "MetabaseDashboard" for o in outputs)
 
+    def test_blank_name_falls_back_to_question_id(self):
+        rec = BIProcessLineageRecord(name="", question_id=200, dashboard_ids=[100])
+        out = serialize_entity(map_bi_process(rec, **CTX))
+        assert out["attributes"]["name"] == "200"
+        assert (
+            out["attributes"]["qualifiedName"] == f"{CONN_QN}/questions_dashboards/200"
+        )
+
+    def test_no_dashboards_fails_loudly(self):
+        rec = BIProcessLineageRecord(name="Q", question_id=200, dashboard_ids=[])
+        with pytest.raises(ValueError):
+            map_bi_process(rec, **CTX)
+
     def test_from_dict_recovers_dashboard_ids_from_atlas_refs(self):
         """process_assets emits Atlas-shaped refs; the record factory must
         reconstruct typed dashboard_ids so the mapper can rebuild them."""

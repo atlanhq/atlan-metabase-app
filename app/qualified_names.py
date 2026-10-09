@@ -15,8 +15,8 @@ The Metabase asset QNs (:func:`collection_qn`, :func:`dashboard_qn`,
 and the lineage-process QNs (:func:`process_qn`, :func:`column_process_qn`)
 from ``Process`` / ``ColumnProcess.generate_qualified_name``, so pyatlan owns
 their grammar; they serve callers that need the string for a reference to an
-asset they are not building. :func:`bi_process_qn` is a bespoke grammar with no
-pyatlan asset factory, so it carries a justified P028 suppression.
+asset they are not building. The BIProcess qualifiedName has no helper here:
+``map_bi_process`` builds the asset with ``BIProcess.creator``, which owns it.
 """
 
 from __future__ import annotations
@@ -78,11 +78,6 @@ def question_qn(connection_qn: str, question_id: Any) -> str:
     ).qualified_name
     assert isinstance(qn, str)
     return qn
-
-
-def bi_process_qn(connection_qn: str, question_id: Any) -> str:
-    # conformance: ignore[P028] bespoke BIProcess qualifiedName (questions_dashboards/{id}) — no pyatlan_v9 creator owns this grammar (the string appears nowhere in pyatlan_v9); centralised here as the single source of truth.
-    return f"{connection_qn}/questions_dashboards/{question_id}"
 
 
 # ---------------------------------------------------------------------------
