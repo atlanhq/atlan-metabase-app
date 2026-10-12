@@ -6,6 +6,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from application_sdk.clients.base import BaseClient
 
 from app.client import MetabaseApiClient
 from app.errors import MetabaseSessionAuthError
@@ -183,6 +184,25 @@ class TestMetabaseApiClient:
 
         with pytest.raises(Exception):
             await client.test_connection()
+
+    # -------------------------------------------------------------------------
+    # close
+    # -------------------------------------------------------------------------
+
+    async def test_close_clears_token_and_calls_parent_close(
+        self, authenticated_client
+    ):
+        """close() drops the session token and delegates to the parent close().
+
+        The parent ``close()`` is what releases BaseClient's connection pool;
+        patch it so the test holds on any SDK version, with or without a pool.
+        """
+        parent_close = AsyncMock()
+        with patch.object(BaseClient, "close", parent_close):
+            await authenticated_client.close()
+
+        assert authenticated_client.session_token is None
+        parent_close.assert_awaited_once()
 
     # -------------------------------------------------------------------------
     # load() integration (via patches to avoid real HTTP)

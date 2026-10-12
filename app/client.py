@@ -98,12 +98,15 @@ class MetabaseApiClient(BaseClient):
         return True
 
     async def close(self) -> None:
-        """Best-effort close — Metabase has no logout endpoint; clear the token.
+        """Clear the session token and release the HTTP connection pool.
 
-        Called from ``MetabaseApp.dispose_client`` in the @entrypoint ``finally``
-        block to drop the cached session token at the end of a run.
+        Metabase has no logout endpoint, so the token is just dropped. The
+        parent ``close()`` then releases ``BaseClient``'s shared connection
+        pool. Called by ``MetabaseHandler`` in ``finally`` blocks once it is
+        done with a client it built.
         """
         self.session_token = None
+        await super().close()
 
 
 # ---------------------------------------------------------------------------
