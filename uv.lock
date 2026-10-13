@@ -242,7 +242,7 @@ wheels = [
 [[package]]
 name = "atlan-application-sdk"
 version = "3.45.0"
-source = { git = "https://github.com/atlanhq/application-sdk.git?rev=5996c120ec1a376c02995a5538b13cc027e0c44d#5996c120ec1a376c02995a5538b13cc027e0c44d" }
+source = { git = "https://github.com/atlanhq/application-sdk.git?rev=45b6133616980ea8bf74f8f39946e896871a2568#45b6133616980ea8bf74f8f39946e896871a2568" }
 dependencies = [
     { name = "aiohttp" },
     { name = "atlan-application-sdk-api" },
@@ -289,11 +289,12 @@ workflows = [
 [[package]]
 name = "atlan-application-sdk-api"
 version = "3.45.0"
-source = { git = "https://github.com/atlanhq/application-sdk.git?subdirectory=packages%2Fapi&rev=5996c120ec1a376c02995a5538b13cc027e0c44d#5996c120ec1a376c02995a5538b13cc027e0c44d" }
+source = { git = "https://github.com/atlanhq/application-sdk.git?subdirectory=packages%2Fapi&rev=45b6133616980ea8bf74f8f39946e896871a2568#45b6133616980ea8bf74f8f39946e896871a2568" }
 dependencies = [
     { name = "fastapi" },
     { name = "orjson" },
     { name = "pydantic" },
+    { name = "python-multipart" },
 ]
 
 [[package]]
@@ -339,7 +340,7 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "atlan-application-sdk", extras = ["iam-auth", "pandas", "tests", "workflows"], git = "https://github.com/atlanhq/application-sdk.git?rev=5996c120ec1a376c02995a5538b13cc027e0c44d" }]
+requires-dist = [{ name = "atlan-application-sdk", extras = ["iam-auth", "pandas", "tests", "workflows"], git = "https://github.com/atlanhq/application-sdk.git?rev=45b6133616980ea8bf74f8f39946e896871a2568" }]
 
 [package.metadata.requires-dev]
 dev = [
