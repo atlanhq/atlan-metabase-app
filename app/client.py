@@ -101,9 +101,11 @@ class MetabaseApiClient(BaseClient):
         """Best-effort close — Metabase has no logout endpoint; clear the token.
 
         Called from ``MetabaseApp.dispose_client`` in the @entrypoint ``finally``
-        block to drop the cached session token at the end of a run.
+        block to drop the cached session token at the end of a run, then
+        releases the base client's HTTP connection pool.
         """
         self.session_token = None
+        await super().close()
 
 
 # ---------------------------------------------------------------------------
