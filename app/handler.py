@@ -16,7 +16,6 @@ from typing import Any
 
 import orjson
 from application_sdk.errors import AppError, AuthError, InvalidInputError
-from application_sdk.errors.base import sanitize_cause_repr
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
@@ -31,19 +30,16 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
 )
-from application_sdk.observability.logger_adaptor import get_logger
 
-from app.client import MetabaseApiClient, build_client
-from app.constants import MetabaseUrls
-from app.credentials import parse_metabase_credentials
-from app.errors import (
+from .client import MetabaseApiClient, build_client
+from .constants import MetabaseUrls
+from .credentials import parse_metabase_credentials
+from .errors import (
     MetabaseClientNotInitializedError,
     MetabaseCollectionAccessError,
     MetabaseNativeQueryPermissionError,
     MetabaseSourceUnavailableError,
 )
-
-logger = get_logger(__name__)
 
 # Checks whose failure blocks extraction. Everything else is advisory: it is
 # reported in its own PreflightCheck row and leaves the verdict READY. Declared
@@ -118,7 +114,6 @@ class MetabaseHandler(Handler):
             finally:
                 await client.close()
         except Exception as exc:
-            logger.warning("Metabase auth failed", exc_info=True)
             return AuthOutput(
                 status=AuthStatus.FAILED,
                 error=self._auth_failure(exc).to_failure_details(),
@@ -139,12 +134,6 @@ class MetabaseHandler(Handler):
                 for collection in raw_collections
                 if not collection.get("personal_owner_id")
             ]
-            logger.info(
-                "fetch_metadata: returning %d non-personal collections "
-                "(filtered from %d total)",
-                len(objects),
-                len(raw_collections),
-            )
             return ApiMetadataOutput(objects=objects)
         finally:
             if owns_client:
@@ -286,19 +275,8 @@ class MetabaseHandler(Handler):
                 client,
             )
         except (InvalidInputError, AuthError) as exc:
-            # No ``exc_info`` here, unlike the other probes: this ``try`` reads
-            # the credentials, so a traceback would carry the password in its
-            # frame locals past every redaction under loguru's ``diagnose``
-            # (F014). The sanitized, capped cause is enough for an engineer;
-            # the customer-facing outcome is the typed error on the check row.
-            # DEBUG, not WARNING, for the same reason as every other probe: the
-            # gate levels the verdict row itself and a handler-authored WARNING
-            # is both a duplicate and invisible under the customer's default
-            # ERROR filter (F005 / FND-901).
-            logger.debug("authenticationCheck failed: %s", sanitize_cause_repr(exc))
             check = self._failed_check("authenticationCheck", exc, start)
         except Exception as exc:
-            logger.debug("authenticationCheck failed: %s", sanitize_cause_repr(exc))
             # Typed inline rather than via ``_auth_failure``: the arm above
             # already took its InvalidInputError / AuthError branch, so this is
             # always the unreachable-host failure, carried out as typed data.
@@ -390,11 +368,6 @@ class MetabaseHandler(Handler):
                 try:
                     parsed = orjson.loads(value)
                 except orjson.JSONDecodeError:
-                    logger.warning(
-                        "Collection filter %r is not valid JSON; treating as empty",
-                        value,
-                        exc_info=True,
-                    )
                     return {}
                 return parsed if isinstance(parsed, dict) else {}
             return {}
@@ -472,14 +445,6 @@ class MetabaseHandler(Handler):
                 duration_ms=MetabaseHandler._elapsed_ms(start),
             )
         except MetabaseSourceUnavailableError as exc:
-            # DEBUG, not WARNING: the probe returns the failure typed, on the
-            # check row below, and the preflight gate owns the customer-facing
-            # outcome and levels it from the verdict. A handler-authored WARNING
-            # is both a duplicate of that row and invisible under the customer's
-            # default ERROR filter (F005 / FND-901). DEBUG keeps the traceback
-            # for engineers without adding a second customer-visible record —
-            # the same applies to every probe below.
-            logger.debug("collectionCountCheck failed", exc_info=True)
             error = (
                 MetabaseCollectionAccessError(cause=exc)
                 if exc.http_status in (401, 403)
@@ -487,7 +452,6 @@ class MetabaseHandler(Handler):
             )
             return MetabaseHandler._failed_check("collectionCountCheck", error, start)
         except Exception as exc:
-            logger.debug("collectionCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "collectionCountCheck",
                 MetabaseSourceUnavailableError(
@@ -545,10 +509,8 @@ class MetabaseHandler(Handler):
                 duration_ms=MetabaseHandler._elapsed_ms(start),
             )
         except MetabaseSourceUnavailableError as exc:
-            logger.debug("dashboardCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check("dashboardCountCheck", exc, start)
         except Exception as exc:
-            logger.debug("dashboardCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "dashboardCountCheck",
                 MetabaseSourceUnavailableError(
@@ -606,10 +568,8 @@ class MetabaseHandler(Handler):
                 duration_ms=MetabaseHandler._elapsed_ms(start),
             )
         except MetabaseSourceUnavailableError as exc:
-            logger.debug("questionCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check("questionCountCheck", exc, start)
         except Exception as exc:
-            logger.debug("questionCountCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "questionCountCheck",
                 MetabaseSourceUnavailableError(
@@ -671,12 +631,10 @@ class MetabaseHandler(Handler):
                 start,
             )
         except MetabaseSourceUnavailableError as exc:
-            logger.debug("nativeQueryPermissionCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "nativeQueryPermissionCheck", exc, start
             )
         except Exception as exc:
-            logger.debug("nativeQueryPermissionCheck failed", exc_info=True)
             return MetabaseHandler._failed_check(
                 "nativeQueryPermissionCheck",
                 MetabaseSourceUnavailableError(

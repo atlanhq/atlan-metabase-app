@@ -192,6 +192,18 @@ name = "pypi"
 url = "https://pypi.org/simple"
 default = true
 
+# The handler the consolidated API host serves. The code stays in app/; the
+# host's wheel is built from it by application-sdk's gen_app_api.py (nothing
+# else is committed). CI builds it, installs it alone and serves it.
+[tool.atlan-app-api]
+handler = "app.handler:MetabaseHandler"
+extras = ["sql"]
+
 [tool.uv.sources]
 # atlan-application-sdk = { path = "../application-sdk", editable = true }
 # atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", rev = "326962d9363d5bc267609282c2862b857149ddac" }
+# Both SDK distributions pinned to the same unreleased application-sdk commit
+# (application-sdk#4058): the SDK pins atlan-application-sdk-api at its own,
+# unpublished version. Re-pin both to a released version before merge.
+atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk.git", rev = "5996c120ec1a376c02995a5538b13cc027e0c44d" }
+atlan-application-sdk-api = { git = "https://github.com/atlanhq/application-sdk.git", rev = "5996c120ec1a376c02995a5538b13cc027e0c44d", subdirectory = "packages/api" }
