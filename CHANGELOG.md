@@ -1,5 +1,19 @@
 # Changelog
 
+## v2.4.2 (October 16, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.4.1...v2.4.2
+
+### Chores
+
+- update atlan framework dependencies (#734) (by @atlan-app-fleet[bot] in [4b964aa](https://github.com/atlanhq/atlan-metabase-app/commit/4b964aa))
+- lock file maintenance (#735) (by @atlan-app-fleet[bot] in [006b5e5](https://github.com/atlanhq/atlan-metabase-app/commit/006b5e5))
+- lock file maintenance (#737) (by @atlan-app-fleet[bot] in [60b9780](https://github.com/atlanhq/atlan-metabase-app/commit/60b9780))
+- lock file maintenance (#739) (by @atlan-app-fleet[bot] in [4a4c54d](https://github.com/atlanhq/atlan-metabase-app/commit/4a4c54d))
+- lock file maintenance (#740) (by @atlan-app-fleet[bot] in [2c43144](https://github.com/atlanhq/atlan-metabase-app/commit/2c43144))
+- update atlan framework dependencies (#741) (by @atlan-app-fleet[bot] in [31639aa](https://github.com/atlanhq/atlan-metabase-app/commit/31639aa))
+
+
 ## v2.4.1 (October 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.4.0...v2.4.1
