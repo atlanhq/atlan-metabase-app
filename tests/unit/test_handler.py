@@ -772,6 +772,31 @@ class TestMetabaseHandlerPreflightCheck:
         assert include_arg == {"1": "Engineering"}
         assert exclude_arg == {"9": "Archived"}
 
+    @patch.object(MetabaseHandler, "_validate_collection_count", new_callable=AsyncMock)
+    async def test_an_unreadable_collection_filter_fails_the_collection_check(
+        self, mock_collection, handler
+    ):
+        """Invalid filter JSON used to become ``{}`` and preflight probed every
+        collection; it now fails the mandatory check with a typed error."""
+        result = await handler.preflight_check(
+            PreflightInput(
+                credentials=_creds(),
+                metadata=BaseMetadataConfig.model_validate(
+                    {"include-collections": "{not json"}
+                ),
+            )
+        )
+
+        mock_collection.assert_not_awaited()
+        check = next(c for c in result.checks if c.name == "collectionCountCheck")
+        assert check.passed is False
+        assert check.error is not None
+        assert check.error.code == "INVALID_INPUT_METABASE_COLLECTION_FILTER"
+        assert result.status == PreflightStatus.NOT_READY
+
+    def test_a_blank_collection_filter_means_no_filter(self):
+        assert MetabaseHandler._read_filters({"include-collections": " "}) == ({}, {})
+
 
 class TestProbeTimeout:
     """Boundary shapes for ``MetabaseHandler._probe_timeout``.

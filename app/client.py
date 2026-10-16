@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from application_sdk.clients.base import BaseClient
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.common.logger import get_logger
 
-from app.constants import MetabaseUrls
-from app.contracts import MetabaseCredential
-from app.errors import MetabaseSessionAuthError, MetabaseSessionMissingError
+from .constants import MetabaseUrls
+from .credentials import MetabaseCredential
+from .errors import MetabaseSessionAuthError, MetabaseSessionMissingError
 
 logger = get_logger(__name__)
 
