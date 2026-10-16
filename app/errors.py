@@ -68,6 +68,17 @@ class UnsupportedCredentialsPayloadError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
+class MetabaseCollectionFilterInputError(InvalidInputError):
+    """An include / exclude collection filter is not a JSON object."""
+
+    suggested_action: str | None = (
+        "Fix the collection filter in the workflow's metadata settings, then "
+        "re-run preflight."
+    )
+    code: ClassVar[str] = "INVALID_INPUT_METABASE_COLLECTION_FILTER"
+
+
+@dataclass(kw_only=True)
 class MissingTypenameInputError(InvalidInputError):
     """``transform_data`` was called without a ``typename``."""
 

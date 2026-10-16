@@ -37,6 +37,7 @@ from .credentials import parse_metabase_credentials
 from .errors import (
     MetabaseClientNotInitializedError,
     MetabaseCollectionAccessError,
+    MetabaseCollectionFilterInputError,
     MetabaseNativeQueryPermissionError,
     MetabaseSourceUnavailableError,
 )
@@ -175,39 +176,47 @@ class MetabaseHandler(Handler):
         if client is not None:
             owns_client = self.client is None
             try:
-                include_filter, exclude_filter = self._resolve_filters(input)
-
-                collection_check = await self._validate_collection_count(
-                    client,
-                    include_filter,
-                    exclude_filter,
-                    timeout=self._probe_timeout(deadline),
-                )
-                checks.append(collection_check)
-
-                if collection_check.passed:
-                    native_check = await self._validate_native_query_permission(
-                        client, timeout=self._probe_timeout(deadline)
+                filters_start = time.perf_counter()
+                try:
+                    include_filter, exclude_filter = self._resolve_filters(input)
+                except MetabaseCollectionFilterInputError as exc:
+                    # A filter that cannot be read cannot be validated: fail the
+                    # mandatory collection check rather than probe unfiltered.
+                    checks.append(
+                        self._failed_check("collectionCountCheck", exc, filters_start)
                     )
-                    checks.append(native_check)
+                else:
+                    collection_check = await self._validate_collection_count(
+                        client,
+                        include_filter,
+                        exclude_filter,
+                        timeout=self._probe_timeout(deadline),
+                    )
+                    checks.append(collection_check)
 
-                    if native_check.passed:
-                        checks.append(
-                            await self._validate_dashboard_count(
-                                client,
-                                include_filter,
-                                exclude_filter,
-                                timeout=self._probe_timeout(deadline),
-                            )
+                    if collection_check.passed:
+                        native_check = await self._validate_native_query_permission(
+                            client, timeout=self._probe_timeout(deadline)
                         )
-                        checks.append(
-                            await self._validate_question_count(
-                                client,
-                                include_filter,
-                                exclude_filter,
-                                timeout=self._probe_timeout(deadline),
+                        checks.append(native_check)
+
+                        if native_check.passed:
+                            checks.append(
+                                await self._validate_dashboard_count(
+                                    client,
+                                    include_filter,
+                                    exclude_filter,
+                                    timeout=self._probe_timeout(deadline),
+                                )
                             )
-                        )
+                            checks.append(
+                                await self._validate_question_count(
+                                    client,
+                                    include_filter,
+                                    exclude_filter,
+                                    timeout=self._probe_timeout(deadline),
+                                )
+                            )
             finally:
                 if owns_client:
                     await client.close()
@@ -365,11 +374,19 @@ class MetabaseHandler(Handler):
             if isinstance(value, dict):
                 return value
             if isinstance(value, str):
+                if not value.strip():
+                    return {}
                 try:
                     parsed = orjson.loads(value)
-                except orjson.JSONDecodeError:
-                    return {}
-                return parsed if isinstance(parsed, dict) else {}
+                except orjson.JSONDecodeError as exc:
+                    raise MetabaseCollectionFilterInputError(
+                        message="A collection filter is not valid JSON.",
+                    ) from exc
+                if not isinstance(parsed, dict):
+                    raise MetabaseCollectionFilterInputError(
+                        message="A collection filter must be a JSON object.",
+                    )
+                return parsed
             return {}
 
         if metadata is None:
