@@ -60,6 +60,11 @@ atlanYamlOverrides {
   ["release_model"] = "semver"
 }
 
+// App release train slot (FND-3529); rendered to app/generated/release_schedule.yaml.
+releaseSchedule {
+  new { day = "mon"; slot = "12:00" }
+}
+
 // ---- Deployment config (rendered into atlan.yaml's deploy: block) -----
 //
 // Toolkit 0.17.0 (pools refactor) moved per-pool KEDA / resources / env /
