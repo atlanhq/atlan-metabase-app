@@ -7,9 +7,10 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
-    # >=3.33.2 for App.upload_refs — the framework fan-in task that replaced
-    # this app's hand-rolled transformed/ upload loop (application-sdk #3700).
-    "atlan-application-sdk[iam-auth,pandas,tests,workflows]>=3.33.2,<4.0.0",
+    # >=3.51.0: the first release that ships atlan-application-sdk-api, which
+    # the [tool.atlan-app-api] block below builds the host's wheel against
+    # (>=3.33.2 was already needed for App.upload_refs, application-sdk #3700).
+    "atlan-application-sdk[iam-auth,pandas,tests,workflows]>=3.51.0,<4.0.0",
 ]
 
 [dependency-groups]
@@ -197,13 +198,8 @@ default = true
 # else is committed). CI builds it, installs it alone and serves it.
 [tool.atlan-app-api]
 handler = "app.handler:MetabaseHandler"
-extras = ["sql"]
+extras = ["sql", "aws"]
 
 [tool.uv.sources]
 # atlan-application-sdk = { path = "../application-sdk", editable = true }
 # atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk", rev = "326962d9363d5bc267609282c2862b857149ddac" }
-# Both SDK distributions pinned to the same unreleased application-sdk commit
-# (application-sdk#4058): the SDK pins atlan-application-sdk-api at its own,
-# unpublished version. Re-pin both to a released version before merge.
-atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk.git", rev = "2e063e45170b3ba5179b37a76a86a25c15dcbfd5" }
-atlan-application-sdk-api = { git = "https://github.com/atlanhq/application-sdk.git", rev = "2e063e45170b3ba5179b37a76a86a25c15dcbfd5", subdirectory = "packages/api" }
