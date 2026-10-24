@@ -7,9 +7,10 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 readme = "README.md"
 dependencies = [
-    # >=3.33.2 for App.upload_refs — the framework fan-in task that replaced
-    # this app's hand-rolled transformed/ upload loop (application-sdk #3700).
-    "atlan-application-sdk[iam-auth,pandas,tests,workflows]>=3.33.2,<4.0.0",
+    # >=3.51.0: the first release that ships atlan-application-sdk-api, which
+    # the [tool.atlan-app-api] block below builds the host's wheel against
+    # (>=3.33.2 was already needed for App.upload_refs, application-sdk #3700).
+    "atlan-application-sdk[iam-auth,pandas,tests,workflows]>=3.51.0,<4.0.0",
 ]
 
 [dependency-groups]
@@ -191,6 +192,13 @@ fail_under = 85
 name = "pypi"
 url = "https://pypi.org/simple"
 default = true
+
+# The handler the consolidated API host serves. The code stays in app/; the
+# host's wheel is built from it by application-sdk's gen_app_api.py (nothing
+# else is committed). CI builds it, installs it alone and serves it.
+[tool.atlan-app-api]
+handler = "app.handler:MetabaseHandler"
+extras = ["sql", "aws"]
 
 [tool.uv.sources]
 # atlan-application-sdk = { path = "../application-sdk", editable = true }
