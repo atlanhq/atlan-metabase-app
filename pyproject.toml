@@ -9,7 +9,7 @@ readme = "README.md"
 dependencies = [
     # >=3.33.2 for App.upload_refs — the framework fan-in task that replaced
     # this app's hand-rolled transformed/ upload loop (application-sdk #3700).
-    "atlan-application-sdk[iam-auth,pandas,tests,workflows]>=3.33.2,<4.0.0",
+    "atlan-application-sdk[iam-auth,pandas,workflows]>=3.33.2,<4.0.0",
 ]
 
 [dependency-groups]
@@ -26,6 +26,10 @@ dev = [
     "poethepoet>=0.38.0",
 ]
 test = [
+    # The SDK's test helpers (pytest-order, pandera, httpx) belong to the test
+    # environment, not [project].dependencies: there they shipped pytest into
+    # the production image, which installs with --no-dev and no test group.
+    "atlan-application-sdk[tests]>=3.33.2,<4.0.0",
     "pytest>=8.3.3",
     "coverage>=7.6.1",
     "pytest-asyncio>=0.24.0",
