@@ -20,12 +20,12 @@ from __future__ import annotations
 from typing import Any
 
 import orjson
+from application_sdk.common.logger import get_logger
 from application_sdk.credentials.types import BasicCredential
 from application_sdk.handler.contracts import HandlerCredential
-from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import ConfigDict
 
-from app.errors import UnsupportedCredentialsPayloadError
+from .errors import UnsupportedCredentialsPayloadError
 
 logger = get_logger(__name__)
 
