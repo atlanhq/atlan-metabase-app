@@ -333,7 +333,7 @@ name = "atlan-metabase-app"
 version = "2.4.5"
 source = { editable = "." }
 dependencies = [
-    { name = "atlan-application-sdk", extra = ["iam-auth", "pandas", "tests", "workflows"] },
+    { name = "atlan-application-sdk", extra = ["iam-auth", "pandas", "workflows"] },
 ]
 
 [package.dev-dependencies]
@@ -346,6 +346,7 @@ dev = [
     { name = "ruff" },
 ]
 test = [
+    { name = "atlan-application-sdk", extra = ["tests"] },
     { name = "coverage" },
     { name = "docker" },
     { name = "httpx" },
@@ -356,7 +357,7 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "atlan-application-sdk", extras = ["iam-auth", "pandas", "tests", "workflows"], specifier = ">=3.33.2,<4.0.0" }]
+requires-dist = [{ name = "atlan-application-sdk", extras = ["iam-auth", "pandas", "workflows"], specifier = ">=3.33.2,<4.0.0" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -368,6 +369,7 @@ dev = [
     { name = "ruff", specifier = ">=0.12.7" },
 ]
 test = [
+    { name = "atlan-application-sdk", extras = ["tests"], specifier = ">=3.33.2,<4.0.0" },
     { name = "coverage", specifier = ">=7.6.1" },
     { name = "docker", specifier = ">=7.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
