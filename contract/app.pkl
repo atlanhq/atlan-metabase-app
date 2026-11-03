@@ -565,11 +565,13 @@ uiConfig {
       description = "Metadata"
       inputs {
         ["include-collections"] = new Widgets.APITree {
+          treeSelection = true
           title = "Include collections"
           desc = "Metabase collections to include in the crawl. Empty selection = include all non-personal collections."
           credentialType = "atlan-connectors-metabase"
         }
         ["exclude-collections"] = new Widgets.APITree {
+          treeSelection = true
           title = "Exclude collections"
           desc = "Metabase collections to skip during the crawl."
           credentialType = "atlan-connectors-metabase"
