@@ -2,12 +2,12 @@
 # To regenerate: pkl eval -m . contract/app.pkl
 from __future__ import annotations
 
-from typing import Annotated, Any, ClassVar
+from typing import Any, ClassVar
 
 import orjson
 from pydantic import Field, field_validator
 
-from application_sdk.contracts.types import MaxItems
+from application_sdk.contracts.types import TreeSelection
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts import ExtractionInput
@@ -23,12 +23,8 @@ class AppInputContract(ExtractionInput):
         "publish_dry_run",
     }
 
-    include_collections: Annotated[dict[str, Any], MaxItems(1000)] = Field(
-        default_factory=dict
-    )
-    exclude_collections: Annotated[dict[str, Any], MaxItems(1000)] = Field(
-        default_factory=dict
-    )
+    include_collections: TreeSelection = Field(default_factory=dict)
+    exclude_collections: TreeSelection = Field(default_factory=dict)
     preflight_check: str = ""
 
     @field_validator("include_collections", "exclude_collections", mode="before")
