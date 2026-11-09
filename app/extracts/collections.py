@@ -2,6 +2,7 @@
 
 from typing import Dict, List
 
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 from app.client import MetabaseApiClient
@@ -51,7 +52,8 @@ async def fetch_collections_summaries(
             exc.http_status or "No response",
             exc_info=True,
         )
-        record_residual_failure(
+        await run_in_thread(
+            record_residual_failure,
             output_path,
             "collections_fetch_failed",
             endpoint=exc.endpoint,
