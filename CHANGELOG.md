@@ -1,5 +1,35 @@
 # Changelog
 
+## v2.4.7 (November 11, 2026)
+
+Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.4.6...v2.4.7
+
+### Chores
+
+- lock file maintenance (#809) (by @atlan-app-fleet[bot] in [ef593b7](https://github.com/atlanhq/atlan-metabase-app/commit/ef593b7))
+- lock file maintenance (#811) (by @atlan-app-fleet[bot] in [1f1e41d](https://github.com/atlanhq/atlan-metabase-app/commit/1f1e41d))
+- update atlan framework dependencies (#812) (by @atlan-app-fleet[bot] in [2063781](https://github.com/atlanhq/atlan-metabase-app/commit/2063781))
+- lock file maintenance (#813) (by @atlan-app-fleet[bot] in [c2d3de1](https://github.com/atlanhq/atlan-metabase-app/commit/c2d3de1))
+- lock file maintenance (#814) (by @atlan-app-fleet[bot] in [577830c](https://github.com/atlanhq/atlan-metabase-app/commit/577830c))
+- lock file maintenance (#815) (by @atlan-app-fleet[bot] in [d30f5a9](https://github.com/atlanhq/atlan-metabase-app/commit/d30f5a9))
+- lock file maintenance (#816) (by @atlan-app-fleet[bot] in [825f2bf](https://github.com/atlanhq/atlan-metabase-app/commit/825f2bf))
+- update atlan framework dependencies (#817) (by @atlan-app-fleet[bot] in [13b619a](https://github.com/atlanhq/atlan-metabase-app/commit/13b619a))
+- lock file maintenance (#818) (by @atlan-app-fleet[bot] in [d3f2160](https://github.com/atlanhq/atlan-metabase-app/commit/d3f2160))
+- lock file maintenance (#819) (by @atlan-app-fleet[bot] in [266c4b7](https://github.com/atlanhq/atlan-metabase-app/commit/266c4b7))
+- lock file maintenance (#820) (by @atlan-app-fleet[bot] in [a86c55c](https://github.com/atlanhq/atlan-metabase-app/commit/a86c55c))
+- lock file maintenance (#821) (by @atlan-app-fleet[bot] in [18bfb9b](https://github.com/atlanhq/atlan-metabase-app/commit/18bfb9b))
+- lock file maintenance (#822) (by @atlan-app-fleet[bot] in [06fe82c](https://github.com/atlanhq/atlan-metabase-app/commit/06fe82c))
+- lock file maintenance (#823) (by @atlan-app-fleet[bot] in [39f5276](https://github.com/atlanhq/atlan-metabase-app/commit/39f5276))
+- lock file maintenance (#824) (by @atlan-app-fleet[bot] in [0083f8e](https://github.com/atlanhq/atlan-metabase-app/commit/0083f8e))
+- lock file maintenance (#826) (by @atlan-app-fleet[bot] in [b13a2c3](https://github.com/atlanhq/atlan-metabase-app/commit/b13a2c3))
+- update atlan framework dependencies (#827) (by @atlan-app-fleet[bot] in [61f4d6e](https://github.com/atlanhq/atlan-metabase-app/commit/61f4d6e))
+- lock file maintenance (#828) (by @atlan-app-fleet[bot] in [5328987](https://github.com/atlanhq/atlan-metabase-app/commit/5328987))
+- lock file maintenance (#829) (by @atlan-app-fleet[bot] in [29ef71e](https://github.com/atlanhq/atlan-metabase-app/commit/29ef71e))
+- update dependency atlan-application-sdk to v3.55.3 (#830) (by @atlan-app-fleet[bot] in [5781a81](https://github.com/atlanhq/atlan-metabase-app/commit/5781a81))
+- lock file maintenance (#831) (by @atlan-app-fleet[bot] in [659d815](https://github.com/atlanhq/atlan-metabase-app/commit/659d815))
+- lock file maintenance (#832) (by @atlan-app-fleet[bot] in [f52841f](https://github.com/atlanhq/atlan-metabase-app/commit/f52841f))
+
+
 ## v2.4.6 (November 04, 2026)
 
 Full Changelog: https://github.com/atlanhq/atlan-metabase-app/compare/v2.4.5...v2.4.6
