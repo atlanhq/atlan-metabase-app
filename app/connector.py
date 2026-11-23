@@ -148,7 +148,16 @@ def _write_transformed_records(
     count = 0
     with open(out_file, "wb") as fh:
         for raw in records:
-            entity = _map_one_record(typename, raw, ctx)
+            try:
+                entity = _map_one_record(typename, raw, ctx)
+            except Exception:
+                logger.warning(
+                    "transform_data: failed to map %s record id=%s",
+                    typename,
+                    raw.get("id"),
+                    exc_info=True,
+                )
+                continue
             if entity is None:
                 continue
             fh.write(orjson.dumps(entity) + b"\n")

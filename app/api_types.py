@@ -15,6 +15,7 @@ don't surface as Atlan attributes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -194,8 +195,6 @@ def _to_millis(value: Any) -> int | None:
     if isinstance(value, (int, float)):
         return int(value)
     if isinstance(value, str):
-        from datetime import datetime, timezone
-
         try:
             # Metabase emits "...Z" — Python's fromisoformat accepts "+00:00".
             normalized = value.replace("Z", "+00:00")

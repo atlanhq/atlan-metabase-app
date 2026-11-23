@@ -286,10 +286,8 @@ def process_assets(
         dashboard["cards_count"] = len(cards_list)
 
         for card_data in cards_list:
-            if not card_data.get("card_id"):
-                continue
             card = card_data.get("card")
-            if card is None:
+            if not card:
                 continue
             card_id = card["id"]
             if card_id not in cards_dashboard_map:
@@ -318,7 +316,7 @@ def process_assets(
             continue
 
         question["metabase_host"] = metabase_host
-        question["sourceURL"] = str(metabase_host + "/question/" + str(question["id"]))
+        question["sourceURL"] = f"{metabase_host}/question/{question['database_id']}"
 
         # Resolve query object and database
         query: Optional[Dict] = questions_query_map.get(question["id"])

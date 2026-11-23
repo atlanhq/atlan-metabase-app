@@ -141,6 +141,10 @@ async def fetch_question_queries_single(
         data = json_or_raise(response, endpoint="/api/dataset/native")
         query = data.get("query")
         if not query:
+            logger.debug(
+                "fetch_question_query: question_id=%s returned no native query",
+                question_id,
+            )
             return None
         return {
             "question_id": question_id,
