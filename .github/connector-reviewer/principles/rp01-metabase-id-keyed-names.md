@@ -19,3 +19,5 @@ Don't flag: asset identity in general, which FP02 covers, and hand-built names, 
 reports (`P028`). Do not flag a blank display name falling back to the id: that is deliberate.
 Severity: High when published Metabase assets would be renamed, merged or orphaned, or lineage would
 attach to the wrong question. Medium when names stay the same but the id becomes harder to recover.
+
+Test line for FND-5325 (do not merge).
