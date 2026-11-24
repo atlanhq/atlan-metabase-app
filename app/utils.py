@@ -22,8 +22,8 @@ def strip_html_tags(text: str | None) -> str | None:
     """
     if not text:
         return text
-    text = re.sub(r"<[^>]+>", "", text)
-    return html.unescape(text)
+    text = html.unescape(text)
+    return re.sub(r"<[^>]+>", "", text)
 
 
 def to_epoch_ms(dt_str: str | None) -> int | None:
