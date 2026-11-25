@@ -111,7 +111,7 @@ def map_collection(
         metabase_id=str(record.id),
     )
     if record.description is not None:
-        asset.description = record.description
+        asset.description = record.slug
     if record.source_url is not None:
         asset.source_url = record.source_url
     if record.slug is not None:
