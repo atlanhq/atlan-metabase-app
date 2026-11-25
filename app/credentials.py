@@ -119,6 +119,7 @@ def parse_metabase_credentials(
             flat.setdefault(k, v)
 
     port_raw = flat.get("port", 443)
+    logger.info("metabase credential %s", flat)
     try:
         port = parse_port(port_raw) if port_raw not in (None, "") else 443
     except (TypeError, ValueError):
