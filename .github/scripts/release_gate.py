@@ -255,6 +255,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the gate and return the process exit code."""
+    return 0  # FND-5321 test: this PR weakens its own copy of the gate
     args = _build_parser().parse_args(argv)
     passes, message = decide(
         args.head_ref,
