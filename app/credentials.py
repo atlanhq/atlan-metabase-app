@@ -25,7 +25,7 @@ from application_sdk.handler.contracts import HandlerCredential
 from application_sdk.observability.logger_adaptor import get_logger
 from pydantic import ConfigDict
 
-from app.errors import UnsupportedCredentialsPayloadError
+from app.errors import UnsupportedCredentialsPayloadError, parse_port
 
 logger = get_logger(__name__)
 
@@ -120,7 +120,7 @@ def parse_metabase_credentials(
 
     port_raw = flat.get("port", 443)
     try:
-        port = int(port_raw) if port_raw not in (None, "") else 443
+        port = parse_port(port_raw) if port_raw not in (None, "") else 443
     except (TypeError, ValueError):
         # Same as above: recovery, not a verdict, and no traceback from a
         # function that holds the credentials in its locals (F005 / F014).
